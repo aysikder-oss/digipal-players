@@ -2,18 +2,20 @@ const { EventEmitter } = require('events');
 const crypto = require('crypto');
 
 const DEFAULT_CLOUD_URL = 'https://app.digipal.app';
-const DISCOVERY_TIMEOUT_MS = 4000;
+const DISCOVERY_TIMEOUT_MS = 8000;
 const RECONNECT_BASE_MS = 5000;
 const RECONNECT_MAX_MS = 60000;
 const HEALTH_CHECK_INTERVAL_MS = 30000;
 const REACHABILITY_TIMEOUT_MS = 5000;
 const NEITHER_REACHABLE_RETRY_BASE_MS = 5000;
 const NEITHER_REACHABLE_RETRY_MAX_MS = 60000;
+const MAX_RETRY_BEFORE_SETUP = 3;
 
 class ConnectionManager extends EventEmitter {
   constructor(options = {}) {
     super();
     this.bonjourBrowser = options.bonjourBrowser || null;
+    this.networkScanner = options.networkScanner || null;
     this.defaultCloudUrl = options.cloudUrl || DEFAULT_CLOUD_URL;
     this.platform = options.platform || 'electron';
     this.getDeviceInfo = options.getDeviceInfo || (() => ({}));
@@ -68,6 +70,19 @@ class ConnectionManager extends EventEmitter {
       }
     }
 
+    if (this.networkScanner) {
+      console.log('[connection-manager] Bonjour discovery failed, trying network scan...');
+      this.emit('scanningNetwork');
+      const found = await this.networkScanner.scan();
+      if (found.length > 0) {
+        this.primaryUrl = found[0].url;
+        this.primaryMode = 'local';
+        this.emit('connected', { url: this.primaryUrl, mode: 'local' });
+        this.startDualMode();
+        return { url: this.primaryUrl, mode: 'local' };
+      }
+    }
+
     const cloudReachable = await this.checkReachable(this.defaultCloudUrl);
     if (cloudReachable) {
       this.primaryUrl = this.defaultCloudUrl;
@@ -83,13 +98,20 @@ class ConnectionManager extends EventEmitter {
 
   startNeitherReachableRetry(config) {
     this.neitherReachableAttempts++;
+
+    if (this.neitherReachableAttempts >= MAX_RETRY_BEFORE_SETUP) {
+      console.log(`[connection-manager] Max retries reached (${MAX_RETRY_BEFORE_SETUP}), showing setup prompt`);
+      this.emit('showSetup');
+      return;
+    }
+
     const delay = Math.min(
       NEITHER_REACHABLE_RETRY_BASE_MS * Math.pow(2, this.neitherReachableAttempts - 1),
       NEITHER_REACHABLE_RETRY_MAX_MS
     );
 
-    console.log(`[connection-manager] Neither local nor cloud reachable, retrying in ${Math.round(delay / 1000)}s (attempt ${this.neitherReachableAttempts})`);
-    this.emit('retrying', { attempt: this.neitherReachableAttempts, delayMs: delay });
+    console.log(`[connection-manager] Neither local nor cloud reachable, retrying in ${Math.round(delay / 1000)}s (attempt ${this.neitherReachableAttempts}/${MAX_RETRY_BEFORE_SETUP})`);
+    this.emit('retrying', { attempt: this.neitherReachableAttempts, delayMs: delay, maxAttempts: MAX_RETRY_BEFORE_SETUP });
 
     this.neitherReachableTimer = setTimeout(async () => {
       if (this.bonjourBrowser) {
@@ -434,6 +456,9 @@ class ConnectionManager extends EventEmitter {
     if (this.neitherReachableTimer) {
       clearTimeout(this.neitherReachableTimer);
       this.neitherReachableTimer = null;
+    }
+    if (this.networkScanner) {
+      this.networkScanner.stop();
     }
   }
 
