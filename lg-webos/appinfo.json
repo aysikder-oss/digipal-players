@@ -1,0 +1,14 @@
+{
+  "id": "com.digipal.player.webos",
+  "version": "1.0.0",
+  "vendor": "Digipal",
+  "type": "web",
+  "main": "index.html",
+  "title": "Digipal Player",
+  "icon": "icons/icon80.png",
+  "largeIcon": "icons/icon130.png",
+  "resolution": "1920x1080",
+  "transparent": false,
+  "handlesRelaunch": true,
+  "disableBackHistoryAPI": true
+}

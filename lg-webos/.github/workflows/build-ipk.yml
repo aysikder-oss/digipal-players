@@ -1,0 +1,72 @@
+name: Build webOS IPK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install webOS CLI tools
+        run: npm install -g @webos-tools/cli
+
+      - name: Verify app structure
+        run: |
+          echo "=== appinfo.json ==="
+          cat appinfo.json
+          echo ""
+          echo "=== Files ==="
+          ls -laR
+          echo "=== ares-package version ==="
+          ares-package --version || true
+
+      - name: Package IPK
+        run: |
+          mkdir -p /tmp/ipk-output
+          ares-package . -o /tmp/ipk-output --verbose
+
+      - name: Prepare release
+        run: |
+          mkdir -p release
+          cp /tmp/ipk-output/*.ipk release/DigipalPlayer-webOS-v1.ipk
+          ls -la release/
+
+      - name: Upload IPK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DigipalPlayer-webOS
+          path: release/DigipalPlayer-webOS-v1.ipk
+          retention-days: 90
+
+      - name: Create Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: webos-v1.0.${{ github.run_number }}
+          name: Digipal Player webOS v1.0.${{ github.run_number }}
+          files: release/DigipalPlayer-webOS-v1.ipk
+          make_latest: false
+          body: |
+            Digipal Player for LG webOS TV v1.0.${{ github.run_number }}
+            
+            Built from commit ${{ github.sha }}
+            
+            ## Installation
+            1. Enable Developer Mode on your LG TV
+            2. Install the webOS CLI: `npm install -g @webos-tools/cli`
+            3. Set up your TV: `ares-setup-device`
+            4. Install: `ares-install DigipalPlayer-webOS-v1.ipk`

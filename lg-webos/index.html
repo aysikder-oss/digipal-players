@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1920, height=1080, initial-scale=1.0, user-scalable=no">
+  <title>Digipal Player</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      background: #0a0e1a;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      color: #e2e8f0;
+    }
+    #player-frame {
+      width: 100%;
+      height: 100%;
+      border: none;
+      display: none;
+    }
+    #setup-screen {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .setup-container {
+      width: 560px;
+      background: #1e293b;
+      border-radius: 16px;
+      padding: 48px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    }
+    .logo {
+      text-align: center;
+      margin-bottom: 36px;
+    }
+    .logo h1 {
+      font-size: 32px;
+      font-weight: 700;
+      color: #f8fafc;
+    }
+    .logo p {
+      font-size: 16px;
+      color: #94a3b8;
+      margin-top: 8px;
+    }
+    .logo .platform-badge {
+      display: inline-block;
+      background: #3b82f6;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 12px;
+      border-radius: 20px;
+      margin-top: 12px;
+      letter-spacing: 0.5px;
+    }
+    label {
+      display: block;
+      font-size: 16px;
+      font-weight: 500;
+      color: #94a3b8;
+      margin-bottom: 12px;
+    }
+    input {
+      width: 100%;
+      padding: 14px 18px;
+      background: #0f172a;
+      border: 2px solid #334155;
+      border-radius: 10px;
+      color: #f8fafc;
+      font-size: 18px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus { border-color: #3b82f6; }
+    input::placeholder { color: #475569; }
+    .error {
+      color: #f87171;
+      font-size: 14px;
+      margin-top: 8px;
+      display: none;
+    }
+    .btn {
+      width: 100%;
+      margin-top: 24px;
+      padding: 14px;
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      font-size: 18px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn:focus, input:focus {
+      outline: 3px solid #60a5fa;
+      outline-offset: 2px;
+    }
+    .btn:hover, .btn.focused { background: #2563eb; }
+    .hint {
+      text-align: center;
+      font-size: 13px;
+      color: #64748b;
+      margin-top: 20px;
+      line-height: 1.6;
+    }
+    #error-screen {
+      width: 100%;
+      height: 100%;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+    }
+    .error-title {
+      font-size: 36px;
+      font-weight: 700;
+      color: #ef4444;
+      margin-bottom: 16px;
+    }
+    .error-message {
+      font-size: 18px;
+      color: #94a3b8;
+    }
+    .error-retry {
+      font-size: 14px;
+      color: #64748b;
+      margin-top: 24px;
+    }
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 4px solid #334155;
+      border-top-color: #3b82f6;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-top: 24px;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div id="setup-screen">
+    <div class="setup-container">
+      <div class="logo">
+        <h1>Digipal Player</h1>
+        <p>Enter your server URL to get started</p>
+        <span class="platform-badge">LG webOS</span>
+      </div>
+      <label for="url">Server URL</label>
+      <input type="url" id="url" placeholder="https://your-app.replit.app" autofocus data-testid="input-server-url" />
+      <div class="error" id="error">Please enter a valid URL starting with https://</div>
+      <button class="btn" id="connect" data-testid="button-connect">Connect</button>
+      <p class="hint">Use your LG remote to type the URL.<br>Press OK/Enter on the Connect button to begin.</p>
+    </div>
+  </div>
+
+  <iframe id="player-frame" data-testid="player-frame" allow="autoplay; fullscreen; encrypted-media"></iframe>
+
+  <div id="error-screen">
+    <div class="error-title">Connection Lost</div>
+    <div class="error-message">Unable to reach the server. Retrying...</div>
+    <div class="spinner"></div>
+    <div class="error-retry" id="retry-countdown"></div>
+  </div>
+
+  <script src="webOS.js" onerror="console.warn('webOS.js not available — running outside webOS')"></script>
+  <script src="app.js"></script>
+</body>
+</html>
