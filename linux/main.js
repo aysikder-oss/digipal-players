@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const MediaManager = require('./media-manager');
 const BonjourBrowser = require('./bonjour-browser');
 const ConnectionManager = require('./connection-manager');
+const NetworkScanner = require('./network-scanner');
 
 const PLAYER_PATH = '/tv';
 const CONFIG_FILE = 'config.json';
@@ -20,6 +21,7 @@ let serverUrl = '';
 let mediaManager = null;
 let bonjourBrowser = null;
 let connectionManager = null;
+let networkScanner = null;
 let cursorHideTimer = null;
 let cursorHidden = false;
 
@@ -500,8 +502,11 @@ async function captureScreenshot() {
 async function startAutoConnect() {
   const config = loadConfig();
 
+  networkScanner = new NetworkScanner();
+
   connectionManager = new ConnectionManager({
     bonjourBrowser,
+    networkScanner,
     cloudUrl: DEFAULT_CLOUD_URL,
     platform: 'linux',
     deviceId: (config && config.deviceId) || crypto.randomUUID(),
@@ -514,8 +519,25 @@ async function startAutoConnect() {
     showSearchingScreen();
   });
 
-  connectionManager.on('retrying', ({ attempt, delayMs }) => {
-    console.log(`[main] Neither server reachable, retrying (attempt ${attempt}, delay ${Math.round(delayMs / 1000)}s)`);
+  connectionManager.on('scanningNetwork', () => {
+    console.log('[main] Scanning local network for hub...');
+  });
+
+  connectionManager.on('retrying', ({ attempt, delayMs, maxAttempts }) => {
+    console.log(`[main] Neither server reachable, retrying (attempt ${attempt}/${maxAttempts || "?"}, delay ${Math.round(delayMs / 1000)}s)`);
+  });
+
+  connectionManager.on('showSetup', async () => {
+    console.log('[main] Could not auto-connect, showing setup prompt');
+    closeSearchingScreen();
+    const url = await showSetupPrompt();
+    if (url) {
+      connectionManager.neitherReachableAttempts = 0;
+      connectionManager.primaryUrl = url;
+      connectionManager.primaryMode = connectionManager.isLocalUrl(url) ? 'local' : 'cloud';
+      connectionManager.emit('connected', { url, mode: connectionManager.primaryMode });
+      connectionManager.startDualMode();
+    }
   });
 
   connectionManager.on('connected', ({ url, mode }) => {
