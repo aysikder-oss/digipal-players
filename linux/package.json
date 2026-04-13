@@ -105,5 +105,9 @@
       ]
     }
   },
-  "homepage": "https://digipal.app"
+  "homepage": "https://digipal.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aysikder-oss/digipal-players.git"
+  }
 }
