@@ -65,27 +65,6 @@ jobs:
         working-directory: android-tv
         run: ./gradlew assembleDebug
 
-      - name: Get version info
-        id: version
-        run: |
-          VERSION_NAME=$(grep "versionName" android-tv/app/build.gradle | head -1 | sed "s/.*versionName [\"']\(.*\)[\"']/\1/")
-          VERSION_CODE=$(grep "versionCode" android-tv/app/build.gradle | head -1 | sed "s/.*versionCode \([0-9]*\)/\1/")
-          echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
-          echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
-
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/android-tv-v')
-        uses: softprops/action-gh-release@v1
-        with:
-          name: "Android TV Player v${{ steps.version.outputs.version_name }}"
-          files: |
-            android-tv/app/build/outputs/apk/release/*.apk
-            android-tv/app/build/outputs/apk/debug/*.apk
-            android-tv/app/build/outputs/bundle/release/*.aab
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
@@ -105,3 +84,21 @@ jobs:
           path: android-tv/app/build/outputs/bundle/release/*.aab
           if-no-files-found: warn
 
+  release:
+    if: startsWith(github.ref, 'refs/tags/android-tv-v')
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/**/*.apk
+            artifacts/**/*.aab
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
