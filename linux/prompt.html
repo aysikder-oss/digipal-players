@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Digipal Player Setup</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .container {
+      width: 420px;
+      background: #1e293b;
+      border-radius: 12px;
+      padding: 32px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    }
+    .logo {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    .logo h1 {
+      font-size: 22px;
+      font-weight: 700;
+      color: #f8fafc;
+    }
+    .logo p {
+      font-size: 13px;
+      color: #94a3b8;
+      margin-top: 4px;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: #94a3b8;
+      margin-bottom: 8px;
+    }
+    input {
+      width: 100%;
+      padding: 10px 14px;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      color: #f8fafc;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus { border-color: #3b82f6; }
+    input::placeholder { color: #475569; }
+    .error {
+      color: #f87171;
+      font-size: 12px;
+      margin-top: 6px;
+      display: none;
+    }
+    .discovered {
+      margin-top: 16px;
+      display: none;
+    }
+    .discovered h3 {
+      font-size: 12px;
+      font-weight: 600;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+    .server-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      margin-bottom: 6px;
+      cursor: pointer;
+      transition: border-color 0.2s;
+    }
+    .server-item:hover { border-color: #3b82f6; }
+    .server-name { font-size: 13px; color: #f8fafc; }
+    .server-url { font-size: 11px; color: #64748b; }
+    button {
+      width: 100%;
+      margin-top: 20px;
+      padding: 10px;
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #2563eb; }
+    .hint {
+      text-align: center;
+      font-size: 11px;
+      color: #64748b;
+      margin-top: 16px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">
+      <h1>Digipal Player</h1>
+      <p>Enter your server URL or select a discovered hub</p>
+    </div>
+    <div class="discovered" id="discovered">
+      <h3>Discovered on Network</h3>
+      <div id="serverList"></div>
+    </div>
+    <label for="url">Server URL</label>
+    <input type="url" id="url" placeholder="https://your-app.replit.app" autofocus />
+    <div class="error" id="error">Please enter a valid URL</div>
+    <button id="connect">Connect</button>
+    <p class="hint">You can change this later with Ctrl + Shift + S</p>
+  </div>
+  <script>
+    const urlInput = document.getElementById('url');
+    const errorEl = document.getElementById('error');
+    const btn = document.getElementById('connect');
+    const discoveredEl = document.getElementById('discovered');
+    const serverListEl = document.getElementById('serverList');
+
+    function submit() {
+      const url = urlInput.value.trim().replace(/\/+$/, '');
+      if (!url || (!url.startsWith('https://') && !url.startsWith('http://'))) {
+        errorEl.style.display = 'block';
+        urlInput.focus();
+        return;
+      }
+      errorEl.style.display = 'none';
+      const { ipcRenderer } = require('electron');
+      ipcRenderer.send('server-url-submitted', url);
+    }
+
+    btn.addEventListener('click', submit);
+    urlInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submit();
+      else errorEl.style.display = 'none';
+    });
+
+    try {
+      const { ipcRenderer } = require('electron');
+      const servers = JSON.parse(ipcRenderer.sendSync('bonjour:getServers'));
+      if (servers.length > 0) {
+        discoveredEl.style.display = 'block';
+        servers.forEach(server => {
+          const item = document.createElement('div');
+          item.className = 'server-item';
+          const wrapper = document.createElement('div');
+          const nameEl = document.createElement('div');
+          nameEl.className = 'server-name';
+          nameEl.textContent = server.name;
+          const urlEl = document.createElement('div');
+          urlEl.className = 'server-url';
+          urlEl.textContent = server.url;
+          wrapper.appendChild(nameEl);
+          wrapper.appendChild(urlEl);
+          item.appendChild(wrapper);
+          item.addEventListener('click', () => {
+            urlInput.value = server.url;
+            submit();
+          });
+          serverListEl.appendChild(item);
+        });
+      }
+    } catch (e) {
+      console.error('Failed to get discovered servers:', e);
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+[Unit]
+Description=Digipal Digital Signage Player
+After=graphical-session.target
+Wants=graphical-session.target
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/digipal-linux-player
+Restart=on-failure
+RestartSec=5
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=%h/.Xauthority
+
+[Install]
+WantedBy=default.target

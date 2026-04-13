@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Digipal Player
+GenericName=Digital Signage Player
+Comment=Digipal Digital Signage Player for Linux
+Exec=digipal-linux-player
+Icon=digipal-linux-player
+Terminal=false
+Categories=Utility;AudioVideo;Video;
+StartupWMClass=digipal-linux-player
