@@ -1,0 +1,61 @@
+name: Build Windows Player (Smart Triggers)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+
+      - name: Setup Python for node-gyp
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Windows executables
+        run: npm run build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Installer
+        uses: actions/upload-artifact@v5
+        with:
+          name: DigipalPlayer-SmartTriggers-Installer
+          path: dist/*.exe
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Create Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v2.0.${{ github.run_number }}
+          name: Digipal Player (Smart Triggers) v2.0.${{ github.run_number }}
+          files: dist/*.exe
+          make_latest: true
+          body: |
+            Digipal Player for Windows (Smart Triggers) v2.0.${{ github.run_number }}
+            
+            Includes hardware sensor/button integration (USB HID, serial, BLE) and camera/media support.
+            
+            Built from commit ${{ github.sha }}
