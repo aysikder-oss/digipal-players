@@ -3,9 +3,12 @@ import SwiftUI
 struct SetupView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var bonjourBrowser = BonjourBrowser()
+    @StateObject private var networkScanner = NetworkScanner()
     @State private var urlInput: String = ""
     @State private var errorMessage: String = ""
     @State private var isValidating = false
+    @State private var scanStatus: String = "Scanning for local hubs..."
+    @State private var hasScanned = false
 
     var body: some View {
         ZStack {
@@ -69,41 +72,39 @@ struct SetupView: View {
                     .buttonStyle(.plain)
                     .disabled(isValidating)
 
-                    if !bonjourBrowser.discoveredServers.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Local Servers Found")
-                                .font(.system(size: 13, weight: .medium))
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            if networkScanner.isScanning || (!hasScanned && bonjourBrowser.discoveredServers.isEmpty) {
+                                ProgressView()
+                                    .scaleEffect(0.6)
+                                    .progressViewStyle(CircularProgressViewStyle(tint: Color(red: 0.58, green: 0.64, blue: 0.72)))
+                            }
+                            Text(scanStatus)
+                                .font(.system(size: 12))
                                 .foregroundColor(Color(red: 0.58, green: 0.64, blue: 0.72))
-
-                            ForEach(bonjourBrowser.discoveredServers, id: \.url) { server in
-                                Button(action: {
-                                    urlInput = server.url
-                                    connect()
-                                }) {
-                                    HStack {
-                                        Image(systemName: "network")
-                                            .foregroundColor(Color(red: 0.231, green: 0.510, blue: 0.965))
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(server.name)
-                                                .font(.system(size: 13, weight: .medium))
-                                                .foregroundColor(.white)
-                                            Text(server.url)
-                                                .font(.system(size: 11))
-                                                .foregroundColor(Color(red: 0.58, green: 0.64, blue: 0.72))
-                                        }
-                                        Spacer()
-                                        Image(systemName: "arrow.right.circle.fill")
-                                            .foregroundColor(Color(red: 0.231, green: 0.510, blue: 0.965))
-                                    }
-                                    .padding(10)
-                                    .background(Color(red: 0.059, green: 0.090, blue: 0.165))
-                                    .cornerRadius(8)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .stroke(Color(red: 0.2, green: 0.255, blue: 0.333), lineWidth: 1)
-                                    )
+                            Spacer()
+                            Button(action: scanAgain) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "arrow.clockwise")
+                                        .font(.system(size: 11))
+                                    Text("Scan Again")
+                                        .font(.system(size: 12))
                                 }
-                                .buttonStyle(.plain)
+                                .foregroundColor(Color(red: 0.231, green: 0.510, blue: 0.965))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(networkScanner.isScanning)
+                        }
+
+                        if !bonjourBrowser.discoveredServers.isEmpty {
+                            ForEach(bonjourBrowser.discoveredServers, id: \.url) { server in
+                                hubRow(name: server.name, url: server.url, source: "mDNS")
+                            }
+                        }
+
+                        if !networkScanner.foundHubs.isEmpty {
+                            ForEach(networkScanner.foundHubs) { hub in
+                                hubRow(name: "Hub at \(hub.ip)", url: hub.url, source: "Network Scan")
                             }
                         }
                     }
@@ -134,10 +135,103 @@ struct SetupView: View {
         }
         .onAppear {
             urlInput = appState.serverUrl
-            bonjourBrowser.startBrowsing()
+            startDiscovery()
         }
         .onDisappear {
             bonjourBrowser.stopBrowsing()
+            networkScanner.stop()
+        }
+        .onChange(of: bonjourBrowser.discoveredServers) { servers in
+            updateScanStatus()
+        }
+        .onChange(of: networkScanner.foundHubs) { hubs in
+            updateScanStatus()
+        }
+        .onChange(of: networkScanner.isScanning) { scanning in
+            updateScanStatus()
+        }
+    }
+
+    @ViewBuilder
+    private func hubRow(name: String, url: String, source: String) -> some View {
+        Button(action: {
+            urlInput = url
+            connect()
+        }) {
+            HStack {
+                Image(systemName: "network")
+                    .foregroundColor(Color(red: 0.231, green: 0.510, blue: 0.965))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.white)
+                    HStack(spacing: 4) {
+                        Text(url)
+                            .font(.system(size: 11))
+                            .foregroundColor(Color(red: 0.58, green: 0.64, blue: 0.72))
+                        Text("(\(source))")
+                            .font(.system(size: 10))
+                            .foregroundColor(Color(red: 0.396, green: 0.455, blue: 0.525))
+                    }
+                }
+                Spacer()
+                Image(systemName: "arrow.right.circle.fill")
+                    .foregroundColor(Color(red: 0.231, green: 0.510, blue: 0.965))
+            }
+            .padding(10)
+            .background(Color(red: 0.059, green: 0.090, blue: 0.165))
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color(red: 0.2, green: 0.255, blue: 0.333), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func startDiscovery() {
+        hasScanned = false
+        scanStatus = "Scanning for local hubs..."
+        bonjourBrowser.startBrowsing()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8.0) { [self] in
+            if bonjourBrowser.discoveredServers.isEmpty {
+                NSLog("[SetupView] Bonjour found nothing, starting network scan")
+                Task {
+                    let _ = await networkScanner.scan()
+                    await MainActor.run { hasScanned = true; updateScanStatus() }
+                }
+            } else {
+                hasScanned = true
+                updateScanStatus()
+            }
+        }
+    }
+
+    private func scanAgain() {
+        hasScanned = false
+        scanStatus = "Scanning for local hubs..."
+        bonjourBrowser.stopBrowsing()
+        networkScanner.stop()
+        DispatchQueue.main.async {
+            bonjourBrowser.startBrowsing()
+        }
+        Task {
+            let _ = await networkScanner.scan()
+            await MainActor.run { hasScanned = true; updateScanStatus() }
+        }
+    }
+
+    private func updateScanStatus() {
+        let totalFound = bonjourBrowser.discoveredServers.count + networkScanner.foundHubs.count
+        if networkScanner.isScanning {
+            scanStatus = "Scanning local network..."
+        } else if totalFound > 0 {
+            scanStatus = "\(totalFound) hub\(totalFound == 1 ? "" : "s") found"
+        } else if hasScanned {
+            scanStatus = "No hubs found -- enter URL manually"
+        } else {
+            scanStatus = "Scanning for local hubs..."
         }
     }
 
