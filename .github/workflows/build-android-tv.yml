@@ -1,57 +1,57 @@
 name: Build Android TV APK
 
-  on:
-    push:
-      paths:
-        - 'android-tv/**'
-      branches:
-        - main
-      tags:
-        - 'android-tv-v*'
-    workflow_dispatch:
+on:
+  push:
+    paths:
+      - 'android-tv/**'
+    branches:
+      - main
+    tags:
+      - 'android-tv-v*'
+  workflow_dispatch:
 
-  permissions:
-    contents: write
+permissions:
+  contents: write
 
-  env:
-    FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
-  jobs:
-    build:
-      runs-on: ubuntu-latest
-      defaults:
-        run:
-          working-directory: android-tv
-      steps:
-        - uses: actions/checkout@v5
-        - uses: actions/setup-java@v4
-          with:
-            java-version: '17'
-            distribution: 'temurin'
-        - uses: android-actions/setup-android@v3
-        - run: chmod +x gradlew
-        - run: ./gradlew assembleDebug
-        - run: |
-            mkdir -p release
-            cp app/build/outputs/apk/debug/app-debug.apk release/DigipalPlayer-v3.apk
-        - uses: actions/upload-artifact@v5
-          with:
-            name: DigipalPlayer-v3
-            path: android-tv/release/DigipalPlayer-v3.apk
-            retention-days: 90
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android-tv
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - uses: android-actions/setup-android@v3
+      - run: chmod +x gradlew
+      - run: ./gradlew assembleDebug
+      - run: |
+          mkdir -p release
+          cp app/build/outputs/apk/debug/app-debug.apk release/DigipalPlayer-v3.apk
+      - uses: actions/upload-artifact@v5
+        with:
+          name: DigipalPlayer-v3
+          path: android-tv/release/DigipalPlayer-v3.apk
+          retention-days: 90
 
-    release:
-      needs: build
-      if: startsWith(github.ref, 'refs/tags/android-tv-v')
-      runs-on: ubuntu-latest
-      permissions:
-        contents: write
-      steps:
-        - uses: actions/download-artifact@v4
-          with:
-            path: artifacts
-        - uses: softprops/action-gh-release@v2
-          with:
-            files: artifacts/**/*.apk
-            generate_release_notes: true
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/android-tv-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*.apk
+          generate_release_notes: true
   
