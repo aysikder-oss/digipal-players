@@ -1,86 +1,86 @@
 name: Build Linux Player
 
-  on:
-    push:
-      paths:
-        - 'linux/**'
-      branches:
-        - main
-      tags:
-        - 'linux-v*'
-    workflow_dispatch:
+on:
+  push:
+    paths:
+      - 'linux/**'
+    branches:
+      - main
+    tags:
+      - 'linux-v*'
+  workflow_dispatch:
 
-  jobs:
-    build-x64:
-      runs-on: ubuntu-latest
-      defaults:
-        run:
-          working-directory: linux
-      steps:
-        - uses: actions/checkout@v4
-        - uses: actions/setup-node@v4
-          with:
-            node-version: '20'
-        - run: npm install
-        - run: npx electron-builder --linux deb AppImage rpm --x64 --publish never
-        - uses: actions/upload-artifact@v4
-          with:
-            name: digipal-linux-player-deb-x64
-            path: linux/release/*.deb
-        - uses: actions/upload-artifact@v4
-          with:
-            name: digipal-linux-player-appimage-x64
-            path: linux/release/*.AppImage
-        - uses: actions/upload-artifact@v4
-          with:
-            name: digipal-linux-player-rpm-x64
-            path: linux/release/*.rpm
+jobs:
+  build-x64:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: npx electron-builder --linux deb AppImage rpm --x64 --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digipal-linux-player-deb-x64
+          path: linux/release/*.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digipal-linux-player-appimage-x64
+          path: linux/release/*.AppImage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digipal-linux-player-rpm-x64
+          path: linux/release/*.rpm
 
-    build-arm64:
-      runs-on: ubuntu-latest
-      defaults:
-        run:
-          working-directory: linux
-      steps:
-        - uses: actions/checkout@v4
-        - uses: docker/setup-qemu-action@v3
-          with:
-            platforms: arm64
-        - uses: actions/setup-node@v4
-          with:
-            node-version: '20'
-        - run: npm install
-        - run: npx electron-builder --linux deb --arm64 --publish never
-        - uses: actions/upload-artifact@v4
-          with:
-            name: digipal-linux-player-deb-arm64
-            path: linux/release/*.deb
-        - uses: actions/upload-artifact@v4
-          with:
-            name: digipal-linux-player-appimage-arm64
-            path: linux/release/*.AppImage
-        - uses: actions/upload-artifact@v4
-          with:
-            name: digipal-linux-player-rpm-arm64
-            path: linux/release/*.rpm
+  build-arm64:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: npx electron-builder --linux deb --arm64 --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digipal-linux-player-deb-arm64
+          path: linux/release/*.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digipal-linux-player-appimage-arm64
+          path: linux/release/*.AppImage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digipal-linux-player-rpm-arm64
+          path: linux/release/*.rpm
 
-    release:
-      if: startsWith(github.ref, 'refs/tags/linux-v')
-      needs: [build-x64, build-arm64]
-      runs-on: ubuntu-latest
-      permissions:
-        contents: write
-      steps:
-        - uses: actions/download-artifact@v4
-          with:
-            path: artifacts
-        - uses: softprops/action-gh-release@v2
-          with:
-            files: |
-              artifacts/**/*.deb
-              artifacts/**/*.AppImage
-              artifacts/**/*.rpm
-            generate_release_notes: true
-          env:
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  release:
+    if: startsWith(github.ref, 'refs/tags/linux-v')
+    needs: [build-x64, build-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/**/*.deb
+            artifacts/**/*.AppImage
+            artifacts/**/*.rpm
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   
