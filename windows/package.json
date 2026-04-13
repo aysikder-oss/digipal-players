@@ -28,11 +28,15 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "icon.png"
@@ -43,5 +47,10 @@
       "createDesktopShortcut": true,
       "runAfterFinish": true
     }
+  },
+  "homepage": "https://digipal.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aysikder-oss/digipal-players.git"
   }
 }
