@@ -1,0 +1,58 @@
+name: Build webOS IPK
+
+  on:
+    push:
+      paths:
+        - 'lg-webos/**'
+      branches:
+        - main
+      tags:
+        - 'lg-webos-v*'
+    workflow_dispatch:
+
+  permissions:
+    contents: write
+
+  jobs:
+    build:
+      runs-on: ubuntu-latest
+      defaults:
+        run:
+          working-directory: lg-webos
+      steps:
+        - uses: actions/checkout@v4
+        - uses: actions/setup-node@v4
+          with:
+            node-version: '22'
+        - name: Install webOS CLI tools
+          run: npm install -g @webos-tools/cli
+          working-directory: .
+        - name: Package IPK
+          run: |
+            mkdir -p /tmp/ipk-output
+            ares-package . -o /tmp/ipk-output --verbose
+        - name: Prepare release
+          run: |
+            mkdir -p release
+            cp /tmp/ipk-output/*.ipk release/DigipalPlayer-webOS-v1.ipk
+        - uses: actions/upload-artifact@v4
+          with:
+            name: DigipalPlayer-webOS
+            path: lg-webos/release/DigipalPlayer-webOS-v1.ipk
+            retention-days: 90
+
+    release:
+      needs: build
+      if: startsWith(github.ref, 'refs/tags/lg-webos-v')
+      runs-on: ubuntu-latest
+      permissions:
+        contents: write
+      steps:
+        - uses: actions/download-artifact@v4
+          with:
+            path: artifacts
+        - uses: softprops/action-gh-release@v2
+          with:
+            files: artifacts/**/*.ipk
+            generate_release_notes: true
+  
