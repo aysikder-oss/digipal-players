@@ -15,31 +15,48 @@ class BonjourBrowser: NSObject, ObservableObject, NetServiceBrowserDelegate, Net
     private var resolvingServices: [NetService] = []
 
     func startBrowsing() {
+        NSLog("[Bonjour] Starting browser for _digipal._tcp in domain local.")
         browser = NetServiceBrowser()
         browser?.delegate = self
         browser?.searchForServices(ofType: "_digipal._tcp.", inDomain: "local.")
     }
 
     func stopBrowsing() {
+        NSLog("[Bonjour] Stopping browser")
         browser?.stop()
         browser = nil
         resolvingServices.removeAll()
     }
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
+        NSLog("[Bonjour] Found service: %@ (moreComing: %@)", service.name, moreComing ? "yes" : "no")
         service.delegate = self
         resolvingServices.append(service)
         service.resolve(withTimeout: 5.0)
     }
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
+        NSLog("[Bonjour] Lost service: %@", service.name)
         DispatchQueue.main.async {
             self.discoveredServers.removeAll { $0.name == service.name }
         }
     }
 
+    func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
+        NSLog("[Bonjour] Browser failed to search: %@", errorDict.description)
+    }
+
+    func netServiceBrowserDidStopSearch(_ browser: NetServiceBrowser) {
+        NSLog("[Bonjour] Browser stopped searching")
+    }
+
     func netServiceDidResolveAddress(_ sender: NetService) {
-        guard let addresses = sender.addresses else { return }
+        guard let addresses = sender.addresses else {
+            NSLog("[Bonjour] Service %@ resolved but has no addresses", sender.name)
+            return
+        }
+
+        NSLog("[Bonjour] Resolving service: %@ (%d addresses)", sender.name, addresses.count)
 
         for addressData in addresses {
             let address = addressData.withUnsafeBytes { ptr -> String? in
@@ -63,6 +80,8 @@ class BonjourBrowser: NSObject, ObservableObject, NetServiceBrowserDelegate, Net
                     port: port
                 )
 
+                NSLog("[Bonjour] Resolved service: %@ at %@", sender.name, url)
+
                 DispatchQueue.main.async {
                     if !self.discoveredServers.contains(where: { $0.url == url }) {
                         self.discoveredServers.append(server)
@@ -74,6 +93,6 @@ class BonjourBrowser: NSObject, ObservableObject, NetServiceBrowserDelegate, Net
     }
 
     func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
-        print("[Bonjour] Failed to resolve service: \(sender.name)")
+        NSLog("[Bonjour] Failed to resolve service: %@ error: %@", sender.name, errorDict.description)
     }
 }
