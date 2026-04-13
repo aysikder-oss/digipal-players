@@ -1,0 +1,125 @@
+name: Build Digipal Vega Player
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lz4 curl
+          sudo add-apt-repository -y ppa:deadsnakes/ppa
+          sudo apt-get update
+          sudo apt-get install -y libpython3.8-dev
+
+      - name: Install Watchman
+        run: |
+          sudo apt-get install -y watchman || true
+
+      - name: Install Vega SDK
+        run: ${{ secrets.VEGA_SDK_INSTALL_CMD }}
+        env:
+          CI: true
+
+      - name: Find and add kepler to PATH
+        run: |
+          echo "=== Searching for kepler binary ==="
+          find ~ -name "kepler" -type f 2>/dev/null || echo "Not found in home"
+          find /usr/local -name "kepler" -type f 2>/dev/null || echo "Not found in /usr/local"
+          which kepler 2>/dev/null && echo "kepler already on PATH" || echo "kepler not on PATH yet"
+
+          echo "=== Contents of ~/kepler (if exists) ==="
+          ls -la ~/kepler/ 2>/dev/null || echo "~/kepler does not exist"
+          ls -la ~/kepler/sdk/ 2>/dev/null || true
+
+          echo "=== Adding to PATH ==="
+          KEPLER_FILE=$(find ~ /usr/local -name "kepler" -type f 2>/dev/null | head -1)
+          if [ -n "$KEPLER_FILE" ]; then
+            KEPLER_BIN=$(dirname "$KEPLER_FILE")
+            echo "Found kepler at: $KEPLER_BIN"
+            echo "$KEPLER_BIN" >> $GITHUB_PATH
+          else
+            echo "WARNING: kepler binary not found, checking SDK path via ls"
+            SDK_VER=$(ls ~/kepler/sdk/ 2>/dev/null | head -1)
+            if [ -n "$SDK_VER" ]; then
+              echo "$HOME/kepler/sdk/$SDK_VER/bin" >> $GITHUB_PATH
+              echo "KEPLER_SDK_PATH=$HOME/kepler/sdk/$SDK_VER" >> $GITHUB_ENV
+            fi
+          fi
+
+      - name: Scaffold Vega project and merge app code
+        run: |
+          echo "=== Available templates ==="
+          kepler project list-templates 2>&1 || true
+
+          echo "=== kepler project generate help ==="
+          kepler project generate --help 2>&1 || true
+
+          echo "=== Generating project from helloWorld template ==="
+          mkdir -p /tmp/vega-build
+          kepler project generate \
+            --template helloWorld \
+            --name DigipalVegaPlayer \
+            --packageId com.nexuscast.player \
+            --outputDir /tmp/vega-build 2>&1
+
+          echo "=== Template project structure ==="
+          find /tmp/vega-build -maxdepth 4 -type f 2>/dev/null | head -60 || echo "No template created"
+
+          PROJ_DIR=$(find /tmp/vega-build -name "package.json" -maxdepth 3 2>/dev/null | head -1 | xargs dirname 2>/dev/null || echo "")
+
+          if [ -n "$PROJ_DIR" ] && [ -d "$PROJ_DIR" ]; then
+            echo "=== Found project at: $PROJ_DIR ==="
+            cp -r $GITHUB_WORKSPACE/src $PROJ_DIR/
+            cp $GITHUB_WORKSPACE/App.tsx $PROJ_DIR/
+            cp $GITHUB_WORKSPACE/index.js $PROJ_DIR/
+            echo "=== Patching manifest.toml, package.json, app.json ==="
+            python3 $GITHUB_WORKSPACE/scripts/patch_manifest.py $PROJ_DIR
+            cd $PROJ_DIR
+            npm install
+            npm install @react-native-async-storage/async-storage react-native-webview
+            kepler build -b Release -t aarch64 -n 1
+            echo "=== Intermediate manifest (what gets packaged) ==="
+            find $PROJ_DIR/build -name "manifest.toml" 2>/dev/null | while read f; do echo "--- $f ---"; cat "$f"; done
+            echo "=== Finding .vpkg files ==="
+            find $PROJ_DIR -name "*.vpkg" 2>/dev/null
+            mkdir -p $GITHUB_WORKSPACE/output
+            find $PROJ_DIR -name "*.vpkg" -exec cp {} $GITHUB_WORKSPACE/output/ \;
+          else
+            echo "Template creation failed — building from workspace"
+            cd $GITHUB_WORKSPACE
+            cp $GITHUB_WORKSPACE/manifest.toml manifest.toml
+            npm install
+            kepler build -b Release -t aarch64
+            mkdir -p $GITHUB_WORKSPACE/output
+            find $GITHUB_WORKSPACE -name "*.vpkg" -exec cp {} $GITHUB_WORKSPACE/output/ \;
+          fi
+
+      - name: List output
+        if: always()
+        run: |
+          echo "=== Output directory ==="
+          ls -lh $GITHUB_WORKSPACE/output/ 2>/dev/null || echo "No output dir"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DigipalPlayer-${{ github.run_number }}
+          path: output/*.vpkg
+          if-no-files-found: warn
+          retention-days: 30
