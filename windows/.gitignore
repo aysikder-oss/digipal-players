@@ -1,0 +1,4 @@
+node_modules/
+release/
+*.exe
+.DS_Store
