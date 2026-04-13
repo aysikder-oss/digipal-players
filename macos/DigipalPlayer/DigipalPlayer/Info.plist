@@ -22,8 +22,6 @@
 	<string>13.0</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
-	<key>NSMainStoryboardFile</key>
-	<string></string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.business</string>
 	<key>NSAppTransportSecurity</key>
