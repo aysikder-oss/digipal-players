@@ -32,6 +32,14 @@
   },
   "kepler": {
     "projectType": "react-native",
-    "targets": ["aarch64", "x86_64"]
+    "targets": [
+      "aarch64",
+      "x86_64"
+    ]
+  },
+  "homepage": "https://digipal.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aysikder-oss/digipal-players.git"
   }
 }
