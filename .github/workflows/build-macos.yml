@@ -33,8 +33,22 @@ jobs:
         run: |
           mkdir -p build/app
           cp -R "build/DigipalPlayer.xcarchive/Products/Applications/Digipal Player.app" build/app/
-          codesign --force --deep --sign - --options runtime --entitlements DigipalPlayer/DigipalPlayer.entitlements "build/app/Digipal Player.app"
-          codesign --verify --deep --strict "build/app/Digipal Player.app" && echo "Code signature valid" || echo "WARNING: Code signature invalid"
+
+          echo "=== App bundle contents ==="
+          ls -laR "build/app/Digipal Player.app/Contents/"
+          echo "=== Resolved Info.plist ==="
+          cat "build/app/Digipal Player.app/Contents/Info.plist"
+          echo "=== Binary file info ==="
+          file "build/app/Digipal Player.app/Contents/MacOS/"* || echo "No binary found!"
+          echo "=== Binary architectures ==="
+          lipo -info "build/app/Digipal Player.app/Contents/MacOS/"* || echo "lipo failed"
+
+          codesign --force --deep --sign - --options runtime \
+            --entitlements DigipalPlayer/DigipalPlayer.entitlements \
+            "build/app/Digipal Player.app"
+          echo "=== Code signature verification ==="
+          codesign -dv --verbose=4 "build/app/Digipal Player.app" 2>&1
+          codesign --verify --deep --strict "build/app/Digipal Player.app" && echo "Signature VALID" || echo "Signature INVALID"
       - name: Create DMG
         working-directory: macos/DigipalPlayer
         run: |
