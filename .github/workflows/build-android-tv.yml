@@ -3,8 +3,10 @@ name: Build Android TV Player
 on:
   workflow_dispatch:
   push:
+    tags:
+      - 'android-tv-v*'
     paths:
-      - 'android-tv-app/**'
+      - 'android-tv/**'
 
 jobs:
   build:
@@ -23,20 +25,20 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Make gradlew executable
-        run: chmod +x android-tv-app/gradlew
+        run: chmod +x android-tv/gradlew
 
       - name: Decode keystore
         if: env.KEYSTORE_BASE64 != ''
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
-          echo "$KEYSTORE_BASE64" | base64 -d > android-tv-app/app/release.keystore
+          echo "$KEYSTORE_BASE64" | base64 -d > android-tv/app/release.keystore
 
       - name: Build Release APK (signed)
         if: env.KEYSTORE_BASE64 != ''
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        working-directory: android-tv-app
+        working-directory: android-tv
         run: |
           ./gradlew assembleRelease \
             -Pandroid.injected.signing.store.file=$PWD/app/release.keystore \
@@ -48,7 +50,7 @@ jobs:
         if: env.KEYSTORE_BASE64 != ''
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        working-directory: android-tv-app
+        working-directory: android-tv
         run: |
           ./gradlew bundleRelease \
             -Pandroid.injected.signing.store.file=$PWD/app/release.keystore \
@@ -60,17 +62,38 @@ jobs:
         if: env.KEYSTORE_BASE64 == ''
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        working-directory: android-tv-app
+        working-directory: android-tv
         run: ./gradlew assembleDebug
+
+      - name: Get version info
+        id: version
+        run: |
+          VERSION_NAME=$(grep "versionName" android-tv/app/build.gradle | head -1 | sed "s/.*versionName [\"']\(.*\)[\"']/\1/")
+          VERSION_CODE=$(grep "versionCode" android-tv/app/build.gradle | head -1 | sed "s/.*versionCode \([0-9]*\)/\1/")
+          echo "version_name=$VERSION_NAME" >> $GITHUB_OUTPUT
+          echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/android-tv-v')
+        uses: softprops/action-gh-release@v1
+        with:
+          name: "Android TV Player v${{ steps.version.outputs.version_name }}"
+          files: |
+            android-tv/app/build/outputs/apk/release/*.apk
+            android-tv/app/build/outputs/apk/debug/*.apk
+            android-tv/app/build/outputs/bundle/release/*.aab
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: android-tv-player-apk
           path: |
-            android-tv-app/app/build/outputs/apk/release/*.apk
-            android-tv-app/app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
+            android-tv/app/build/outputs/apk/release/*.apk
+            android-tv/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
 
       - name: Upload AAB
         if: env.KEYSTORE_BASE64 != ''
@@ -79,5 +102,6 @@ jobs:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         with:
           name: android-tv-player-aab
-          path: android-tv-app/app/build/outputs/bundle/release/*.aab
-          if-no-files-found: error
+          path: android-tv/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: warn
+
