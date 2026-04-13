@@ -31,9 +31,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: npm install
-      - run: npm run build
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: npx electron-builder --win --publish never
       - uses: actions/upload-artifact@v5
         with:
           name: DigipalPlayer-SmartTriggers-Installer
