@@ -24,14 +24,16 @@ jobs:
             -configuration Release \
             -archivePath build/DigipalPlayer.xcarchive \
             archive \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
-      - name: Export app bundle
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES
+      - name: Export and sign app bundle
         working-directory: macos/DigipalPlayer
         run: |
           mkdir -p build/app
           cp -R "build/DigipalPlayer.xcarchive/Products/Applications/Digipal Player.app" build/app/
+          codesign --force --deep --sign - "build/app/Digipal Player.app"
+          xattr -cr "build/app/Digipal Player.app"
       - name: Create DMG
         working-directory: macos/DigipalPlayer
         run: |
@@ -77,4 +79,4 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  
+
