@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Digipal Player</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+        #player-frame {
+            width: 100%;
+            height: 100%;
+            border: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        #loading {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            color: #fff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            z-index: 10;
+        }
+        #loading h1 { font-size: 48px; font-weight: 700; margin-bottom: 16px; color: #2aabb3; }
+        #loading p { font-size: 20px; opacity: 0.6; }
+        .spinner {
+            width: 40px; height: 40px;
+            border: 3px solid rgba(42,171,179,0.3);
+            border-top-color: #2aabb3;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-top: 24px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        #error {
+            display: none;
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            color: #fff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            z-index: 10;
+        }
+        #error h2 { font-size: 32px; color: #f87171; margin-bottom: 12px; }
+        #error p { font-size: 18px; opacity: 0.6; margin-bottom: 24px; }
+        #error .retry-info { font-size: 16px; opacity: 0.4; }
+    </style>
+</head>
+<body>
+    <div id="loading">
+        <h1>Digipal</h1>
+        <p>Connecting to server...</p>
+        <div class="spinner"></div>
+    </div>
+    <div id="error">
+        <h2>Connection Failed</h2>
+        <p>Unable to reach the Digipal server</p>
+        <div class="retry-info">Retrying in <span id="countdown">10</span> seconds...</div>
+    </div>
+    <iframe id="player-frame" allow="autoplay; fullscreen; encrypted-media; camera; microphone"></iframe>
+
+    <script>
+        var SERVER_URL = 'https://digipal-cms.replit.app';
+        var PLAYER_PATH = '/player.html';
+        var RETRY_DELAY = 10;
+
+        var frame = document.getElementById('player-frame');
+        var loading = document.getElementById('loading');
+        var error = document.getElementById('error');
+        var countdown = document.getElementById('countdown');
+        var retryTimer = null;
+        var loaded = false;
+
+        function keepScreenOn() {
+            try {
+                if (typeof tizen !== 'undefined' && tizen.power) {
+                    tizen.power.request('SCREEN', 'SCREEN_NORMAL');
+                    tizen.power.setScreenStateChangeListener(function(prevState, currState) {
+                        if (currState === 'SCREEN_OFF') {
+                            tizen.power.turnScreenOn();
+                            tizen.power.request('SCREEN', 'SCREEN_NORMAL');
+                        }
+                    });
+                }
+            } catch (e) {
+                console.log('Screen wake lock not available:', e);
+            }
+        }
+
+        function registerKeys() {
+            try {
+                if (typeof tizen !== 'undefined' && tizen.tvinputdevice) {
+                    var keys = ['MediaPlay', 'MediaPause', 'MediaStop', 'MediaPlayPause',
+                                'MediaRewind', 'MediaFastForward', 'ColorF0Red',
+                                'ColorF1Green', 'ColorF2Yellow', 'ColorF3Blue'];
+                    keys.forEach(function(key) {
+                        try { tizen.tvinputdevice.registerKey(key); } catch(e) {}
+                    });
+                }
+            } catch (e) {
+                console.log('Key registration not available:', e);
+            }
+        }
+
+        function handleKeyDown(e) {
+            switch (e.keyCode) {
+                case 403: // Red button - reload
+                    loadPlayer();
+                    break;
+                case 404: // Green button - clear cache & reload
+                    try {
+                        frame.contentWindow.localStorage.clear();
+                    } catch(ex) {}
+                    loadPlayer();
+                    break;
+                case 10009: // Back button - prevent exit
+                    e.preventDefault();
+                    break;
+            }
+        }
+
+        function showError() {
+            loading.style.display = 'none';
+            error.style.display = 'flex';
+            var remaining = RETRY_DELAY;
+            countdown.textContent = remaining;
+            clearInterval(retryTimer);
+            retryTimer = setInterval(function() {
+                remaining--;
+                countdown.textContent = remaining;
+                if (remaining <= 0) {
+                    clearInterval(retryTimer);
+                    loadPlayer();
+                }
+            }, 1000);
+        }
+
+        function loadPlayer() {
+            loaded = false;
+            loading.style.display = 'flex';
+            error.style.display = 'none';
+            clearInterval(retryTimer);
+
+            var testUrl = SERVER_URL + '/api/plan-configurations';
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', testUrl, true);
+            xhr.timeout = 15000;
+            xhr.onload = function() {
+                if (xhr.status >= 200 && xhr.status < 400) {
+                    frame.src = SERVER_URL + PLAYER_PATH;
+                } else {
+                    showError();
+                }
+            };
+            xhr.onerror = function() { showError(); };
+            xhr.ontimeout = function() { showError(); };
+            xhr.send();
+        }
+
+        frame.onload = function() {
+            if (frame.src && frame.src !== 'about:blank') {
+                loaded = true;
+                loading.style.display = 'none';
+                error.style.display = 'none';
+            }
+        };
+
+        frame.onerror = function() {
+            showError();
+        };
+
+        document.addEventListener('keydown', handleKeyDown);
+        keepScreenOn();
+        registerKeys();
+        loadPlayer();
+    </script>
+</body>
+</html>
