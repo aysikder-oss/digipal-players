@@ -14,7 +14,7 @@ android {
         versionName "3.0.0"
 
         // The URL of your Digipal server - change this to your published URL
-        buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
+        buildConfigField "String", "SERVER_URL", "\"https://app.digipal.app\""
     }
 
     buildTypes {
