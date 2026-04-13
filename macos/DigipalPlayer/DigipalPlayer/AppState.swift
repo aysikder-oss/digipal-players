@@ -48,10 +48,11 @@ class AppState: ObservableObject {
     }
 
     private let defaultCloudUrl = "https://app.digipal.app"
-    private let discoveryTimeoutSeconds: Double = 4.0
+    private let discoveryTimeoutSeconds: Double = 8.0
     private let healthCheckIntervalSeconds: Double = 30.0
     private let reconnectBaseSeconds: Double = 5.0
     private let reconnectMaxSeconds: Double = 60.0
+    private let maxRetryBeforeSetup: Int = 3
 
     private var bonjourBrowser: BonjourBrowser?
     private var discoveryTimer: Timer?
@@ -83,6 +84,7 @@ class AppState: ObservableObject {
     func startAutoDiscovery() {
         isSearching = true
         showSetup = false
+        neitherReachableAttempts = 0
 
         bonjourBrowser = BonjourBrowser()
         bonjourBrowser?.startBrowsing()
@@ -113,7 +115,7 @@ class AppState: ObservableObject {
 
     private func checkCloudAndConnect() {
         guard let url = URL(string: "\(defaultCloudUrl)/api/health") else {
-            startNeitherReachableRetry()
+            handleConnectionFailure()
             return
         }
 
@@ -127,20 +129,27 @@ class AppState: ObservableObject {
                     self.neitherReachableAttempts = 0
                     self.connectTo(url: self.defaultCloudUrl, mode: "CLOUD", manual: false)
                 } else {
-                    self.startNeitherReachableRetry()
+                    self.handleConnectionFailure()
                 }
             }
         }.resume()
     }
 
-    private func startNeitherReachableRetry() {
+    private func handleConnectionFailure() {
         neitherReachableAttempts += 1
+
+        if neitherReachableAttempts >= maxRetryBeforeSetup {
+            print("[AppState] Max retries reached (\(maxRetryBeforeSetup)), showing setup screen")
+            showSetupScreen()
+            return
+        }
+
         let delay = min(
             reconnectBaseSeconds * pow(2.0, Double(neitherReachableAttempts - 1)),
             reconnectMaxSeconds
         )
 
-        print("[AppState] Neither server reachable, retrying in \(Int(delay))s (attempt \(neitherReachableAttempts))")
+        print("[AppState] Neither server reachable, retrying in \(Int(delay))s (attempt \(neitherReachableAttempts)/\(maxRetryBeforeSetup))")
 
         neitherReachableTimer?.invalidate()
         neitherReachableTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
@@ -154,6 +163,12 @@ class AppState: ObservableObject {
 
             self.checkCloudAndConnect()
         }
+    }
+
+    private func showSetupScreen() {
+        isSearching = false
+        showSetup = true
+        startMdnsBrowsingBackground()
     }
 
     func connectTo(url: String, mode: String, manual: Bool) {
