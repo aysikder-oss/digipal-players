@@ -1,0 +1,53 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.nexuscast.launcher'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.nexuscast.launcher"
+        minSdk 21
+        targetSdk 34
+        versionCode 2
+        versionName "2.0.0"
+
+        buildConfigField "String", "PLAYER_URL", "\"https://www.digipalsignage.com/player\""
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    lintOptions {
+        abortOnError false
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.leanback:leanback:1.0.0'
+    implementation 'com.google.android.material:material:1.11.0'
+}

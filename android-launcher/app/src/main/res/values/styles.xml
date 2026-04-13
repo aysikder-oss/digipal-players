@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.DigipalLauncher" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:colorPrimary">#2aabb3</item>
+        <item name="android:colorPrimaryDark">#1e8a91</item>
+        <item name="android:colorAccent">#2aabb3</item>
+        <item name="android:windowBackground">#0a0e1a</item>
+    </style>
+
+    <style name="Theme.DigipalLauncher.Fullscreen" parent="Theme.DigipalLauncher">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowActionBar">false</item>
+    </style>
+</resources>
