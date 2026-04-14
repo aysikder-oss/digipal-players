@@ -65,6 +65,40 @@ jobs:
         working-directory: android-tv
         run: ./gradlew assembleDebug
 
+      - name: Build Debug AAB (unsigned)
+        if: env.KEYSTORE_BASE64 == ''
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        working-directory: android-tv
+        run: ./gradlew bundleDebug
+
+      - name: Rename artifacts for clarity
+        run: |
+          # Rename debug APK
+          for f in android-tv/app/build/outputs/apk/debug/*.apk; do
+            if [ -f "$f" ]; then
+              mv "$f" "android-tv/app/build/outputs/apk/debug/DigipalPlayer-v3.2.0.apk"
+            fi
+          done
+          # Rename debug AAB
+          for f in android-tv/app/build/outputs/bundle/debug/*.aab; do
+            if [ -f "$f" ]; then
+              mv "$f" "android-tv/app/build/outputs/bundle/debug/DigipalPlayer-v3.2.0.aab"
+            fi
+          done
+          # Rename release APK if exists
+          for f in android-tv/app/build/outputs/apk/release/*.apk; do
+            if [ -f "$f" ]; then
+              mv "$f" "android-tv/app/build/outputs/apk/release/DigipalPlayer-v3.2.0.apk"
+            fi
+          done
+          # Rename release AAB if exists
+          for f in android-tv/app/build/outputs/bundle/release/*.aab; do
+            if [ -f "$f" ]; then
+              mv "$f" "android-tv/app/build/outputs/bundle/release/DigipalPlayer-v3.2.0.aab"
+            fi
+          done
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
@@ -75,13 +109,12 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload AAB
-        if: env.KEYSTORE_BASE64 != ''
         uses: actions/upload-artifact@v4
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         with:
           name: android-tv-player-aab
-          path: android-tv/app/build/outputs/bundle/release/*.aab
+          path: |
+            android-tv/app/build/outputs/bundle/release/*.aab
+            android-tv/app/build/outputs/bundle/debug/*.aab
           if-no-files-found: warn
 
   release:
