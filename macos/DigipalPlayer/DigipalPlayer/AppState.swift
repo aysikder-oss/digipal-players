@@ -47,7 +47,7 @@ class AppState: ObservableObject {
         return "\(serverUrl)/tv?platform=macos"
     }
 
-    private let defaultCloudUrl = "https://app.digipal.app"
+    private let defaultCloudUrl = "https://digipalsignage.com"
     private let discoveryTimeoutSeconds: Double = 8.0
     private let healthCheckIntervalSeconds: Double = 30.0
     private let reconnectBaseSeconds: Double = 5.0
