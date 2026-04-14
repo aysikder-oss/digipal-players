@@ -25,6 +25,8 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.DigipalPlayer"
         android:banner="@drawable/banner"
+        android:hardwareAccelerated="true"
+        android:largeHeap="true"
         tools:targetApi="31">
 
         <!-- Main TV Launcher Activity -->

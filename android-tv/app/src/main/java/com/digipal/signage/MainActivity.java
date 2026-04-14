@@ -1,4 +1,4 @@
-package com.nexuscast.player;
+package com.digipal.signage;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
@@ -36,6 +36,7 @@ public class MainActivity extends Activity {
     private static final String KEY_SERVER_URL = "server_url";
     private static final String KEY_AUTO_RELAUNCH = "auto_relaunch";
     private boolean isUserClosing = false;
+    private boolean hasHttpError = false;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -85,7 +86,7 @@ public class MainActivity extends Activity {
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         wakeLock = pm.newWakeLock(
             PowerManager.SCREEN_BRIGHT_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP,
-            "nexuscast:wakelock"
+            "digipal:wakelock"
         );
 
         mediaDownloadManager = new MediaDownloadManager(this);
@@ -130,17 +131,38 @@ public class MainActivity extends Activity {
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                super.onPageStarted(view, url, favicon);
+                hasHttpError = false;
+            }
+
+            @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
-                errorContainer.setVisibility(View.GONE);
-                webView.setVisibility(View.VISIBLE);
+                if (!hasHttpError) {
+                    errorContainer.setVisibility(View.GONE);
+                    webView.setVisibility(View.VISIBLE);
+                }
             }
 
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame()) {
+                    hasHttpError = true;
                     showError("Connection Lost", "Unable to reach the server. Retrying...");
                     retryConnection();
+                }
+            }
+
+            @Override
+            public void onReceivedHttpError(WebView view, WebResourceRequest request, android.webkit.WebResourceResponse errorResponse) {
+                if (request.isForMainFrame()) {
+                    int statusCode = errorResponse.getStatusCode();
+                    if (statusCode >= 500) {
+                        hasHttpError = true;
+                        showError("Connecting...", "Server is starting up. Retrying...");
+                        retryConnection();
+                    }
                 }
             }
 

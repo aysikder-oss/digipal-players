@@ -1,4 +1,4 @@
-package com.nexuscast.player;
+package com.digipal.signage;
 
 import android.content.Context;
 import android.content.SharedPreferences;
