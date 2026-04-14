@@ -1,7 +1,7 @@
 const { EventEmitter } = require('events');
 const crypto = require('crypto');
 
-const DEFAULT_CLOUD_URL = 'https://app.digipal.app';
+const DEFAULT_CLOUD_URL = 'https://digipalsignage.com';
 const DISCOVERY_TIMEOUT_MS = 8000;
 const RECONNECT_BASE_MS = 5000;
 const RECONNECT_MAX_MS = 60000;
