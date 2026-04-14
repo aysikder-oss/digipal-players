@@ -11,7 +11,7 @@ const NetworkScanner = require('./network-scanner');
 const PLAYER_PATH = '/tv';
 const CONFIG_FILE = 'config.json';
 const CURSOR_HIDE_DELAY = 3000;
-const DEFAULT_CLOUD_URL = 'https://app.digipal.app';
+const DEFAULT_CLOUD_URL = 'https://digipalsignage.com';
 
 let mainWindow = null;
 let searchingWindow = null;
