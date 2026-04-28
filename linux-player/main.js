@@ -544,7 +544,7 @@ async function startAutoConnect() {
     console.log(`[main] Connected to ${url} (mode: ${mode})`);
     closeSearchingScreen();
     serverUrl = url;
-    saveConfig(url, !!(config && config.manualOverride));
+    saveConfig(url, true);
     if (!mainWindow) {
       createWindow();
     }

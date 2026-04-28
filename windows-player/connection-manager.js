@@ -49,7 +49,7 @@ class ConnectionManager extends EventEmitter {
   }
 
   async autoConnect(config) {
-    if (config && config.manualOverride && config.serverUrl) {
+    if (config && config.serverUrl) {
       this.primaryUrl = config.serverUrl;
       this.primaryMode = this.isLocalUrl(config.serverUrl) ? 'local' : 'cloud';
       this.emit('connected', { url: this.primaryUrl, mode: this.primaryMode });
