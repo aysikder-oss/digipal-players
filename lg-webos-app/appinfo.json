@@ -1,6 +1,6 @@
 {
   "id": "com.digipal.player.webos",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "vendor": "Digipal",
   "type": "web",
   "main": "index.html",

@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1920, height=1080, initial-scale=1.0, user-scalable=no">
+  <title>Digipal Player</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 1920px; height: 1080px; overflow: hidden;
+      background: #ffffff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    #player-frame { width: 100%; height: 100%; border: none; display: none; }
+
+    /* ── Setup screen ── */
+    #setup-screen {
+      width: 100%; height: 100%; display: flex;
+      flex-direction: column; align-items: center; justify-content: center;
+      padding: 60px 80px;
+    }
+    .logo { text-align: center; margin-bottom: 48px; }
+    .logo img { width: 500px; height: auto; display: block; margin: 0 auto; }
+    .logo p { color: #94a3b8; font-size: 20px; margin-top: 14px; letter-spacing: 0.2px; }
+    .cards-row { display: flex; align-items: stretch; width: 100%; max-width: 1200px; }
+    .card {
+      background: white; border-radius: 24px; border: 1px solid #f1f5f9;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.10), 0 2px 8px rgba(0,0,0,0.06);
+      padding: 40px 36px 36px; display: flex; flex-direction: column; align-items: center;
+      text-align: center; flex: 1;
+    }
+    .icon-wrap { height: 88px; display: flex; align-items: center; justify-content: center; margin-bottom: 20px; }
+    .card-title { font-size: 24px; font-weight: 700; color: #0f172a; margin: 0 0 10px; letter-spacing: -0.3px; }
+    .card-desc { font-size: 17px; color: #64748b; margin: 0 0 24px; line-height: 1.5; flex-grow: 1; }
+    .btn {
+      width: 100%; padding: 18px 20px; border: none; border-radius: 14px;
+      color: white; font-size: 20px; font-weight: 600; cursor: pointer;
+      letter-spacing: 0.1px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-family: inherit;
+      transition: opacity 0.2s;
+    }
+    .btn:focus { outline: 3px solid #60a5fa; outline-offset: 3px; }
+    .btn-cloud  { background: linear-gradient(135deg, #3b82f6, #2563eb); }
+    .btn-server { background: linear-gradient(135deg, #f97316, #ea580c); }
+    .or-divider { display: flex; flex-direction: column; align-items: center; padding: 0 20px; flex-shrink: 0; }
+    .or-line { width: 1px; flex: 1; background: #e2e8f0; }
+    .or-badge {
+      padding: 6px 14px; background: #f1f5f9; border-radius: 20px;
+      font-size: 14px; font-weight: 700; color: #94a3b8; margin: 10px 0;
+      letter-spacing: 1px; border: 1px solid #e2e8f0; white-space: nowrap;
+    }
+    .card-input {
+      width: 100%; padding: 16px 18px; border: 2px solid #e2e8f0; border-radius: 12px;
+      font-size: 18px; color: #64748b; background: #f8fafc; margin-bottom: 20px;
+      outline: none; font-family: inherit; transition: border-color 0.2s;
+    }
+    .card-input:focus { border-color: #f97316; outline: 3px solid rgba(249,115,22,0.25); }
+    .error-msg { color: #ef4444; font-size: 15px; margin: -16px 0 16px; display: none; width: 100%; text-align: left; }
+    .footer { display: flex; align-items: center; justify-content: center; margin-top: 36px; font-size: 16px; color: #94a3b8; }
+
+    /* ── Loading screen ── */
+    #loading-screen {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: #ffffff; z-index: 100;
+    }
+    #loading-screen img { width: 420px; height: auto; margin-bottom: 28px; }
+    #loading-screen p { font-size: 17px; color: #94a3b8; margin-bottom: 28px; letter-spacing: 0.2px; }
+    .dots { display: flex; align-items: center; justify-content: center; gap: 8px; }
+    .dot {
+      width: 10px; height: 10px; border-radius: 50%; background: #14B8A6;
+      opacity: 0.3; animation: dot-pulse 1.2s ease-in-out infinite;
+    }
+    .dot:nth-child(1) { animation-delay: 0s; }
+    .dot:nth-child(2) { animation-delay: 0.2s; }
+    .dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes dot-pulse { 0%, 100% { opacity: 0.3; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1); } }
+
+    /* ── Error screen ── */
+    #error-screen {
+      width: 100%; height: 100%; display: none;
+      align-items: center; justify-content: center; flex-direction: column;
+      background: #ffffff;
+    }
+    .error-title { font-size: 42px; font-weight: 700; color: #ef4444; margin-bottom: 16px; }
+    .error-message { font-size: 22px; color: #94a3b8; }
+    .error-retry { font-size: 18px; color: #cbd5e1; margin-top: 28px; }
+    .spinner {
+      width: 48px; height: 48px; border: 4px solid #e2e8f0;
+      border-top-color: #3b82f6; border-radius: 50%;
+      animation: spin 1s linear infinite; margin-top: 28px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <!-- Loading screen (shown first on every boot) -->
+  <div id="loading-screen">
+    <img src="./digipal_logo.png" alt="Digipal Player" />
+    <p>Starting up…</p>
+    <div class="dots">
+      <div class="dot"></div>
+      <div class="dot"></div>
+      <div class="dot"></div>
+    </div>
+  </div>
+
+  <div id="setup-screen" style="display:none">
+    <div class="logo">
+      <img src="./digipal_logo.png" alt="Digipal Player" />
+      <p>Connect to your signage server</p>
+    </div>
+
+    <div class="cards-row">
+
+      <!-- Cloud Card -->
+      <div class="card">
+        <div class="icon-wrap">
+          <svg width="80" height="80" viewBox="0 0 64 64" fill="none">
+            <path d="M56 34c0-11-8.95-20-20-20a19.96 19.96 0 0 0-17.4 10.2A13 13 0 1 0 18 50h36a11 11 0 0 0 2-21.7V34z" fill="#3B82F6" opacity="0.18"/>
+            <path d="M54 32c0-10.5-8.5-19-19-19a18.96 18.96 0 0 0-16.5 9.7A11.5 11.5 0 1 0 20 48h32a10 10 0 0 0 2-19.75V32z" fill="#3B82F6"/>
+            <path d="M48 29c0-7-5.7-12.7-12.7-12.7a12.67 12.67 0 0 0-11 6.5A7.7 7.7 0 1 0 26 41h20a6.7 6.7 0 0 0 2-13.2V29z" fill="#93C5FD" opacity="0.3"/>
+            <line x1="32" y1="50" x2="32" y2="30" stroke="white" stroke-width="4" stroke-linecap="round"/>
+            <polyline points="22,38 32,27 42,38" fill="none" stroke="white" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <h3 class="card-title">Use Cloud Server</h3>
+        <p class="card-desc">Managed hosting — always up to date</p>
+        <button class="btn btn-cloud" id="cloud-btn" data-testid="button-cloud">Connect to Cloud Server ›</button>
+      </div>
+
+      <div class="or-divider"><div class="or-line"></div><span class="or-badge">OR</span><div class="or-line"></div></div>
+
+      <!-- Server Address Card -->
+      <div class="card">
+        <div class="icon-wrap">
+          <svg width="80" height="80" viewBox="0 0 64 64" fill="none">
+            <rect x="6" y="11" width="36" height="13" rx="3.5" fill="#F97316" opacity="0.12"/>
+            <rect x="6" y="11" width="36" height="13" rx="3.5" stroke="#F97316" stroke-width="2.2"/>
+            <circle cx="14" cy="17.5" r="2.8" fill="#F97316"/>
+            <rect x="20" y="14.5" width="13" height="5" rx="1.8" fill="#F97316" opacity="0.4"/>
+            <rect x="6" y="28" width="36" height="13" rx="3.5" fill="#F97316" opacity="0.07"/>
+            <rect x="6" y="28" width="36" height="13" rx="3.5" stroke="#F97316" stroke-width="2.2"/>
+            <circle cx="14" cy="34.5" r="2.8" fill="#F97316"/>
+            <rect x="20" y="31.5" width="13" height="5" rx="1.8" fill="#F97316" opacity="0.4"/>
+            <path d="M42 24.5 Q46 24.5 46 28" stroke="#F97316" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+            <rect x="46" y="23" width="12" height="9" rx="2.5" fill="#F97316"/>
+            <line x1="49.5" y1="23" x2="49.5" y2="18" stroke="#F97316" stroke-width="2.5" stroke-linecap="round"/>
+            <line x1="54.5" y1="23" x2="54.5" y2="18" stroke="#F97316" stroke-width="2.5" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <h3 class="card-title">Enter Server Address</h3>
+        <input class="card-input" type="url" id="url" placeholder="e.g. http://192.168.1.100:8787" data-testid="input-server-url" />
+        <div class="error-msg" id="error">Please enter a valid URL starting with https://</div>
+        <button class="btn btn-server" id="connect" data-testid="button-connect">Connect to Manual Server ›</button>
+        <p style="font-size:15px;color:#94a3b8;margin-top:16px;line-height:1.5;">
+          Use your LG remote to navigate and type the server URL.<br>Press OK/Enter on the button to connect.
+        </p>
+      </div>
+
+    </div>
+
+    <div class="footer">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="margin-right:8px;flex-shrink:0">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" fill="#14B8A6"/>
+      </svg>
+      Your connection details are private and secure.
+    </div>
+  </div>
+
+  <iframe id="player-frame" data-testid="player-frame" allow="autoplay; fullscreen; encrypted-media"></iframe>
+
+  <div id="error-screen">
+    <div class="error-title">Connection Lost</div>
+    <div class="error-message">Unable to reach the server. Retrying...</div>
+    <div class="spinner"></div>
+    <div class="error-retry" id="retry-countdown"></div>
+  </div>
+
+  <script>
+    // Wire the Cloud button to pre-fill and submit the cloud URL
+    document.getElementById('cloud-btn').addEventListener('click', function() {
+      document.getElementById('url').value = 'https://www.digipalsignage.com';
+      document.getElementById('connect').click();
+    });
+  </script>
+  <script src="webOS.js" onerror="console.warn('webOS.js not available — running outside webOS')"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 {
   "name": "digipal-linux-player",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "Digipal Digital Signage Player for Linux",
   "main": "main.js",
   "scripts": {
