@@ -141,9 +141,9 @@ public class ServerSetupActivity extends Activity {
 
         root.addView(buildCard(Color.parseColor("#eff6ff"), Color.parseColor("#bfdbfe"), buildCloudCardContent()));
         addOrDivider(root);
-        root.addView(buildCard(Color.parseColor("#f0fdf4"), Color.parseColor("#bbf7d0"), buildDiscoverCardContent()));
+        root.addView(buildCard(Color.parseColor("#eef2ff"), Color.parseColor("#c7d2fe"), buildDiscoverCardContent()));
         addOrDivider(root);
-        root.addView(buildCard(Color.parseColor("#fff7ed"), Color.parseColor("#fed7aa"), buildManualCardContent()));
+        root.addView(buildCard(Color.parseColor("#f0fdf4"), Color.parseColor("#bbf7d0"), buildManualCardContent()));
 
         addPrivacyFooter(root);
 
@@ -172,7 +172,7 @@ public class ServerSetupActivity extends Activity {
         card.setPadding(dp(20), dp(20), dp(20), dp(20));
 
         GradientDrawable cardBg = new GradientDrawable();
-        cardBg.setColor(Color.WHITE);
+        cardBg.setColor(bgColor);
         cardBg.setCornerRadius(dp(16));
         cardBg.setStroke(dp(1), borderColor);
         card.setBackground(cardBg);
@@ -224,7 +224,7 @@ public class ServerSetupActivity extends Activity {
 
         TextView title = new TextView(this);
         title.setText("Discover Local Servers");
-        title.setTextColor(Color.parseColor("#065f46"));
+        title.setTextColor(Color.parseColor("#3730a3"));
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
         title.setTypeface(null, Typeface.BOLD);
         layout.addView(title);
@@ -240,7 +240,7 @@ public class ServerSetupActivity extends Activity {
         desc.setLayoutParams(descParams);
         layout.addView(desc);
 
-        scanButton = createButton("Scan for Local Servers", "#10b981");
+        scanButton = createButton("Scan for Local Servers", "#6366f1");
         scanButton.setOnClickListener(v -> startDiscovery());
         layout.addView(scanButton);
 
@@ -285,7 +285,7 @@ public class ServerSetupActivity extends Activity {
 
         TextView title = new TextView(this);
         title.setText("Manual Server Address");
-        title.setTextColor(Color.parseColor("#9a3412"));
+        title.setTextColor(Color.parseColor("#065f46"));
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
         title.setTypeface(null, Typeface.BOLD);
         layout.addView(title);
@@ -321,7 +321,7 @@ public class ServerSetupActivity extends Activity {
         manualUrlInput.setLayoutParams(inputParams);
         layout.addView(manualUrlInput);
 
-        Button connectBtn = createButton("Connect", "#f97316");
+        Button connectBtn = createButton("Connect", "#10b981");
         connectBtn.setOnClickListener(v -> {
             String url = manualUrlInput.getText().toString().trim();
             if (url.isEmpty()) {
