@@ -1,0 +1,99 @@
+{
+  "name": "digipal-linux-player",
+  "version": "1.5.0",
+  "description": "Digipal Digital Signage Player for Linux",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --linux",
+    "build:deb": "electron-builder --linux deb",
+    "build:appimage": "electron-builder --linux AppImage",
+    "build:rpm": "electron-builder --linux rpm",
+    "build:arm64": "electron-builder --linux --arm64"
+  },
+  "author": {
+    "name": "Digipal",
+    "email": "support@digipal.app"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^32.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "dependencies": {
+    "bonjour-service": "^1.2.1",
+    "ws": "^8.18.0"
+  },
+  "build": {
+    "appId": "com.digipal.linux-player",
+    "productName": "Digipal Player",
+    "directories": {
+      "output": "release"
+    },
+    "extraResources": [
+      {
+        "from": "digipal-player.service",
+        "to": "digipal-player.service"
+      },
+      {
+        "from": "digipal-player.desktop",
+        "to": "digipal-player.desktop"
+      }
+    ],
+    "linux": {
+      "target": [
+        {
+          "target": "deb",
+          "arch": ["x64", "arm64"]
+        },
+        {
+          "target": "AppImage",
+          "arch": ["x64", "arm64"]
+        },
+        {
+          "target": "rpm",
+          "arch": ["x64", "arm64"]
+        }
+      ],
+      "icon": "icon.png",
+      "category": "Utility",
+      "desktop": {
+        "Name": "Digipal Player",
+        "Comment": "Digital Signage Player",
+        "Terminal": "false",
+        "Type": "Application",
+        "Categories": "Utility;AudioVideo;Video;"
+      }
+    },
+    "deb": {
+      "afterInstall": "build/postinst.sh",
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "libavahi-client3",
+        "avahi-daemon"
+      ]
+    },
+    "rpm": {
+      "depends": [
+        "gtk3",
+        "libnotify",
+        "nss",
+        "libXScrnSaver",
+        "libXtst",
+        "xdg-utils",
+        "at-spi2-core",
+        "libuuid",
+        "libsecret",
+        "avahi-libs"
+      ]
+    }
+  }
+}
