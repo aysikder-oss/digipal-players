@@ -24,8 +24,13 @@ export default function ServerSetupScreen({ onSetup }: Props) {
 
   async function handleCloud() {
     setLoading(true);
-    await onSetup(SERVER_URL);
-    setLoading(false);
+    try {
+      await onSetup(SERVER_URL);
+    } catch {
+      setManualError('Could not connect to the cloud server. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleManual() {
@@ -39,8 +44,13 @@ export default function ServerSetupScreen({ onSetup }: Props) {
     }
     setManualError('');
     setLoading(true);
-    await onSetup(url);
-    setLoading(false);
+    try {
+      await onSetup(url);
+    } catch {
+      setManualError('Could not connect to that server. Please check the address.');
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
