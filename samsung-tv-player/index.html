@@ -329,18 +329,34 @@
         // Initial D-pad focus
         function focusSetup() { setTimeout(function() { cloudBtn.focus(); }, 100); }
 
-        // Always show loading first, then after brief delay decide next screen
+        // Always show loading first; delay depends on whether a saved URL exists
+        function fadeOutLoading(callback) {
+            loading.style.transition = 'opacity 0.35s ease';
+            loading.style.opacity = '0';
+            setTimeout(function() {
+                loading.style.display = 'none';
+                loading.style.transition = '';
+                loading.style.opacity = '1';
+                if (callback) callback();
+            }, 350);
+        }
+
         var savedUrl = localStorage.getItem('digipal_server_url');
-        setTimeout(function() {
-            if (savedUrl) {
+        if (savedUrl) {
+            // Configured: 1.5s loading then connect
+            setTimeout(function() {
                 SERVER_URL = savedUrl;
                 loadPlayer();
-            } else {
-                loading.style.display = 'none';
-                setupScreen.style.display = 'flex';
-                focusSetup();
-            }
-        }, 1500);
+            }, 1500);
+        } else {
+            // Unconfigured: 3s loading then show setup
+            setTimeout(function() {
+                fadeOutLoading(function() {
+                    setupScreen.style.display = 'flex';
+                    focusSetup();
+                });
+            }, 3000);
+        }
     </script>
 </body>
 </html>

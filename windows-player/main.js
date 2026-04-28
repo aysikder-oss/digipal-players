@@ -456,8 +456,9 @@ async function startAutoConnect() {
     return;
   }
 
-  // Unconfigured device: 5s local server discovery in background
+  // Unconfigured device: 5s local discovery (bonjour polling + network scan)
   let resolved = false;
+  networkScanner = new NetworkScanner();
 
   function complete(url) {
     if (!url) return;
@@ -466,6 +467,17 @@ async function startAutoConnect() {
     if (!mainWindow) createWindow();
     initConnectionManager({ serverUrl: url, manualOverride: true });
     updateTray();
+  }
+
+  async function onLocalFound(server) {
+    if (resolved) return;
+    resolved = true;
+    clearTimeout(discoveryTimer);
+    clearInterval(localPoll);
+    closeLoadingScreen();
+    console.log(`[main] Local hub found: ${server.url}, showing pairing screen`);
+    const url = await showPairingScreen(server);
+    complete(url);
   }
 
   const discoveryTimer = setTimeout(async () => {
@@ -478,19 +490,17 @@ async function startAutoConnect() {
     complete(url);
   }, 5000);
 
-  const localPoll = setInterval(async () => {
+  // Poll bonjour every 500ms
+  const localPoll = setInterval(() => {
     if (resolved) return;
     const servers = bonjourBrowser ? bonjourBrowser.getServers() : [];
-    if (servers.length > 0) {
-      resolved = true;
-      clearTimeout(discoveryTimer);
-      clearInterval(localPoll);
-      closeLoadingScreen();
-      console.log(`[main] Local hub found: ${servers[0].url}, showing pairing screen`);
-      const url = await showPairingScreen(servers[0]);
-      complete(url);
-    }
+    if (servers.length > 0) onLocalFound(servers[0]);
   }, 500);
+
+  // Run network scan in parallel — resolves if network scan finds a hub first
+  networkScanner.scan().then((found) => {
+    if (!resolved && found && found.length > 0) onLocalFound(found[0]);
+  }).catch(() => {});
 }
 
 app.on('ready', async () => {

@@ -43,8 +43,16 @@
     }
   }
 
-  function hideLoadingScreen() {
-    if (loadingScreen) loadingScreen.style.display = 'none';
+  function hideLoadingScreen(callback) {
+    if (!loadingScreen) { if (callback) callback(); return; }
+    loadingScreen.style.transition = 'opacity 0.35s ease';
+    loadingScreen.style.opacity = '0';
+    setTimeout(function () {
+      loadingScreen.style.display = 'none';
+      loadingScreen.style.transition = '';
+      loadingScreen.style.opacity = '1';
+      if (callback) callback();
+    }, 350);
   }
 
   function showSetup() {
@@ -320,13 +328,12 @@
 
   // Always show loading screen first (displayed via HTML by default)
   if (loadConfig()) {
-    // Configured: brief loading then connect to saved server
+    // Configured: 1.5s loading then connect to saved server
     setTimeout(function () {
-      hideLoadingScreen();
-      showPlayer();
+      hideLoadingScreen(function () { showPlayer(); });
     }, 1500);
   } else {
-    // Unconfigured: hold loading 3s then show setup
+    // Unconfigured: 3s loading then show setup screen
     setTimeout(function () {
       showSetup();
     }, 3000);
