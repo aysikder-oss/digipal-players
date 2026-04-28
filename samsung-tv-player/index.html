@@ -263,8 +263,9 @@
 
         frame.onload = function() {
             if (frame.src && frame.src !== 'about:blank') {
-                loading.style.display = 'none';
-                errorScreen.style.display = 'none';
+                fadeOutLoading(function() {
+                    errorScreen.style.display = 'none';
+                });
             }
         };
         frame.onerror = function() { showError(); };
