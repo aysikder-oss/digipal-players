@@ -152,7 +152,6 @@ function createWindow() {
   });
 
   globalShortcut.register('CommandOrControl+Alt+S', async () => {
-    if (!serverUrl) return;
     const previousUrl = serverUrl;
     await showSetupPrompt();
     if (serverUrl !== previousUrl && mainWindow && !mainWindow.isDestroyed()) {
