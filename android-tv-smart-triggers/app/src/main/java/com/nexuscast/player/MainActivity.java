@@ -43,6 +43,15 @@ public class MainActivity extends Activity {
     private static final int PERMISSION_REQUEST_CAMERA = 1001;
     private boolean isUserClosing = false;
     private HardwareManager hardwareManager;
+
+    private static final java.util.regex.Pattern PRIVATE_IP_PATTERN = java.util.regex.Pattern.compile(
+        "^(10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}" +
+        "|172\\.(1[6-9]|2\\d|3[01])\\.\\d{1,3}\\.\\d{1,3}" +
+        "|192\\.168\\.\\d{1,3}\\.\\d{1,3}" +
+        "|127\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}" +
+        "|localhost" +
+        "|\\[::1\\])$"
+    );
     private MediaDownloadManager mediaDownloadManager;
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -343,6 +352,18 @@ public class MainActivity extends Activity {
     }
 
     private void loadPlayerUrl(String baseUrl) {
+        if (baseUrl.startsWith("http://")) {
+            try {
+                String host = new java.net.URI(baseUrl).getHost();
+                if (host == null || !PRIVATE_IP_PATTERN.matcher(host).matches()) {
+                    showError("Security Error", "HTTP connections are only allowed to local network servers. Use https:// for public servers.");
+                    return;
+                }
+            } catch (Exception e) {
+                showError("Invalid URL", "Could not parse server address.");
+                return;
+            }
+        }
         String playerUrl = baseUrl;
         if (!playerUrl.endsWith("/")) {
             playerUrl += "/";

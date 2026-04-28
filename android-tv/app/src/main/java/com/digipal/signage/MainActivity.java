@@ -6,6 +6,7 @@ import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
@@ -34,9 +35,19 @@ public class MainActivity extends Activity {
     private MediaDownloadManager mediaDownloadManager;
     private static final String PREFS_NAME = "DigipalPrefs";
     private static final String KEY_SERVER_URL = "server_url";
+    private static final String KEY_SERVER_MODE = "server_mode";
     private static final String KEY_AUTO_RELAUNCH = "auto_relaunch";
     private boolean isUserClosing = false;
     private boolean hasHttpError = false;
+
+    private static final java.util.regex.Pattern PRIVATE_IP_PATTERN = java.util.regex.Pattern.compile(
+        "^(10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}" +
+        "|172\\.(1[6-9]|2\\d|3[01])\\.\\d{1,3}\\.\\d{1,3}" +
+        "|192\\.168\\.\\d{1,3}\\.\\d{1,3}" +
+        "|127\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}" +
+        "|localhost" +
+        "|\\[::1\\])$"
+    );
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -231,6 +242,22 @@ public class MainActivity extends Activity {
             }
             return "{\"usedBytes\":0,\"freeBytes\":0,\"totalSpace\":0,\"totalFiles\":0}";
         }
+
+        @JavascriptInterface
+        public void openServerSettings() {
+            runOnUiThread(() -> openSetupScreen());
+        }
+
+        @JavascriptInterface
+        public String getServerMode() {
+            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+            return prefs.getString(KEY_SERVER_MODE, "cloud");
+        }
+
+        @JavascriptInterface
+        public String getConnectedServerUrl() {
+            return getServerUrl();
+        }
     }
 
     private void scheduleAppRelaunch(long delayMs) {
@@ -289,6 +316,18 @@ public class MainActivity extends Activity {
     }
 
     private void loadPlayerUrl(String baseUrl) {
+        if (baseUrl.startsWith("http://")) {
+            try {
+                String host = new java.net.URI(baseUrl).getHost();
+                if (host == null || !PRIVATE_IP_PATTERN.matcher(host).matches()) {
+                    showError("Security Error", "HTTP connections are only allowed to local network servers. Use https:// for public servers.");
+                    return;
+                }
+            } catch (Exception e) {
+                showError("Invalid URL", "Could not parse server address.");
+                return;
+            }
+        }
         String playerUrl = baseUrl;
         if (!playerUrl.endsWith("/")) {
             playerUrl += "/";
@@ -351,12 +390,27 @@ public class MainActivity extends Activity {
         );
     }
 
+    private void openSetupScreen() {
+        isUserClosing = true;
+        Intent intent = new Intent(this, ServerSetupActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+        startActivity(intent);
+        finish();
+    }
+
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
+            openSetupScreen();
             return true;
         }
         return super.onKeyDown(keyCode, event);
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        hideSystemUI();
     }
 
     @Override
@@ -388,7 +442,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        if (isAutoRelaunchEnabled()) {
+        if (isAutoRelaunchEnabled() && !isUserClosing) {
             scheduleAppRelaunch(3000);
         }
         if (webView != null) {

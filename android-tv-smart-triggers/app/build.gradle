@@ -10,8 +10,8 @@ android {
         applicationId "com.nexuscast.player"
         minSdk 21
         targetSdk 34
-        versionCode 3
-        versionName "3.0.0"
+        versionCode 4
+        versionName "3.3.0"
 
         // The URL of your Digipal server - change this to your published URL
         buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""

@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
     <!-- Android TV feature declarations -->
     <uses-feature
@@ -16,6 +18,9 @@
         android:required="false" />
     <uses-feature
         android:name="android.hardware.touchscreen"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.wifi"
         android:required="false" />
 
     <application
@@ -27,15 +32,13 @@
         android:banner="@drawable/banner"
         android:hardwareAccelerated="true"
         android:largeHeap="true"
+        android:networkSecurityConfig="@xml/network_security_config"
         tools:targetApi="31">
 
-        <!-- Main TV Launcher Activity -->
+        <!-- Server Setup Activity (launcher entry point) -->
         <activity
-            android:name=".MainActivity"
+            android:name=".ServerSetupActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:screenOrientation="landscape"
-            android:keepScreenOn="true"
             android:theme="@style/Theme.DigipalPlayer.Fullscreen">
 
             <!-- Standard launcher -->
@@ -50,6 +53,14 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Main Player Activity -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:keepScreenOn="true"
+            android:theme="@style/Theme.DigipalPlayer.Fullscreen" />
 
         <receiver
             android:name=".BootReceiver"
