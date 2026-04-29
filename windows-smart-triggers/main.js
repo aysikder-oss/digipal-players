@@ -300,6 +300,10 @@ function setupMediaIPC() {
     app.exit(0);
   });
 
+  ipcMain.on('bonjour:getServers', (event) => {
+    event.returnValue = '[]';
+  });
+
   ipcMain.on('device:paired', (_event, url) => {
     const pairUrl = url || serverUrl;
     if (pairUrl) {
