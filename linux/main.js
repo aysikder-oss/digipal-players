@@ -162,14 +162,25 @@ function showSetupPrompt() {
 
     const onSubmit = (_event, url) => {
       saveConfig(url, true);
+      ipcMain.removeListener('server-cloud-selected', onCloudSelected);
+      promptWindow.close();
+      resolve(url);
+    };
+
+    const onCloudSelected = (_event, url) => {
+      // Navigate to cloud URL without saving to disk — saved only after device:paired
+      serverUrl = url;
+      ipcMain.removeListener('server-url-submitted', onSubmit);
       promptWindow.close();
       resolve(url);
     };
 
     ipcMain.once('server-url-submitted', onSubmit);
+    ipcMain.once('server-cloud-selected', onCloudSelected);
 
     promptWindow.on('closed', () => {
       ipcMain.removeListener('server-url-submitted', onSubmit);
+      ipcMain.removeListener('server-cloud-selected', onCloudSelected);
       resolve(serverUrl || null);
     });
   });
@@ -503,6 +514,14 @@ function setupMediaIPC() {
 
   ipcMain.on('bonjour:getServers', (event) => {
     event.returnValue = bonjourBrowser ? JSON.stringify(bonjourBrowser.getServers()) : '[]';
+  });
+
+  ipcMain.on('device:paired', (_event, url) => {
+    const pairUrl = url || serverUrl;
+    if (pairUrl) {
+      saveConfig(pairUrl, false);
+      console.log('[main] Device paired — config saved:', pairUrl);
+    }
   });
 }
 
