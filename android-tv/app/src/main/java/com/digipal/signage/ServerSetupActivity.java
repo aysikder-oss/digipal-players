@@ -244,8 +244,8 @@ public class ServerSetupActivity extends Activity {
                 logo.setImageResource(logoResId);
                 logo.setAdjustViewBounds(true);
                 logo.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                int logoH = dp(compact ? 48 : 68);
-                LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(dp(260), logoH);
+                int logoW = dp(compact ? 360 : 254);
+                LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(logoW, ViewGroup.LayoutParams.WRAP_CONTENT);
                 logoParams.gravity = Gravity.CENTER_HORIZONTAL;
                 logoParams.bottomMargin = dp(6);
                 logo.setLayoutParams(logoParams);
@@ -358,7 +358,7 @@ public class ServerSetupActivity extends Activity {
         layout.addView(title);
 
         TextView desc = new TextView(this);
-        desc.setText("Managed hosting \u2014 always up to date");
+        desc.setText("Connect to the Digipal cloud server");
         desc.setTextColor(Color.parseColor("#64748b"));
         desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         LinearLayout.LayoutParams descParams = new LinearLayout.LayoutParams(
@@ -398,7 +398,7 @@ public class ServerSetupActivity extends Activity {
         layout.addView(title);
 
         TextView desc = new TextView(this);
-        desc.setText("Scan your network for Digipal local servers");
+        desc.setText("Scan your network for\nDigipal local servers");
         desc.setTextColor(Color.parseColor("#64748b"));
         desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         LinearLayout.LayoutParams descParams = new LinearLayout.LayoutParams(
@@ -460,17 +460,6 @@ public class ServerSetupActivity extends Activity {
         title.setTypeface(null, Typeface.BOLD);
         layout.addView(title);
 
-        TextView desc = new TextView(this);
-        desc.setText("Enter your server URL directly. Use http:// for local network servers.");
-        desc.setTextColor(Color.parseColor("#64748b"));
-        desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        LinearLayout.LayoutParams descParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
-        descParams.topMargin = dp(6);
-        descParams.bottomMargin = dp(8);
-        desc.setLayoutParams(descParams);
-        layout.addView(desc);
-
         manualUrlInput = new EditText(this);
         manualUrlInput.setHint("e.g. http://192.168.1.100:8787");
         manualUrlInput.setHintTextColor(Color.parseColor("#94a3b8"));
@@ -485,7 +474,16 @@ public class ServerSetupActivity extends Activity {
         inputBg.setCornerRadius(dp(8));
         inputBg.setStroke(dp(1), Color.parseColor("#cbd5e1"));
         manualUrlInput.setBackground(inputBg);
+        LinearLayout.LayoutParams manualInputParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        manualInputParams.topMargin = dp(6);
+        manualUrlInput.setLayoutParams(manualInputParams);
         layout.addView(manualUrlInput);
+
+        View manualSpacer = new View(this);
+        manualSpacer.setLayoutParams(new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        layout.addView(manualSpacer);
 
         Button connectBtn = createButton("Connect to Manual Server \u203a", "#f97316");
         connectBtn.setOnClickListener(v -> {
@@ -575,7 +573,7 @@ public class ServerSetupActivity extends Activity {
     @SuppressLint("SetTextI18n")
     private void addPrivacyFooter(LinearLayout parent, int topMargin) {
         TextView footer = new TextView(this);
-        footer.setText("Your connection details are private and secure.");
+        footer.setText("\uD83D\uDD12 Your connection details are private and secure.");
         footer.setTextColor(Color.parseColor("#94a3b8"));
         footer.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
         footer.setGravity(Gravity.CENTER);
