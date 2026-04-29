@@ -232,22 +232,22 @@ public class ServerSetupActivity extends Activity {
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         row.setLayoutParams(rowParams);
 
-        int cardH = dp(220);
+        int cardMinH = dp(220);
 
-        LinearLayout cloudCard = buildCard(buildCloudCardContent(), cardH);
-        cloudCard.setLayoutParams(new LinearLayout.LayoutParams(0, cardH, 1f));
+        LinearLayout cloudCard = buildCard(buildCloudCardContent(), cardMinH);
+        cloudCard.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         row.addView(cloudCard);
 
-        addOrDividerVertical(row, cardH);
+        addOrDividerVertical(row);
 
-        LinearLayout discoverCard = buildCard(buildDiscoverCardContent(), cardH);
-        discoverCard.setLayoutParams(new LinearLayout.LayoutParams(0, cardH, 1f));
+        LinearLayout discoverCard = buildCard(buildDiscoverCardContent(), cardMinH);
+        discoverCard.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         row.addView(discoverCard);
 
-        addOrDividerVertical(row, cardH);
+        addOrDividerVertical(row);
 
-        LinearLayout manualCard = buildCard(buildManualCardContent(), cardH);
-        manualCard.setLayoutParams(new LinearLayout.LayoutParams(0, cardH, 1f));
+        LinearLayout manualCard = buildCard(buildManualCardContent(), cardMinH);
+        manualCard.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         row.addView(manualCard);
 
         root.addView(row);
@@ -262,31 +262,31 @@ public class ServerSetupActivity extends Activity {
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         cardsArea.setLayoutParams(areaParams);
 
-        int cardH = dp(185);
+        int cardMinH = dp(185);
 
-        LinearLayout cloudCard = buildCard(buildCloudCardContent(), cardH);
+        LinearLayout cloudCard = buildCard(buildCloudCardContent(), cardMinH);
         cloudCard.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, cardH));
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         cardsArea.addView(cloudCard);
 
         addOrDividerHorizontal(cardsArea);
 
-        LinearLayout discoverCard = buildCard(buildDiscoverCardContent(), cardH);
+        LinearLayout discoverCard = buildCard(buildDiscoverCardContent(), cardMinH);
         discoverCard.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, cardH));
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         cardsArea.addView(discoverCard);
 
         addOrDividerHorizontal(cardsArea);
 
-        LinearLayout manualCard = buildCard(buildManualCardContent(), cardH);
+        LinearLayout manualCard = buildCard(buildManualCardContent(), cardMinH);
         manualCard.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, cardH));
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         cardsArea.addView(manualCard);
 
         root.addView(cardsArea);
     }
 
-    private LinearLayout buildCard(View content, int cardHeight) {
+    private LinearLayout buildCard(View content, int cardMinHeight) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -294,6 +294,7 @@ public class ServerSetupActivity extends Activity {
         int padH   = dp(landscape ? 18 : 16);
         int padBot = dp(landscape ? 16 : 14);
         card.setPadding(padH, padTop, padH, padBot);
+        card.setMinimumHeight(cardMinHeight);
 
         GradientDrawable cardBg = new GradientDrawable();
         cardBg.setColor(Color.parseColor("#ffffff"));
@@ -304,8 +305,9 @@ public class ServerSetupActivity extends Activity {
             card.setElevation(dp(4));
         }
 
+        // WRAP_CONTENT so the card can grow beyond minHeight when content expands (e.g. scan results)
         LinearLayout.LayoutParams contentParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         content.setLayoutParams(contentParams);
         card.addView(content);
         return card;
@@ -356,10 +358,21 @@ public class ServerSetupActivity extends Activity {
         return desc;
     }
 
+    // Weight-based spacer — used in the page layout to push footer to the bottom of the viewport
     private View buildSpacer() {
         View spacer = new View(this);
         spacer.setLayoutParams(new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        return spacer;
+    }
+
+    // Fixed-height spacer — used inside cards between desc/input and button.
+    // Cards are now WRAP_CONTENT height so a weight spacer would collapse to zero;
+    // a fixed dp gap ensures consistent visual breathing room in every card state.
+    private View buildCardSpacer() {
+        View spacer = new View(this);
+        spacer.setLayoutParams(new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(12)));
         return spacer;
     }
 
@@ -372,7 +385,7 @@ public class ServerSetupActivity extends Activity {
         layout.addView(buildCardIcon("ic_cloud_server"));
         layout.addView(buildCardTitle("Use Cloud Server"));
         layout.addView(buildCardDesc("Connect to the Digipal cloud server"));
-        layout.addView(buildSpacer());
+        layout.addView(buildCardSpacer());
 
         Button btn = createButton("Connect to Cloud Server \u203a", "#3b82f6");
         btn.setOnClickListener(v -> {
@@ -398,7 +411,7 @@ public class ServerSetupActivity extends Activity {
         layout.addView(buildCardIcon("ic_discover_servers"));
         layout.addView(buildCardTitle("Discover Local Servers"));
         layout.addView(buildCardDesc("Scan your network for\nDigipal local servers"));
-        layout.addView(buildSpacer());
+        layout.addView(buildCardSpacer());
 
         scanButton = createButton("Scan for Local Servers \u203a", "#14b8a6");
         scanButton.setOnClickListener(v -> startDiscovery());
@@ -469,7 +482,7 @@ public class ServerSetupActivity extends Activity {
         manualUrlInput.setLayoutParams(manualInputParams);
         layout.addView(manualUrlInput);
 
-        layout.addView(buildSpacer());
+        layout.addView(buildCardSpacer());
 
         Button connectBtn = createButton("Connect to Manual Server \u203a", "#f97316");
         connectBtn.setOnClickListener(v -> {
@@ -523,12 +536,14 @@ public class ServerSetupActivity extends Activity {
     }
 
     @SuppressLint("SetTextI18n")
-    private void addOrDividerVertical(LinearLayout parent, int cardH) {
+    private void addOrDividerVertical(LinearLayout parent) {
         LinearLayout divCol = new LinearLayout(this);
         divCol.setOrientation(LinearLayout.VERTICAL);
         divCol.setGravity(Gravity.CENTER_HORIZONTAL);
+        // MATCH_PARENT height: stretches to match the tallest card in the horizontal row,
+        // so the divider lines always run full height even when the Discover card grows.
         LinearLayout.LayoutParams divColParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, cardH);
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT);
         divColParams.leftMargin = dp(12);
         divColParams.rightMargin = dp(12);
         divCol.setLayoutParams(divColParams);
