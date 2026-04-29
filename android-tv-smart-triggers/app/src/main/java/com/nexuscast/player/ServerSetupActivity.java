@@ -110,8 +110,7 @@ public class ServerSetupActivity extends Activity {
 
     private boolean isWideScreen() {
         int w = getResources().getDisplayMetrics().widthPixels;
-        int h = getResources().getDisplayMetrics().heightPixels;
-        return w > h || w > dp(900);
+        return w >= dp(900);
     }
 
     @SuppressLint("SetTextI18n")
