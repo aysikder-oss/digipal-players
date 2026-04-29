@@ -40,4 +40,7 @@ contextBridge.exposeInMainWorld('Android', {
   clearCache: () => {
     ipcRenderer.send('media:clearCache');
   },
+  notifyPaired: (url) => {
+    ipcRenderer.send('device:paired', url || '');
+  },
 });
