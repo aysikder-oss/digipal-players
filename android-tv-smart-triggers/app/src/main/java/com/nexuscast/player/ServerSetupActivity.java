@@ -129,15 +129,28 @@ public class ServerSetupActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.parseColor("#ffffff"));
+        // Mockup outer padding: 90 top, 32 sides, 30 bottom — applied uniformly
         root.setPadding(dp(32), dp(90), dp(32), dp(30));
 
-        addLogoAndSubtitle(root, dp(24));
+        // Header (logo + subtitle)
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.VERTICAL);
+        addLogoAndSubtitle(header, dp(24));
+        root.addView(header, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // Cards row
         buildLandscapeCards(root);
+
+        // Spacer pushes footer to the bottom of the viewport (mockup: cards row flex:1 + footer at bottom)
+        root.addView(buildSpacer());
+
+        // Footer
         addPrivacyFooter(root);
 
         scroll.addView(root, new ScrollView.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT));
+            ViewGroup.LayoutParams.MATCH_PARENT));
         return scroll;
     }
 
@@ -150,15 +163,34 @@ public class ServerSetupActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.parseColor("#ffffff"));
-        root.setPadding(dp(20), dp(60), dp(20), dp(14));
+        // No root horizontal padding — each section sets its own (mockup: header 20, cards 16, footer 16)
+        root.setPadding(0, 0, 0, 0);
 
-        addLogoAndSubtitle(root, dp(18));
+        // Header section: padding 60/20/14 (mockup)
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.VERTICAL);
+        header.setPadding(dp(20), dp(60), dp(20), dp(14));
+        addLogoAndSubtitle(header, dp(0));
+        root.addView(header, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // Cards area: padding 4/16/0 (mockup)
         buildPortraitCards(root);
-        addPrivacyFooter(root);
+
+        // Spacer pushes footer to bottom (mockup: cards area flex:1 + footer fixed at bottom)
+        root.addView(buildSpacer());
+
+        // Footer section: padding 8/16/14 (mockup)
+        LinearLayout footerWrap = new LinearLayout(this);
+        footerWrap.setOrientation(LinearLayout.VERTICAL);
+        footerWrap.setPadding(dp(16), dp(8), dp(16), dp(14));
+        addPrivacyFooter(footerWrap);
+        root.addView(footerWrap, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         scroll.addView(root, new ScrollView.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT));
+            ViewGroup.LayoutParams.MATCH_PARENT));
         return scroll;
     }
 
@@ -224,7 +256,8 @@ public class ServerSetupActivity extends Activity {
     private void buildPortraitCards(LinearLayout root) {
         LinearLayout cardsArea = new LinearLayout(this);
         cardsArea.setOrientation(LinearLayout.VERTICAL);
-        cardsArea.setPadding(0, dp(4), 0, 0);
+        // Mockup: cards area padding 4 16 0 (top, sides, bottom)
+        cardsArea.setPadding(dp(16), dp(4), dp(16), 0);
         LinearLayout.LayoutParams areaParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         cardsArea.setLayoutParams(areaParams);
@@ -418,7 +451,8 @@ public class ServerSetupActivity extends Activity {
         manualUrlInput.setHint("e.g. http://192.168.1.100:8787");
         manualUrlInput.setHintTextColor(Color.parseColor("#94a3b8"));
         manualUrlInput.setTextColor(Color.parseColor("#0f172a"));
-        manualUrlInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        // Mockup: landscape input fontSize 11, portrait input fontSize 12
+        manualUrlInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, landscape ? 11 : 12);
         manualUrlInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         manualUrlInput.setImeOptions(EditorInfo.IME_ACTION_DONE);
         manualUrlInput.setSingleLine(true);
