@@ -8,33 +8,9 @@ const HW_CHANNELS = [
   'hw:bleScanRequested',
 ];
 
-contextBridge.exposeInMainWorld('Android', {
-  downloadMedia: (objectPath, signedUrl) => {
-    ipcRenderer.send('media:download', objectPath, signedUrl);
-  },
-  getLocalMediaPath: (objectPath) => {
-    return ipcRenderer.sendSync('media:getLocalPath', objectPath);
-  },
-  deleteMedia: (objectPath) => {
-    return ipcRenderer.sendSync('media:delete', objectPath);
-  },
-  deleteAllMedia: () => {
-    return ipcRenderer.sendSync('media:deleteAll');
-  },
-  getStorageInfo: () => {
-    return ipcRenderer.sendSync('media:getStorageInfo');
-  },
-  setAutoRelaunch: (enabled) => {
-    ipcRenderer.send('app:setAutoRelaunch', enabled);
-  },
-  scheduleRelaunch: () => {
-    ipcRenderer.send('app:scheduleRelaunch');
-  },
-});
-
 contextBridge.exposeInMainWorld('smartTriggers', {
   getConnectedDevices: () => ipcRenderer.invoke('hw:getConnectedDevices'),
-  startLearnMode: () => ipcRenderer.invoke('hw:startLearnMode'),
+  startLearnMode: (payload) => ipcRenderer.invoke('hw:startLearnMode', payload),
   stopLearnMode: () => ipcRenderer.invoke('hw:stopLearnMode'),
   startBleScan: () => ipcRenderer.invoke('hw:startBleScan'),
   registerBleDevice: (deviceId, deviceName) => ipcRenderer.invoke('hw:registerBleDevice', deviceId, deviceName),
