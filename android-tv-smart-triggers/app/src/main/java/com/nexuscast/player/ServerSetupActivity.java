@@ -56,8 +56,7 @@ public class ServerSetupActivity extends Activity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private Runnable scanTimeoutRunnable;
 
-    private boolean compact;
-    private boolean portraitNoScroll;
+    private boolean landscape;
 
     static class DiscoveredServer {
         String name;
@@ -115,128 +114,56 @@ public class ServerSetupActivity extends Activity {
             || cfg.screenWidthDp >= 600;
     }
 
-    private boolean isCompactHeight() {
-          Configuration cfg = getResources().getConfiguration();
-          if (cfg.orientation == Configuration.ORIENTATION_LANDSCAPE) {
-              return true;
-          }
-          float h = getResources().getDisplayMetrics().heightPixels
-              / getResources().getDisplayMetrics().density;
-          return h < 850;
-      }
-
-    private int cardPad()    { return dp(compact ? 14 : 20); }
-    private int iconSize()   { return dp(compact ? 40 : 56); }
-    private int iconBot()    { return dp(compact ? 8  : 14); }
-    private int btnHeight()  { return dp(compact ? 44 : 48); }
-    private int orDivMar()   { return dp(compact ? 6  : 16); }
-
     @SuppressLint("SetTextI18n")
     private View buildUI() {
-        boolean wide = isWideScreen();
-        compact = isCompactHeight();
-        portraitNoScroll = !wide;
-
-        if (wide) {
-            return buildLandscapeUI();
-        } else {
-            return buildPortraitUI();
-        }
+        landscape = isWideScreen();
+        return landscape ? buildLandscapeUI() : buildPortraitUI();
     }
 
     @SuppressLint("SetTextI18n")
     private View buildLandscapeUI() {
-        ScrollView scrollView = new ScrollView(this);
-        scrollView.setBackgroundColor(Color.parseColor("#ffffff"));
-        scrollView.setFillViewport(false);
+        ScrollView scroll = new ScrollView(this);
+        scroll.setBackgroundColor(Color.parseColor("#ffffff"));
+        scroll.setFillViewport(true);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setGravity(Gravity.CENTER_HORIZONTAL);
         root.setBackgroundColor(Color.parseColor("#ffffff"));
-        root.setPadding(dp(24), dp(32), dp(24), dp(32));
+        root.setPadding(dp(32), dp(90), dp(32), dp(30));
 
         addLogoAndSubtitle(root, dp(24));
         buildLandscapeCards(root);
-        addPrivacyFooter(root, dp(20));
+        addPrivacyFooter(root);
 
-        int screenWidth = getResources().getDisplayMetrics().widthPixels;
-        int rootWidth = Math.min(dp(1400), screenWidth - dp(48));
-        FrameLayout.LayoutParams rootParams = new FrameLayout.LayoutParams(
-            rootWidth, ViewGroup.LayoutParams.WRAP_CONTENT);
-        rootParams.gravity = Gravity.CENTER_HORIZONTAL;
-        root.setLayoutParams(rootParams);
-
-        scrollView.addView(root);
-
-        FrameLayout centerer = new FrameLayout(this);
-        centerer.setBackgroundColor(Color.parseColor("#ffffff"));
-        centerer.addView(scrollView, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        return centerer;
-    }
-
-    @SuppressLint("SetTextI18n")
-    private View buildPortraitUI() {
-        int topPad = dp(compact ? 12 : 20);
-        int botPad = dp(compact ? 10 : 16);
-
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.setBackgroundColor(Color.parseColor("#ffffff"));
-        root.setPadding(dp(16), topPad, dp(16), botPad);
-
-        addLogoAndSubtitle(root, dp(compact ? 8 : 16));
-
-        LinearLayout cardsArea = new LinearLayout(this);
-        cardsArea.setOrientation(LinearLayout.VERTICAL);
-        cardsArea.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        float pDensity = getResources().getDisplayMetrics().density;
-        int pScreenHdp = (int)(getResources().getDisplayMetrics().heightPixels / pDensity);
-        int pCardHdp = Math.min(240, Math.max(160, (pScreenHdp - 130) / 3));
-        int pCardH = dp(pCardHdp);
-
-        LinearLayout cloudCard = buildCard(buildCloudCardContent());
-        cloudCard.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, pCardH));
-        cardsArea.addView(cloudCard);
-
-        addOrDividerHorizontal(cardsArea, true);
-
-        LinearLayout discoverCard = buildCard(buildDiscoverCardContent());
-        discoverCard.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, pCardH));
-        cardsArea.addView(discoverCard);
-
-        addOrDividerHorizontal(cardsArea, true);
-
-        LinearLayout manualCard = buildCard(buildManualCardContent());
-        manualCard.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, pCardH));
-        cardsArea.addView(manualCard);
-
-        root.addView(cardsArea);
-        addPrivacyFooter(root, dp(compact ? 8 : 14));
-
-        int screenWidth = getResources().getDisplayMetrics().widthPixels;
-        int rootWidth = Math.min(dp(540), screenWidth - dp(32));
-
-        ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(Color.parseColor("#ffffff"));
-        FrameLayout centerer = new FrameLayout(this);
-        centerer.setBackgroundColor(Color.parseColor("#ffffff"));
-        centerer.addView(root, new FrameLayout.LayoutParams(
-            rootWidth, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL));
-        scroll.addView(centerer, new ViewGroup.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        scroll.addView(root, new ScrollView.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT));
         return scroll;
     }
 
     @SuppressLint("SetTextI18n")
-    private void addLogoAndSubtitle(LinearLayout root, int subtitleBottomMargin) {
+    private View buildPortraitUI() {
+        ScrollView scroll = new ScrollView(this);
+        scroll.setBackgroundColor(Color.parseColor("#ffffff"));
+        scroll.setFillViewport(true);
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(Color.parseColor("#ffffff"));
+        root.setPadding(dp(20), dp(60), dp(20), dp(14));
+
+        addLogoAndSubtitle(root, dp(18));
+        buildPortraitCards(root);
+        addPrivacyFooter(root);
+
+        scroll.addView(root, new ScrollView.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT));
+        return scroll;
+    }
+
+    @SuppressLint("SetTextI18n")
+    private void addLogoAndSubtitle(LinearLayout root, int subtitleBottom) {
         try {
             int logoResId = getResources().getIdentifier("player_logo", "drawable", getPackageName());
             if (logoResId != 0) {
@@ -244,10 +171,11 @@ public class ServerSetupActivity extends Activity {
                 logo.setImageResource(logoResId);
                 logo.setAdjustViewBounds(true);
                 logo.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                int logoW = dp(compact ? 360 : 254);
-                LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(logoW, ViewGroup.LayoutParams.WRAP_CONTENT);
+                int logoH = dp(landscape ? 36 : 24);
+                LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, logoH);
                 logoParams.gravity = Gravity.CENTER_HORIZONTAL;
-                logoParams.bottomMargin = dp(6);
+                logoParams.bottomMargin = dp(landscape ? 6 : 8);
                 logo.setLayoutParams(logoParams);
                 root.addView(logo);
             }
@@ -255,57 +183,88 @@ public class ServerSetupActivity extends Activity {
 
         TextView subtitle = new TextView(this);
         subtitle.setText("Connect to your signage server");
-        subtitle.setTextColor(Color.parseColor("#64748b"));
-        subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        subtitle.setTextColor(Color.parseColor("#94a3b8"));
+        subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         subtitle.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams subtitleParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        subtitleParams.topMargin = dp(2);
-        subtitleParams.bottomMargin = subtitleBottomMargin;
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        subtitleParams.bottomMargin = subtitleBottom;
         subtitle.setLayoutParams(subtitleParams);
         root.addView(subtitle);
     }
 
     private void buildLandscapeCards(LinearLayout root) {
-        float lDensity = getResources().getDisplayMetrics().density;
-        int lScreenHdp = (int)(getResources().getDisplayMetrics().heightPixels / lDensity);
-        int lCardHdp = Math.min(280, Math.max(140, lScreenHdp - (compact ? 200 : 280)));
-        int lCardH = dp(lCardHdp);
-
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        row.setLayoutParams(rowParams);
 
-        LinearLayout cloudCard = buildCard(buildCloudCardContent());
-        cloudCard.setLayoutParams(new LinearLayout.LayoutParams(0, lCardH, 1f));
+        int cardH = dp(220);
+
+        LinearLayout cloudCard = buildCard(buildCloudCardContent(), cardH);
+        cloudCard.setLayoutParams(new LinearLayout.LayoutParams(0, cardH, 1f));
         row.addView(cloudCard);
 
-        addOrDividerVertical(row);
+        addOrDividerVertical(row, cardH);
 
-        LinearLayout discoverCard = buildCard(buildDiscoverCardContent());
-        discoverCard.setLayoutParams(new LinearLayout.LayoutParams(0, lCardH, 1f));
+        LinearLayout discoverCard = buildCard(buildDiscoverCardContent(), cardH);
+        discoverCard.setLayoutParams(new LinearLayout.LayoutParams(0, cardH, 1f));
         row.addView(discoverCard);
 
-        addOrDividerVertical(row);
+        addOrDividerVertical(row, cardH);
 
-        LinearLayout manualCard = buildCard(buildManualCardContent());
-        manualCard.setLayoutParams(new LinearLayout.LayoutParams(0, lCardH, 1f));
+        LinearLayout manualCard = buildCard(buildManualCardContent(), cardH);
+        manualCard.setLayoutParams(new LinearLayout.LayoutParams(0, cardH, 1f));
         row.addView(manualCard);
 
         root.addView(row);
     }
 
-    private LinearLayout buildCard(View content) {
+    private void buildPortraitCards(LinearLayout root) {
+        LinearLayout cardsArea = new LinearLayout(this);
+        cardsArea.setOrientation(LinearLayout.VERTICAL);
+        cardsArea.setPadding(0, dp(4), 0, 0);
+        LinearLayout.LayoutParams areaParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cardsArea.setLayoutParams(areaParams);
+
+        int cardH = dp(185);
+
+        LinearLayout cloudCard = buildCard(buildCloudCardContent(), cardH);
+        cloudCard.setLayoutParams(new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, cardH));
+        cardsArea.addView(cloudCard);
+
+        addOrDividerHorizontal(cardsArea);
+
+        LinearLayout discoverCard = buildCard(buildDiscoverCardContent(), cardH);
+        discoverCard.setLayoutParams(new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, cardH));
+        cardsArea.addView(discoverCard);
+
+        addOrDividerHorizontal(cardsArea);
+
+        LinearLayout manualCard = buildCard(buildManualCardContent(), cardH);
+        manualCard.setLayoutParams(new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, cardH));
+        cardsArea.addView(manualCard);
+
+        root.addView(cardsArea);
+    }
+
+    private LinearLayout buildCard(View content, int cardHeight) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        int p = (!portraitNoScroll && compact) ? dp(8) : cardPad();
-        card.setPadding(p, p, p, p);
+        card.setGravity(Gravity.CENTER_HORIZONTAL);
+        int padTop = dp(landscape ? 20 : 14);
+        int padH   = dp(landscape ? 18 : 16);
+        int padBot = dp(landscape ? 16 : 14);
+        card.setPadding(padH, padTop, padH, padBot);
 
         GradientDrawable cardBg = new GradientDrawable();
         cardBg.setColor(Color.parseColor("#ffffff"));
-        cardBg.setCornerRadius(dp(20));
+        cardBg.setCornerRadius(dp(16));
         cardBg.setStroke(dp(1), Color.parseColor("#f1f5f9"));
         card.setBackground(cardBg);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -327,13 +286,41 @@ public class ServerSetupActivity extends Activity {
                 icon.setImageResource(resId);
             }
         } catch (Exception ignored) {}
-        icon.setScaleType(ImageView.ScaleType.FIT_START);
+        icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
         icon.setAdjustViewBounds(true);
-        int sz = iconSize();
+        int sz = dp(landscape ? 48 : 40);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(sz, sz);
-        params.bottomMargin = iconBot();
+        params.gravity = Gravity.CENTER_HORIZONTAL;
+        params.bottomMargin = dp(landscape ? 10 : 6);
         icon.setLayoutParams(params);
         return icon;
+    }
+
+    private TextView buildCardTitle(String text) {
+        TextView title = new TextView(this);
+        title.setText(text);
+        title.setTextColor(Color.parseColor("#0f172a"));
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, landscape ? 15 : 14);
+        title.setTypeface(null, Typeface.BOLD);
+        title.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        p.bottomMargin = dp(landscape ? 8 : 6);
+        title.setLayoutParams(p);
+        return title;
+    }
+
+    private TextView buildCardDesc(CharSequence text) {
+        TextView desc = new TextView(this);
+        desc.setText(text);
+        desc.setTextColor(Color.parseColor("#64748b"));
+        desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        desc.setLineSpacing(0f, landscape ? 1.45f : 1.4f);
+        desc.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        desc.setLayoutParams(p);
+        return desc;
     }
 
     private View buildSpacer() {
@@ -347,26 +334,12 @@ public class ServerSetupActivity extends Activity {
     private View buildCloudCardContent() {
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setGravity(Gravity.CENTER_HORIZONTAL);
 
         layout.addView(buildCardIcon("ic_cloud_server"));
-
-        TextView title = new TextView(this);
-        title.setText("Use Cloud Server");
-        title.setTextColor(Color.parseColor("#0f172a"));
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
-        title.setTypeface(null, Typeface.BOLD);
-        layout.addView(title);
-
-        TextView desc = new TextView(this);
-        desc.setText("Connect to the Digipal cloud server");
-        desc.setTextColor(Color.parseColor("#64748b"));
-        desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        LinearLayout.LayoutParams descParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
-        descParams.topMargin = dp(6);
-        descParams.bottomMargin = dp(8);
-        desc.setLayoutParams(descParams);
-        layout.addView(desc);
+        layout.addView(buildCardTitle("Use Cloud Server"));
+        layout.addView(buildCardDesc("Connect to the Digipal cloud server"));
+        layout.addView(buildSpacer());
 
         Button btn = createButton("Connect to Cloud Server \u203a", "#3b82f6");
         btn.setOnClickListener(v -> {
@@ -387,26 +360,12 @@ public class ServerSetupActivity extends Activity {
     private View buildDiscoverCardContent() {
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setGravity(Gravity.CENTER_HORIZONTAL);
 
         layout.addView(buildCardIcon("ic_discover_servers"));
-
-        TextView title = new TextView(this);
-        title.setText("Discover Local Servers");
-        title.setTextColor(Color.parseColor("#0f172a"));
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
-        title.setTypeface(null, Typeface.BOLD);
-        layout.addView(title);
-
-        TextView desc = new TextView(this);
-        desc.setText("Scan your network for\nDigipal local servers");
-        desc.setTextColor(Color.parseColor("#64748b"));
-        desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        LinearLayout.LayoutParams descParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
-        descParams.topMargin = dp(6);
-        descParams.bottomMargin = dp(8);
-        desc.setLayoutParams(descParams);
-        layout.addView(desc);
+        layout.addView(buildCardTitle("Discover Local Servers"));
+        layout.addView(buildCardDesc("Scan your network for\nDigipal local servers"));
+        layout.addView(buildSpacer());
 
         scanButton = createButton("Scan for Local Servers \u203a", "#14b8a6");
         scanButton.setOnClickListener(v -> startDiscovery());
@@ -450,40 +409,33 @@ public class ServerSetupActivity extends Activity {
     private View buildManualCardContent() {
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setGravity(Gravity.CENTER_HORIZONTAL);
 
         layout.addView(buildCardIcon("ic_manual_server"));
-
-        TextView title = new TextView(this);
-        title.setText("Enter Server Address");
-        title.setTextColor(Color.parseColor("#0f172a"));
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
-        title.setTypeface(null, Typeface.BOLD);
-        layout.addView(title);
+        layout.addView(buildCardTitle("Enter Server Address"));
 
         manualUrlInput = new EditText(this);
         manualUrlInput.setHint("e.g. http://192.168.1.100:8787");
         manualUrlInput.setHintTextColor(Color.parseColor("#94a3b8"));
         manualUrlInput.setTextColor(Color.parseColor("#0f172a"));
-        manualUrlInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        manualUrlInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         manualUrlInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         manualUrlInput.setImeOptions(EditorInfo.IME_ACTION_DONE);
         manualUrlInput.setSingleLine(true);
-        manualUrlInput.setPadding(dp(14), dp(compact ? 5 : 11), dp(14), dp(compact ? 5 : 11));
+        manualUrlInput.setPadding(dp(10), dp(7), dp(10), dp(7));
+        manualUrlInput.setMinHeight(0);
+        manualUrlInput.setMinimumHeight(0);
         GradientDrawable inputBg = new GradientDrawable();
         inputBg.setColor(Color.parseColor("#f8fafc"));
         inputBg.setCornerRadius(dp(8));
-        inputBg.setStroke(dp(1), Color.parseColor("#cbd5e1"));
+        inputBg.setStroke(dp(1), Color.parseColor("#e2e8f0"));
         manualUrlInput.setBackground(inputBg);
         LinearLayout.LayoutParams manualInputParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        manualInputParams.topMargin = dp(6);
         manualUrlInput.setLayoutParams(manualInputParams);
         layout.addView(manualUrlInput);
 
-        View manualSpacer = new View(this);
-        manualSpacer.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-        layout.addView(manualSpacer);
+        layout.addView(buildSpacer());
 
         Button connectBtn = createButton("Connect to Manual Server \u203a", "#f97316");
         connectBtn.setOnClickListener(v -> {
@@ -508,29 +460,26 @@ public class ServerSetupActivity extends Activity {
     }
 
     @SuppressLint("SetTextI18n")
-    private void addOrDividerHorizontal(LinearLayout parent, boolean compact) {
+    private void addOrDividerHorizontal(LinearLayout parent) {
         LinearLayout dividerRow = new LinearLayout(this);
         dividerRow.setOrientation(LinearLayout.HORIZONTAL);
         dividerRow.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams dividerRowParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        int m = orDivMar();
-        dividerRowParams.topMargin = m;
-        dividerRowParams.bottomMargin = m;
+        dividerRowParams.topMargin = dp(6);
+        dividerRowParams.bottomMargin = dp(6);
         dividerRow.setLayoutParams(dividerRowParams);
 
         View lineLeft = new View(this);
         lineLeft.setBackgroundColor(Color.parseColor("#e2e8f0"));
         dividerRow.addView(lineLeft, new LinearLayout.LayoutParams(0, dp(1), 1));
 
-        TextView orText = new TextView(this);
-        orText.setText("OR");
-        orText.setTextColor(Color.parseColor("#94a3b8"));
-        orText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
-        orText.setTypeface(null, Typeface.BOLD);
-        orText.setPadding(dp(12), 0, dp(12), 0);
-        dividerRow.addView(orText, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        TextView pill = makeOrPill();
+        LinearLayout.LayoutParams pillParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        pillParams.leftMargin = dp(8);
+        pillParams.rightMargin = dp(8);
+        dividerRow.addView(pill, pillParams);
 
         View lineRight = new View(this);
         lineRight.setBackgroundColor(Color.parseColor("#e2e8f0"));
@@ -540,28 +489,26 @@ public class ServerSetupActivity extends Activity {
     }
 
     @SuppressLint("SetTextI18n")
-    private void addOrDividerVertical(LinearLayout parent) {
+    private void addOrDividerVertical(LinearLayout parent, int cardH) {
         LinearLayout divCol = new LinearLayout(this);
         divCol.setOrientation(LinearLayout.VERTICAL);
         divCol.setGravity(Gravity.CENTER_HORIZONTAL);
         LinearLayout.LayoutParams divColParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT);
-        divColParams.leftMargin = dp(10);
-        divColParams.rightMargin = dp(10);
+            ViewGroup.LayoutParams.WRAP_CONTENT, cardH);
+        divColParams.leftMargin = dp(12);
+        divColParams.rightMargin = dp(12);
         divCol.setLayoutParams(divColParams);
 
         View lineTop = new View(this);
         lineTop.setBackgroundColor(Color.parseColor("#e2e8f0"));
         divCol.addView(lineTop, new LinearLayout.LayoutParams(dp(1), 0, 1));
 
-        TextView orText = new TextView(this);
-        orText.setText("OR");
-        orText.setTextColor(Color.parseColor("#94a3b8"));
-        orText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
-        orText.setTypeface(null, Typeface.BOLD);
-        orText.setPadding(0, dp(10), 0, dp(10));
-        divCol.addView(orText, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        TextView pill = makeOrPill();
+        LinearLayout.LayoutParams pillParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        pillParams.topMargin = dp(8);
+        pillParams.bottomMargin = dp(8);
+        divCol.addView(pill, pillParams);
 
         View lineBottom = new View(this);
         lineBottom.setBackgroundColor(Color.parseColor("#e2e8f0"));
@@ -571,27 +518,50 @@ public class ServerSetupActivity extends Activity {
     }
 
     @SuppressLint("SetTextI18n")
-    private void addPrivacyFooter(LinearLayout parent, int topMargin) {
+    private TextView makeOrPill() {
+        TextView pill = new TextView(this);
+        pill.setText("OR");
+        pill.setTextColor(Color.parseColor("#94a3b8"));
+        pill.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
+        pill.setTypeface(null, Typeface.BOLD);
+        pill.setIncludeFontPadding(false);
+        int padH = dp(landscape ? 9 : 10);
+        int padV = dp(landscape ? 4 : 3);
+        pill.setPadding(padH, padV, padH, padV);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.parseColor("#f1f5f9"));
+        bg.setCornerRadius(dp(20));
+        bg.setStroke(dp(1), Color.parseColor("#e2e8f0"));
+        pill.setBackground(bg);
+        return pill;
+    }
+
+    @SuppressLint("SetTextI18n")
+    private void addPrivacyFooter(LinearLayout root) {
         TextView footer = new TextView(this);
         footer.setText("\uD83D\uDD12 Your connection details are private and secure.");
         footer.setTextColor(Color.parseColor("#94a3b8"));
-        footer.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        footer.setTextSize(TypedValue.COMPLEX_UNIT_SP, landscape ? 10 : 11);
         footer.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        params.topMargin = topMargin;
+        params.topMargin = dp(landscape ? 10 : 8);
         footer.setLayoutParams(params);
-        parent.addView(footer);
+        root.addView(footer);
     }
 
     private Button createButton(String text, String colorHex) {
         Button button = new Button(this);
         button.setText(text);
         button.setTextColor(Color.WHITE);
-        button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         button.setAllCaps(false);
         button.setTypeface(null, Typeface.BOLD);
-        button.setPadding(dp(16), dp(10), dp(16), dp(10));
+        button.setIncludeFontPadding(false);
+        int padV = dp(landscape ? 10 : 9);
+        button.setPadding(dp(12), padV, dp(12), padV);
+        button.setMinHeight(0);
+        button.setMinimumHeight(0);
 
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(Color.parseColor(colorHex));
@@ -599,7 +569,7 @@ public class ServerSetupActivity extends Activity {
         button.setBackground(bg);
 
         button.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, btnHeight()));
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         return button;
     }
@@ -710,7 +680,7 @@ public class ServerSetupActivity extends Activity {
             scanProgress.setVisibility(View.GONE);
         }
         if (scanButton != null) {
-            scanButton.setText("Scan for Local Servers");
+            scanButton.setText("Scan for Local Servers \u203a");
         }
     }
 
@@ -726,7 +696,7 @@ public class ServerSetupActivity extends Activity {
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(14), dp(10), dp(14), dp(10));
+        card.setPadding(dp(12), dp(8), dp(12), dp(8));
 
         GradientDrawable cardBg = new GradientDrawable();
         cardBg.setColor(Color.parseColor("#ffffff"));
@@ -742,14 +712,14 @@ public class ServerSetupActivity extends Activity {
         TextView nameView = new TextView(this);
         nameView.setText(server.name);
         nameView.setTextColor(Color.parseColor("#0f172a"));
-        nameView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        nameView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         nameView.setTypeface(null, Typeface.BOLD);
         card.addView(nameView);
 
         TextView addrView = new TextView(this);
         addrView.setText(server.host + ":" + server.port);
         addrView.setTextColor(Color.parseColor("#64748b"));
-        addrView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        addrView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
         LinearLayout.LayoutParams addrParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         addrParams.topMargin = dp(2);
@@ -758,8 +728,8 @@ public class ServerSetupActivity extends Activity {
 
         Button connectBtn = createButton("Connect \u203a", "#14b8a6");
         LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, dp(40));
-        btnParams.topMargin = dp(8);
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        btnParams.topMargin = dp(6);
         connectBtn.setLayoutParams(btnParams);
         connectBtn.setOnClickListener(v -> {
             saveServerChoice("local", server.getUrl());
