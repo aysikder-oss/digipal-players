@@ -295,6 +295,19 @@ public class MainActivity extends Activity {
             }
             return "{\"usedBytes\":0,\"freeBytes\":0,\"totalSpace\":0,\"totalFiles\":0}";
         }
+
+        @JavascriptInterface
+        public void notifyPaired(String url) {
+            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+            if (prefs.getBoolean("cloud_pairing_pending", false)) {
+                String serverUrl = (url != null && !url.isEmpty()) ? url : BuildConfig.SERVER_URL;
+                prefs.edit()
+                    .putString("server_mode", "cloud")
+                    .putString(KEY_SERVER_URL, serverUrl)
+                    .putBoolean("cloud_pairing_pending", false)
+                    .apply();
+            }
+        }
     }
 
     private void scheduleAppRelaunch(long delayMs) {

@@ -258,6 +258,19 @@ public class MainActivity extends Activity {
         public String getConnectedServerUrl() {
             return getServerUrl();
         }
+
+        @JavascriptInterface
+        public void notifyPaired(String url) {
+            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+            if (prefs.getBoolean("cloud_pairing_pending", false)) {
+                String serverUrl = (url != null && !url.isEmpty()) ? url : BuildConfig.SERVER_URL;
+                prefs.edit()
+                    .putString(KEY_SERVER_MODE, "cloud")
+                    .putString(KEY_SERVER_URL, serverUrl)
+                    .putBoolean("cloud_pairing_pending", false)
+                    .apply();
+            }
+        }
     }
 
     private void scheduleAppRelaunch(long delayMs) {

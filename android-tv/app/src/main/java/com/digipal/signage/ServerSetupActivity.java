@@ -25,6 +25,7 @@ import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
@@ -100,138 +101,232 @@ public class ServerSetupActivity extends Activity {
     @SuppressLint("SetTextI18n")
     private View buildUI() {
         ScrollView scrollView = new ScrollView(this);
-        scrollView.setBackgroundColor(Color.parseColor("#0a0e1a"));
+        scrollView.setBackgroundColor(Color.parseColor("#f8fafc"));
         scrollView.setFillViewport(true);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
         root.setPadding(dp(24), dp(48), dp(24), dp(48));
+        root.setBackgroundColor(Color.parseColor("#f8fafc"));
 
-        TextView title = new TextView(this);
-        title.setText("Digipal Player");
-        title.setTextColor(Color.WHITE);
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 28);
-        title.setTypeface(null, Typeface.BOLD);
-        title.setGravity(Gravity.CENTER);
-        root.addView(title);
+        ImageView logo = new ImageView(this);
+        try {
+            int logoResId = getResources().getIdentifier("player_logo", "drawable", getPackageName());
+            if (logoResId != 0) {
+                logo.setImageResource(logoResId);
+                logo.setAdjustViewBounds(true);
+                logo.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(dp(280), dp(68));
+                logoParams.gravity = Gravity.CENTER_HORIZONTAL;
+                logoParams.bottomMargin = dp(8);
+                logo.setLayoutParams(logoParams);
+                root.addView(logo);
+            }
+        } catch (Exception ignored) {}
 
         TextView subtitle = new TextView(this);
         subtitle.setText("Connect to your signage server");
-        subtitle.setTextColor(Color.parseColor("#94a3b8"));
+        subtitle.setTextColor(Color.parseColor("#64748b"));
         subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         subtitle.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams subtitleParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        subtitleParams.topMargin = dp(8);
-        subtitleParams.bottomMargin = dp(32);
+        subtitleParams.topMargin = dp(4);
+        subtitleParams.bottomMargin = dp(36);
         subtitle.setLayoutParams(subtitleParams);
         root.addView(subtitle);
 
-        Button cloudButton = createButton("Use Cloud Server (digipalsignage.com)", "#3b82f6");
-        cloudButton.setOnClickListener(v -> {
-            saveServerChoice("cloud", BuildConfig.SERVER_URL);
+        root.addView(buildCard(Color.parseColor("#eff6ff"), Color.parseColor("#bfdbfe"), buildCloudCardContent()));
+        addOrDivider(root);
+        root.addView(buildCard(Color.parseColor("#eef2ff"), Color.parseColor("#c7d2fe"), buildDiscoverCardContent()));
+        addOrDivider(root);
+        root.addView(buildCard(Color.parseColor("#f0fdf4"), Color.parseColor("#bbf7d0"), buildManualCardContent()));
+
+        addPrivacyFooter(root);
+
+        int maxWidth = dp(540);
+        int screenWidth = getResources().getDisplayMetrics().widthPixels;
+        int cardWidth = Math.min(maxWidth, screenWidth - dp(32));
+
+        FrameLayout.LayoutParams rootParams = new FrameLayout.LayoutParams(
+            cardWidth, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rootParams.gravity = Gravity.CENTER_HORIZONTAL;
+        root.setLayoutParams(rootParams);
+
+        scrollView.addView(root);
+
+        FrameLayout centerer = new FrameLayout(this);
+        centerer.setBackgroundColor(Color.parseColor("#f8fafc"));
+        centerer.addView(scrollView, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        return centerer;
+    }
+
+    private LinearLayout buildCard(int bgColor, int borderColor, View content) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(20), dp(20), dp(20), dp(20));
+
+        GradientDrawable cardBg = new GradientDrawable();
+        cardBg.setColor(bgColor);
+        cardBg.setCornerRadius(dp(16));
+        cardBg.setStroke(dp(1), borderColor);
+        card.setBackground(cardBg);
+
+        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        card.setLayoutParams(cardParams);
+        card.addView(content);
+        return card;
+    }
+
+    @SuppressLint("SetTextI18n")
+    private View buildCloudCardContent() {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+
+        TextView title = new TextView(this);
+        title.setText("Digipal Cloud");
+        title.setTextColor(Color.parseColor("#1e40af"));
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        title.setTypeface(null, Typeface.BOLD);
+        layout.addView(title);
+
+        TextView desc = new TextView(this);
+        desc.setText("Connect to the hosted Digipal service. No local server needed.");
+        desc.setTextColor(Color.parseColor("#64748b"));
+        desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        LinearLayout.LayoutParams descParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        descParams.topMargin = dp(6);
+        descParams.bottomMargin = dp(16);
+        desc.setLayoutParams(descParams);
+        layout.addView(desc);
+
+        Button btn = createButton("Use Cloud Server", "#3b82f6");
+        btn.setOnClickListener(v -> {
+            // Mark cloud pairing pending — config saved only after notifyPaired fires
+            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+            prefs.edit()
+                .remove(KEY_SERVER_MODE)
+                .remove(KEY_SERVER_URL)
+                .putBoolean("cloud_pairing_pending", true)
+                .apply();
             launchPlayer();
         });
-        root.addView(cloudButton);
+        layout.addView(btn);
 
-        addSectionDivider(root, "OR connect to a local server");
+        return layout;
+    }
 
-        TextView scanLabel = new TextView(this);
-        scanLabel.setText("Discover Local Servers");
-        scanLabel.setTextColor(Color.WHITE);
-        scanLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
-        scanLabel.setTypeface(null, Typeface.BOLD);
-        LinearLayout.LayoutParams scanLabelParams = new LinearLayout.LayoutParams(
+    @SuppressLint("SetTextI18n")
+    private View buildDiscoverCardContent() {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+
+        TextView title = new TextView(this);
+        title.setText("Discover Local Servers");
+        title.setTextColor(Color.parseColor("#3730a3"));
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        title.setTypeface(null, Typeface.BOLD);
+        layout.addView(title);
+
+        TextView desc = new TextView(this);
+        desc.setText("Scan your network for Digipal servers using mDNS discovery.");
+        desc.setTextColor(Color.parseColor("#64748b"));
+        desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        LinearLayout.LayoutParams descParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        scanLabelParams.topMargin = dp(8);
-        scanLabel.setLayoutParams(scanLabelParams);
-        root.addView(scanLabel);
-
-        TextView scanDesc = new TextView(this);
-        scanDesc.setText("Scan your network for Digipal local servers");
-        scanDesc.setTextColor(Color.parseColor("#94a3b8"));
-        scanDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        LinearLayout.LayoutParams scanDescParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        scanDescParams.topMargin = dp(4);
-        scanDescParams.bottomMargin = dp(12);
-        scanDesc.setLayoutParams(scanDescParams);
-        root.addView(scanDesc);
+        descParams.topMargin = dp(6);
+        descParams.bottomMargin = dp(16);
+        desc.setLayoutParams(descParams);
+        layout.addView(desc);
 
         scanButton = createButton("Scan for Local Servers", "#6366f1");
         scanButton.setOnClickListener(v -> startDiscovery());
-        root.addView(scanButton);
+        layout.addView(scanButton);
 
         LinearLayout scanRow = new LinearLayout(this);
         scanRow.setOrientation(LinearLayout.HORIZONTAL);
         scanRow.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams scanRowParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        scanRowParams.topMargin = dp(12);
+        scanRowParams.topMargin = dp(10);
         scanRow.setLayoutParams(scanRowParams);
 
         scanProgress = new ProgressBar(this);
         scanProgress.setVisibility(View.GONE);
-        LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(dp(24), dp(24));
+        LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(dp(22), dp(22));
         progressParams.rightMargin = dp(8);
         scanProgress.setLayoutParams(progressParams);
         scanRow.addView(scanProgress);
 
         scanStatus = new TextView(this);
-        scanStatus.setTextColor(Color.parseColor("#94a3b8"));
+        scanStatus.setTextColor(Color.parseColor("#64748b"));
         scanStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         scanStatus.setVisibility(View.GONE);
         scanRow.addView(scanStatus);
 
-        root.addView(scanRow);
+        layout.addView(scanRow);
 
         serverListContainer = new LinearLayout(this);
         serverListContainer.setOrientation(LinearLayout.VERTICAL);
         LinearLayout.LayoutParams listParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        listParams.topMargin = dp(8);
+        listParams.topMargin = dp(6);
         serverListContainer.setLayoutParams(listParams);
-        root.addView(serverListContainer);
+        layout.addView(serverListContainer);
 
-        addSectionDivider(root, "OR enter server address manually");
+        return layout;
+    }
+
+    @SuppressLint("SetTextI18n")
+    private View buildManualCardContent() {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+
+        TextView title = new TextView(this);
+        title.setText("Manual Server Address");
+        title.setTextColor(Color.parseColor("#065f46"));
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        title.setTypeface(null, Typeface.BOLD);
+        layout.addView(title);
+
+        TextView desc = new TextView(this);
+        desc.setText("Enter your server URL directly. Use http:// for local network servers.");
+        desc.setTextColor(Color.parseColor("#64748b"));
+        desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        LinearLayout.LayoutParams descParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        descParams.topMargin = dp(6);
+        descParams.bottomMargin = dp(14);
+        desc.setLayoutParams(descParams);
+        layout.addView(desc);
 
         manualUrlInput = new EditText(this);
         manualUrlInput.setHint("e.g. http://192.168.1.100:8787");
-        manualUrlInput.setHintTextColor(Color.parseColor("#475569"));
-        manualUrlInput.setTextColor(Color.WHITE);
-        manualUrlInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        manualUrlInput.setHintTextColor(Color.parseColor("#94a3b8"));
+        manualUrlInput.setTextColor(Color.parseColor("#0f172a"));
+        manualUrlInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         manualUrlInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         manualUrlInput.setImeOptions(EditorInfo.IME_ACTION_DONE);
         manualUrlInput.setSingleLine(true);
-        manualUrlInput.setPadding(dp(16), dp(14), dp(16), dp(14));
+        manualUrlInput.setPadding(dp(14), dp(12), dp(14), dp(12));
         GradientDrawable inputBg = new GradientDrawable();
-        inputBg.setColor(Color.parseColor("#1e293b"));
+        inputBg.setColor(Color.parseColor("#f8fafc"));
         inputBg.setCornerRadius(dp(8));
-        inputBg.setStroke(dp(1), Color.parseColor("#334155"));
+        inputBg.setStroke(dp(1), Color.parseColor("#cbd5e1"));
         manualUrlInput.setBackground(inputBg);
         LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        inputParams.topMargin = dp(8);
+        inputParams.bottomMargin = dp(12);
         manualUrlInput.setLayoutParams(inputParams);
+        layout.addView(manualUrlInput);
 
-        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-        String savedMode = prefs.getString(KEY_SERVER_MODE, "cloud");
-        if ("local".equals(savedMode)) {
-            String savedUrl = prefs.getString(KEY_SERVER_URL, "");
-            if (!savedUrl.isEmpty() && !savedUrl.equals(BuildConfig.SERVER_URL)) {
-                manualUrlInput.setText(savedUrl);
-            }
-        }
-
-        root.addView(manualUrlInput);
-
-        Button connectManual = createButton("Connect to Manual Server", "#10b981");
-        LinearLayout.LayoutParams connectParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
-        connectParams.topMargin = dp(12);
-        connectManual.setLayoutParams(connectParams);
-        connectManual.setOnClickListener(v -> {
+        Button connectBtn = createButton("Connect", "#10b981");
+        connectBtn.setOnClickListener(v -> {
             String url = manualUrlInput.getText().toString().trim();
             if (url.isEmpty()) {
                 manualUrlInput.setError("Please enter a server URL");
@@ -247,57 +342,54 @@ public class ServerSetupActivity extends Activity {
             saveServerChoice("local", url);
             launchPlayer();
         });
-        root.addView(connectManual);
+        layout.addView(connectBtn);
 
-        int maxWidth = dp(500);
-
-        FrameLayout.LayoutParams rootParams = new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        rootParams.gravity = Gravity.CENTER_HORIZONTAL;
-        root.setLayoutParams(rootParams);
-
-        scrollView.addView(root);
-
-        FrameLayout centerer = new FrameLayout(this);
-        centerer.setBackgroundColor(Color.parseColor("#0a0e1a"));
-        FrameLayout.LayoutParams scrollParams = new FrameLayout.LayoutParams(
-            Math.min(maxWidth, getResources().getDisplayMetrics().widthPixels),
-            ViewGroup.LayoutParams.MATCH_PARENT);
-        scrollParams.gravity = Gravity.CENTER_HORIZONTAL;
-        scrollView.setLayoutParams(scrollParams);
-        centerer.addView(scrollView);
-
-        return centerer;
+        return layout;
     }
 
     @SuppressLint("SetTextI18n")
-    private void addSectionDivider(LinearLayout parent, String text) {
+    private void addOrDivider(LinearLayout parent) {
         LinearLayout dividerRow = new LinearLayout(this);
         dividerRow.setOrientation(LinearLayout.HORIZONTAL);
         dividerRow.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams dividerRowParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        dividerRowParams.topMargin = dp(24);
+        dividerRowParams.topMargin = dp(16);
         dividerRowParams.bottomMargin = dp(16);
         dividerRow.setLayoutParams(dividerRowParams);
 
         View lineLeft = new View(this);
-        lineLeft.setBackgroundColor(Color.parseColor("#334155"));
+        lineLeft.setBackgroundColor(Color.parseColor("#e2e8f0"));
         dividerRow.addView(lineLeft, new LinearLayout.LayoutParams(0, dp(1), 1));
 
-        TextView dividerText = new TextView(this);
-        dividerText.setText(text);
-        dividerText.setTextColor(Color.parseColor("#64748b"));
-        dividerText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        dividerText.setPadding(dp(12), 0, dp(12), 0);
-        dividerRow.addView(dividerText, new LinearLayout.LayoutParams(
+        TextView orText = new TextView(this);
+        orText.setText("OR");
+        orText.setTextColor(Color.parseColor("#94a3b8"));
+        orText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        orText.setTypeface(null, Typeface.BOLD);
+        orText.setPadding(dp(14), 0, dp(14), 0);
+        dividerRow.addView(orText, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         View lineRight = new View(this);
-        lineRight.setBackgroundColor(Color.parseColor("#334155"));
+        lineRight.setBackgroundColor(Color.parseColor("#e2e8f0"));
         dividerRow.addView(lineRight, new LinearLayout.LayoutParams(0, dp(1), 1));
 
         parent.addView(dividerRow);
+    }
+
+    @SuppressLint("SetTextI18n")
+    private void addPrivacyFooter(LinearLayout parent) {
+        TextView footer = new TextView(this);
+        footer.setText("Your connection details are private and secure.");
+        footer.setTextColor(Color.parseColor("#94a3b8"));
+        footer.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        footer.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.topMargin = dp(28);
+        footer.setLayoutParams(params);
+        parent.addView(footer);
     }
 
     private Button createButton(String text, String colorHex) {
@@ -307,11 +399,11 @@ public class ServerSetupActivity extends Activity {
         button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         button.setAllCaps(false);
         button.setTypeface(null, Typeface.BOLD);
-        button.setPadding(dp(16), dp(14), dp(16), dp(14));
+        button.setPadding(dp(16), dp(12), dp(16), dp(12));
 
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(Color.parseColor(colorHex));
-        bg.setCornerRadius(dp(8));
+        bg.setCornerRadius(dp(10));
         button.setBackground(bg);
 
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
@@ -446,9 +538,9 @@ public class ServerSetupActivity extends Activity {
         card.setPadding(dp(16), dp(12), dp(16), dp(12));
 
         GradientDrawable cardBg = new GradientDrawable();
-        cardBg.setColor(Color.parseColor("#1e293b"));
+        cardBg.setColor(Color.parseColor("#ffffff"));
         cardBg.setCornerRadius(dp(8));
-        cardBg.setStroke(dp(1), Color.parseColor("#334155"));
+        cardBg.setStroke(dp(1), Color.parseColor("#c7d2fe"));
         card.setBackground(cardBg);
 
         LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(
@@ -458,14 +550,14 @@ public class ServerSetupActivity extends Activity {
 
         TextView nameView = new TextView(this);
         nameView.setText(server.name);
-        nameView.setTextColor(Color.WHITE);
+        nameView.setTextColor(Color.parseColor("#0f172a"));
         nameView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         nameView.setTypeface(null, Typeface.BOLD);
         card.addView(nameView);
 
         TextView addrView = new TextView(this);
         addrView.setText(server.host + ":" + server.port);
-        addrView.setTextColor(Color.parseColor("#94a3b8"));
+        addrView.setTextColor(Color.parseColor("#64748b"));
         addrView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         LinearLayout.LayoutParams addrParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
