@@ -1,0 +1,56 @@
+{
+  "name": "digipal-player",
+  "version": "2.5.3",
+  "description": "Digipal Digital Signage Player for Windows",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win",
+    "build:portable": "electron-builder --win portable"
+  },
+  "author": "Digipal",
+  "license": "MIT",
+  "dependencies": {
+    "bonjour-service": "^1.2.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^32.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.digipal.player",
+    "productName": "Digipal Player",
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "runAfterFinish": true
+    }
+  },
+  "homepage": "https://digipal.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aysikder-oss/digipal-players.git"
+  }
+}
