@@ -192,28 +192,34 @@ public class ServerSetupActivity extends Activity {
         LinearLayout cardsArea = new LinearLayout(this);
         cardsArea.setOrientation(LinearLayout.VERTICAL);
         cardsArea.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         LinearLayout cloudCard = buildCard(buildCloudCardContent());
         cloudCard.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         cardsArea.addView(cloudCard);
 
         addOrDividerHorizontal(cardsArea, true);
 
         LinearLayout discoverCard = buildCard(buildDiscoverCardContent());
         discoverCard.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         cardsArea.addView(discoverCard);
 
         addOrDividerHorizontal(cardsArea, true);
 
         LinearLayout manualCard = buildCard(buildManualCardContent());
         manualCard.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         cardsArea.addView(manualCard);
 
         root.addView(cardsArea);
+
+        View footerSpacer = new View(this);
+        footerSpacer.setLayoutParams(new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        root.addView(footerSpacer);
+
         addPrivacyFooter(root, dp(compact ? 8 : 14));
 
         int screenWidth = getResources().getDisplayMetrics().widthPixels;
@@ -260,24 +266,24 @@ public class ServerSetupActivity extends Activity {
     private void buildLandscapeCards(LinearLayout root) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.TOP);
+        row.setGravity(Gravity.FILL_VERTICAL);
         row.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         LinearLayout cloudCard = buildCard(buildCloudCardContent());
-        cloudCard.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        cloudCard.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
         row.addView(cloudCard);
 
         addOrDividerVertical(row);
 
         LinearLayout discoverCard = buildCard(buildDiscoverCardContent());
-        discoverCard.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        discoverCard.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
         row.addView(discoverCard);
 
         addOrDividerVertical(row);
 
         LinearLayout manualCard = buildCard(buildManualCardContent());
-        manualCard.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        manualCard.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
         row.addView(manualCard);
 
         root.addView(row);
@@ -300,7 +306,7 @@ public class ServerSetupActivity extends Activity {
 
         LinearLayout.LayoutParams contentParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
-            portraitNoScroll ? ViewGroup.LayoutParams.MATCH_PARENT : ViewGroup.LayoutParams.WRAP_CONTENT);
+            portraitNoScroll ? ViewGroup.LayoutParams.WRAP_CONTENT : ViewGroup.LayoutParams.MATCH_PARENT);
         content.setLayoutParams(contentParams);
         card.addView(content);
         return card;
@@ -326,7 +332,7 @@ public class ServerSetupActivity extends Activity {
     private View buildSpacer() {
         View spacer = new View(this);
         spacer.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         return spacer;
     }
 
