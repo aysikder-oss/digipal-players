@@ -214,22 +214,20 @@ public class ServerSetupActivity extends Activity {
         cardsArea.addView(manualCard);
 
         root.addView(cardsArea);
-
-        View footerSpacer = new View(this);
-        footerSpacer.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-        root.addView(footerSpacer);
-
         addPrivacyFooter(root, dp(compact ? 8 : 14));
 
         int screenWidth = getResources().getDisplayMetrics().widthPixels;
         int rootWidth = Math.min(dp(540), screenWidth - dp(32));
 
+        ScrollView scroll = new ScrollView(this);
+        scroll.setBackgroundColor(Color.parseColor("#ffffff"));
         FrameLayout centerer = new FrameLayout(this);
         centerer.setBackgroundColor(Color.parseColor("#ffffff"));
-        centerer.addView(root, new FrameLayout.LayoutParams(rootWidth, ViewGroup.LayoutParams.MATCH_PARENT,
-            Gravity.CENTER_HORIZONTAL));
-        return centerer;
+        centerer.addView(root, new FrameLayout.LayoutParams(
+            rootWidth, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL));
+        scroll.addView(centerer, new ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return scroll;
     }
 
     @SuppressLint("SetTextI18n")
@@ -292,7 +290,7 @@ public class ServerSetupActivity extends Activity {
     private LinearLayout buildCard(View content) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        int p = cardPad();
+        int p = (!portraitNoScroll && compact) ? dp(8) : cardPad();
         card.setPadding(p, p, p, p);
 
         GradientDrawable cardBg = new GradientDrawable();
@@ -332,7 +330,7 @@ public class ServerSetupActivity extends Activity {
     private View buildSpacer() {
         View spacer = new View(this);
         spacer.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         return spacer;
     }
 
@@ -355,12 +353,13 @@ public class ServerSetupActivity extends Activity {
         desc.setTextColor(Color.parseColor("#64748b"));
         desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         LinearLayout.LayoutParams descParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            portraitNoScroll ? ViewGroup.LayoutParams.WRAP_CONTENT : 0,
+            portraitNoScroll ? 0f : 1f);
         descParams.topMargin = dp(6);
+        descParams.bottomMargin = portraitNoScroll ? 0 : dp(8);
         desc.setLayoutParams(descParams);
         layout.addView(desc);
-
-        layout.addView(buildSpacer());
 
         Button btn = createButton("Connect to Cloud Server \u203a", "#3b82f6");
         btn.setOnClickListener(v -> {
@@ -396,9 +395,11 @@ public class ServerSetupActivity extends Activity {
         desc.setTextColor(Color.parseColor("#64748b"));
         desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         LinearLayout.LayoutParams descParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            portraitNoScroll ? ViewGroup.LayoutParams.WRAP_CONTENT : 0,
+            portraitNoScroll ? 0f : 1f);
         descParams.topMargin = dp(6);
-        descParams.bottomMargin = dp(10);
+        descParams.bottomMargin = portraitNoScroll ? dp(10) : dp(8);
         desc.setLayoutParams(descParams);
         layout.addView(desc);
 
@@ -459,9 +460,11 @@ public class ServerSetupActivity extends Activity {
         desc.setTextColor(Color.parseColor("#64748b"));
         desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         LinearLayout.LayoutParams descParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            portraitNoScroll ? ViewGroup.LayoutParams.WRAP_CONTENT : 0,
+            portraitNoScroll ? 0f : 1f);
         descParams.topMargin = dp(6);
-        descParams.bottomMargin = dp(10);
+        descParams.bottomMargin = portraitNoScroll ? dp(10) : dp(8);
         desc.setLayoutParams(descParams);
         layout.addView(desc);
 
@@ -473,15 +476,13 @@ public class ServerSetupActivity extends Activity {
         manualUrlInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         manualUrlInput.setImeOptions(EditorInfo.IME_ACTION_DONE);
         manualUrlInput.setSingleLine(true);
-        manualUrlInput.setPadding(dp(14), dp(11), dp(14), dp(11));
+        manualUrlInput.setPadding(dp(14), dp(compact ? 5 : 11), dp(14), dp(compact ? 5 : 11));
         GradientDrawable inputBg = new GradientDrawable();
         inputBg.setColor(Color.parseColor("#f8fafc"));
         inputBg.setCornerRadius(dp(8));
         inputBg.setStroke(dp(1), Color.parseColor("#cbd5e1"));
         manualUrlInput.setBackground(inputBg);
         layout.addView(manualUrlInput);
-
-        layout.addView(buildSpacer());
 
         Button connectBtn = createButton("Connect to Manual Server \u203a", "#f97316");
         connectBtn.setOnClickListener(v -> {
