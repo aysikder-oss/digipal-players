@@ -16,7 +16,7 @@
     }
     .wrapper { display: flex; flex-direction: column; align-items: center; width: 100%; max-width: 860px; }
     .logo { text-align: center; margin-bottom: 36px; }
-    .logo img { width: 420px; height: auto; display: block; margin: 0 auto; }
+    .logo img { width: 360px; height: auto; display: block; margin: 0 auto; }
     .logo p { color: #94a3b8; font-size: 14px; margin-top: 10px; letter-spacing: 0.2px; }
     .cards-row { display: flex; align-items: stretch; width: 100%; flex-wrap: wrap; gap: 0; }
     .card {
@@ -50,12 +50,17 @@
     .card-input:focus { border-color: #f97316; }
     .error-msg { color: #ef4444; font-size: 12px; margin: -10px 0 10px; display: none; width: 100%; text-align: left; }
     .footer { display: flex; align-items: center; justify-content: center; margin-top: 28px; font-size: 12px; color: #94a3b8; }
+    @media (orientation: portrait), (max-aspect-ratio: 1/1) {
+      .cards-row { flex-direction: column; }
+      .or-divider { flex-direction: row; padding: 12px 0; }
+      .or-line { width: auto; height: 1px; flex: 1; }
+    }
   </style>
 </head>
 <body>
   <div class="wrapper">
     <div class="logo">
-      <img src="./icon.png" alt="Digipal Player" />
+      <img src="./player_logo.png" alt="Digipal Player" />
       <p>Connect to your signage server</p>
     </div>
 
@@ -91,10 +96,6 @@
             <rect x="6" y="28" width="36" height="13" rx="3.5" stroke="#F97316" stroke-width="2.2"/>
             <circle cx="14" cy="34.5" r="2.8" fill="#F97316"/>
             <rect x="20" y="31.5" width="13" height="5" rx="1.8" fill="#F97316" opacity="0.4"/>
-            <path d="M42 24.5 Q46 24.5 46 28" stroke="#F97316" stroke-width="2.2" fill="none" stroke-linecap="round"/>
-            <rect x="46" y="23" width="12" height="9" rx="2.5" fill="#F97316"/>
-            <line x1="49.5" y1="23" x2="49.5" y2="18" stroke="#F97316" stroke-width="2.5" stroke-linecap="round"/>
-            <line x1="54.5" y1="23" x2="54.5" y2="18" stroke="#F97316" stroke-width="2.5" stroke-linecap="round"/>
           </svg>
         </div>
         <h3 class="card-title">Enter Server Address</h3>
@@ -125,7 +126,8 @@
     }
 
     cloudBtn.addEventListener('click', function() {
-      connectToUrl('https://digipal-cms.replit.app');
+      const { ipcRenderer } = require('electron');
+      ipcRenderer.send('server-cloud-selected', 'https://digipalsignage.com');
     });
 
     connectBtn.addEventListener('click', function() {
