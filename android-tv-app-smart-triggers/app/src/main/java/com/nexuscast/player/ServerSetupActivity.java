@@ -111,7 +111,7 @@ public class ServerSetupActivity extends Activity {
 
     private boolean isWideScreen() {
         int w = getResources().getDisplayMetrics().widthPixels;
-        return w >= dp(900);
+        return w >= dp(600);
     }
 
     private boolean isCompactHeight() {
