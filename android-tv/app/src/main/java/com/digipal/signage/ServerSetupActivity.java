@@ -116,10 +116,14 @@ public class ServerSetupActivity extends Activity {
     }
 
     private boolean isCompactHeight() {
-        float h = getResources().getDisplayMetrics().heightPixels
-            / getResources().getDisplayMetrics().density;
-        return h < 750;
-    }
+          Configuration cfg = getResources().getConfiguration();
+          if (cfg.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+              return true;
+          }
+          float h = getResources().getDisplayMetrics().heightPixels
+              / getResources().getDisplayMetrics().density;
+          return h < 850;
+      }
 
     private int cardPad()    { return dp(compact ? 14 : 20); }
     private int iconSize()   { return dp(compact ? 40 : 56); }
@@ -130,7 +134,7 @@ public class ServerSetupActivity extends Activity {
     @SuppressLint("SetTextI18n")
     private View buildUI() {
         boolean wide = isWideScreen();
-        compact = !wide && isCompactHeight();
+        compact = isCompactHeight();
         portraitNoScroll = !wide;
 
         if (wide) {
