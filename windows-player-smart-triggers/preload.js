@@ -1,5 +1,11 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+contextBridge.exposeInMainWorld('Android', {
+  notifyPaired: (url) => {
+    ipcRenderer.send('device:paired', url || '');
+  },
+});
+
 const HW_CHANNELS = [
   'hw:deviceConnected',
   'hw:deviceDisconnected',
