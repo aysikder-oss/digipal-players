@@ -148,7 +148,7 @@ public class ServerSetupActivity extends Activity {
     private View buildLandscapeUI() {
         ScrollView scrollView = new ScrollView(this);
         scrollView.setBackgroundColor(Color.parseColor("#ffffff"));
-        scrollView.setFillViewport(true);
+        scrollView.setFillViewport(false);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -194,23 +194,28 @@ public class ServerSetupActivity extends Activity {
         cardsArea.setLayoutParams(new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        float pDensity = getResources().getDisplayMetrics().density;
+        int pScreenHdp = (int)(getResources().getDisplayMetrics().heightPixels / pDensity);
+        int pCardHdp = Math.min(240, Math.max(160, (pScreenHdp - 130) / 3));
+        int pCardH = dp(pCardHdp);
+
         LinearLayout cloudCard = buildCard(buildCloudCardContent());
         cloudCard.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            ViewGroup.LayoutParams.MATCH_PARENT, pCardH));
         cardsArea.addView(cloudCard);
 
         addOrDividerHorizontal(cardsArea, true);
 
         LinearLayout discoverCard = buildCard(buildDiscoverCardContent());
         discoverCard.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            ViewGroup.LayoutParams.MATCH_PARENT, pCardH));
         cardsArea.addView(discoverCard);
 
         addOrDividerHorizontal(cardsArea, true);
 
         LinearLayout manualCard = buildCard(buildManualCardContent());
         manualCard.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            ViewGroup.LayoutParams.MATCH_PARENT, pCardH));
         cardsArea.addView(manualCard);
 
         root.addView(cardsArea);
@@ -262,26 +267,31 @@ public class ServerSetupActivity extends Activity {
     }
 
     private void buildLandscapeCards(LinearLayout root) {
+        float lDensity = getResources().getDisplayMetrics().density;
+        int lScreenHdp = (int)(getResources().getDisplayMetrics().heightPixels / lDensity);
+        int lCardHdp = Math.min(280, Math.max(140, lScreenHdp - (compact ? 200 : 280)));
+        int lCardH = dp(lCardHdp);
+
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.FILL_VERTICAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
         row.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         LinearLayout cloudCard = buildCard(buildCloudCardContent());
-        cloudCard.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        cloudCard.setLayoutParams(new LinearLayout.LayoutParams(0, lCardH, 1f));
         row.addView(cloudCard);
 
         addOrDividerVertical(row);
 
         LinearLayout discoverCard = buildCard(buildDiscoverCardContent());
-        discoverCard.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        discoverCard.setLayoutParams(new LinearLayout.LayoutParams(0, lCardH, 1f));
         row.addView(discoverCard);
 
         addOrDividerVertical(row);
 
         LinearLayout manualCard = buildCard(buildManualCardContent());
-        manualCard.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        manualCard.setLayoutParams(new LinearLayout.LayoutParams(0, lCardH, 1f));
         row.addView(manualCard);
 
         root.addView(row);
@@ -303,8 +313,7 @@ public class ServerSetupActivity extends Activity {
         }
 
         LinearLayout.LayoutParams contentParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            portraitNoScroll ? ViewGroup.LayoutParams.WRAP_CONTENT : ViewGroup.LayoutParams.MATCH_PARENT);
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
         content.setLayoutParams(contentParams);
         card.addView(content);
         return card;
@@ -353,11 +362,9 @@ public class ServerSetupActivity extends Activity {
         desc.setTextColor(Color.parseColor("#64748b"));
         desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         LinearLayout.LayoutParams descParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            portraitNoScroll ? ViewGroup.LayoutParams.WRAP_CONTENT : 0,
-            portraitNoScroll ? 0f : 1f);
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
         descParams.topMargin = dp(6);
-        descParams.bottomMargin = portraitNoScroll ? 0 : dp(8);
+        descParams.bottomMargin = dp(8);
         desc.setLayoutParams(descParams);
         layout.addView(desc);
 
@@ -395,11 +402,9 @@ public class ServerSetupActivity extends Activity {
         desc.setTextColor(Color.parseColor("#64748b"));
         desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         LinearLayout.LayoutParams descParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            portraitNoScroll ? ViewGroup.LayoutParams.WRAP_CONTENT : 0,
-            portraitNoScroll ? 0f : 1f);
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
         descParams.topMargin = dp(6);
-        descParams.bottomMargin = portraitNoScroll ? dp(10) : dp(8);
+        descParams.bottomMargin = dp(8);
         desc.setLayoutParams(descParams);
         layout.addView(desc);
 
@@ -460,11 +465,9 @@ public class ServerSetupActivity extends Activity {
         desc.setTextColor(Color.parseColor("#64748b"));
         desc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         LinearLayout.LayoutParams descParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            portraitNoScroll ? ViewGroup.LayoutParams.WRAP_CONTENT : 0,
-            portraitNoScroll ? 0f : 1f);
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
         descParams.topMargin = dp(6);
-        descParams.bottomMargin = portraitNoScroll ? dp(10) : dp(8);
+        descParams.bottomMargin = dp(8);
         desc.setLayoutParams(descParams);
         layout.addView(desc);
 
