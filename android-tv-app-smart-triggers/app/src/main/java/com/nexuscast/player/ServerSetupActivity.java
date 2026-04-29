@@ -110,8 +110,9 @@ public class ServerSetupActivity extends Activity {
     }
 
     private boolean isWideScreen() {
-        int w = getResources().getDisplayMetrics().widthPixels;
-        return w >= dp(600);
+        Configuration cfg = getResources().getConfiguration();
+        return cfg.orientation == Configuration.ORIENTATION_LANDSCAPE
+            || cfg.screenWidthDp >= 600;
     }
 
     private boolean isCompactHeight() {
