@@ -10,8 +10,8 @@ android {
         applicationId "com.digipal.signage"
         minSdk 21
         targetSdk 35
-        versionCode 11
-        versionName "3.8.3"
+        versionCode 12
+        versionName "3.8.4"
 
         // The URL of your Digipal server - change this to your published URL
         buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
