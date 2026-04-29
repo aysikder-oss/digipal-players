@@ -8,6 +8,7 @@ const PLAYER_PATH = '/tv';
 const CONFIG_FILE = 'config.json';
 
 let mainWindow = null;
+let loadingWindow = null;
 let kioskMode = false;
 let hardwareManager = null;
 let serverUrl = '';
@@ -47,14 +48,39 @@ function saveConfig(url) {
   }
 }
 
+function showLoadingScreen() {
+  if (loadingWindow && !loadingWindow.isDestroyed()) return;
+  loadingWindow = new BrowserWindow({
+    width: 1920,
+    height: 1080,
+    fullscreen: true,
+    frame: false,
+    backgroundColor: '#ffffff',
+    icon: path.join(__dirname, 'icon.png'),
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  });
+  loadingWindow.loadFile(path.join(__dirname, 'loading.html'));
+  loadingWindow.on('closed', () => { loadingWindow = null; });
+}
+
+function closeLoadingScreen() {
+  if (loadingWindow && !loadingWindow.isDestroyed()) {
+    loadingWindow.close();
+    loadingWindow = null;
+  }
+}
+
 function showSetupPrompt() {
   return new Promise((resolve) => {
     const promptWindow = new BrowserWindow({
-      width: 500,
-      height: 380,
-      resizable: false,
-      frame: false,
-      backgroundColor: '#0f172a',
+      width: 1200,
+      height: 720,
+      resizable: true,
+      frame: true,
+      backgroundColor: '#ffffff',
       icon: path.join(__dirname, 'icon.png'),
       webPreferences: {
         nodeIntegration: true,
@@ -274,12 +300,23 @@ app.on('ready', async () => {
   mediaManager.cleanupOrphans();
   setupMediaIPC();
 
+  // Stage 1: always show loading screen first
+  showLoadingScreen();
+
   const hasConfig = loadConfig();
-  if (!hasConfig) {
-    await showSetupPrompt();
-  }
-  if (serverUrl) {
-    createWindow();
+  if (hasConfig) {
+    // Configured: brief loading then open player
+    setTimeout(() => {
+      closeLoadingScreen();
+      if (serverUrl) createWindow();
+    }, 1500);
+  } else {
+    // Unconfigured: hold loading 3s then show setup
+    setTimeout(async () => {
+      closeLoadingScreen();
+      await showSetupPrompt();
+      if (serverUrl) createWindow();
+    }, 3000);
   }
 });
 

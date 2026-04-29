@@ -14,7 +14,7 @@ const CURSOR_HIDE_DELAY = 3000;
 const DEFAULT_CLOUD_URL = 'https://digipalsignage.com';
 
 let mainWindow = null;
-let searchingWindow = null;
+let loadingWindow = null;
 let tray = null;
 let kioskMode = false;
 let serverUrl = '';
@@ -80,45 +80,77 @@ function clearManualOverride() {
   }
 }
 
-function showSearchingScreen() {
+function showLoadingScreen() {
+  if (loadingWindow && !loadingWindow.isDestroyed()) return;
+  loadingWindow = new BrowserWindow({
+    width: 1920,
+    height: 1080,
+    fullscreen: true,
+    frame: false,
+    backgroundColor: '#ffffff',
+    icon: path.join(__dirname, 'icon.png'),
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  });
+  loadingWindow.loadFile(path.join(__dirname, 'loading.html'));
+  loadingWindow.on('closed', () => { loadingWindow = null; });
+}
+
+function closeLoadingScreen() {
+  if (loadingWindow && !loadingWindow.isDestroyed()) {
+    loadingWindow.close();
+    loadingWindow = null;
+  }
+}
+
+function showPairingScreen(server) {
   return new Promise((resolve) => {
-    searchingWindow = new BrowserWindow({
-      width: 500,
-      height: 300,
-      resizable: false,
-      frame: false,
-      backgroundColor: '#0f172a',
+    const pairingWindow = new BrowserWindow({
+      width: 1200,
+      height: 720,
+      resizable: true,
+      frame: true,
+      backgroundColor: '#ffffff',
       icon: path.join(__dirname, 'icon.png'),
       webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
+        nodeIntegration: true,
+        contextIsolation: false,
       },
     });
 
-    searchingWindow.loadFile(path.join(__dirname, 'searching.html'));
-    searchingWindow.on('closed', () => {
-      searchingWindow = null;
+    pairingWindow.loadFile(path.join(__dirname, 'pairing.html'));
+
+    pairingWindow.webContents.on('did-finish-load', () => {
+      pairingWindow.webContents.send('pairing:setServer', {
+        name: server.name || 'Digipal Hub',
+        url: server.url,
+      });
     });
 
-    resolve();
-  });
-}
+    const onSubmit = (_event, url) => {
+      pairingWindow.close();
+      resolve(url);
+    };
 
-function closeSearchingScreen() {
-  if (searchingWindow && !searchingWindow.isDestroyed()) {
-    searchingWindow.close();
-    searchingWindow = null;
-  }
+    ipcMain.once('server-url-submitted', onSubmit);
+
+    pairingWindow.on('closed', () => {
+      ipcMain.removeListener('server-url-submitted', onSubmit);
+      resolve(serverUrl || null);
+    });
+  });
 }
 
 function showSetupPrompt() {
   return new Promise((resolve) => {
     const promptWindow = new BrowserWindow({
-      width: 500,
-      height: 420,
-      resizable: false,
-      frame: false,
-      backgroundColor: '#0f172a',
+      width: 1200,
+      height: 720,
+      resizable: true,
+      frame: true,
+      backgroundColor: '#ffffff',
       icon: path.join(__dirname, 'icon.png'),
       webPreferences: {
         nodeIntegration: true,
@@ -499,11 +531,10 @@ async function captureScreenshot() {
   }
 }
 
-async function startAutoConnect() {
-  const config = loadConfig();
+function initConnectionManager(config) {
+  if (connectionManager) connectionManager.stop();
 
   networkScanner = new NetworkScanner();
-
   connectionManager = new ConnectionManager({
     bonjourBrowser,
     networkScanner,
@@ -512,43 +543,6 @@ async function startAutoConnect() {
     deviceId: (config && config.deviceId) || crypto.randomUUID(),
     getDeviceInfo,
     captureScreenshot,
-  });
-
-  connectionManager.on('searching', () => {
-    console.log('[main] Searching for local server...');
-    showSearchingScreen();
-  });
-
-  connectionManager.on('scanningNetwork', () => {
-    console.log('[main] Scanning local network for hub...');
-  });
-
-  connectionManager.on('retrying', ({ attempt, delayMs, maxAttempts }) => {
-    console.log(`[main] Neither server reachable, retrying (attempt ${attempt}/${maxAttempts || "?"}, delay ${Math.round(delayMs / 1000)}s)`);
-  });
-
-  connectionManager.on('showSetup', async () => {
-    console.log('[main] Could not auto-connect, showing setup prompt');
-    closeSearchingScreen();
-    const url = await showSetupPrompt();
-    if (url) {
-      connectionManager.neitherReachableAttempts = 0;
-      connectionManager.primaryUrl = url;
-      connectionManager.primaryMode = connectionManager.isLocalUrl(url) ? 'local' : 'cloud';
-      connectionManager.emit('connected', { url, mode: connectionManager.primaryMode });
-      connectionManager.startDualMode();
-    }
-  });
-
-  connectionManager.on('connected', ({ url, mode }) => {
-    console.log(`[main] Connected to ${url} (mode: ${mode})`);
-    closeSearchingScreen();
-    serverUrl = url;
-    saveConfig(url, !!(config && config.manualOverride));
-    if (!mainWindow) {
-      createWindow();
-    }
-    updateTray();
   });
 
   connectionManager.on('switchServer', ({ url, mode, reason }) => {
@@ -561,9 +555,7 @@ async function startAutoConnect() {
   });
 
   connectionManager.on('forceReload', () => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.reload();
-    }
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
   });
 
   connectionManager.on('remoteRestart', () => {
@@ -571,15 +563,80 @@ async function startAutoConnect() {
     app.exit(0);
   });
 
-  connectionManager.on('cloudChannelConnected', () => {
-    updateTray();
-  });
+  connectionManager.on('cloudChannelConnected', () => updateTray());
+  connectionManager.on('cloudChannelDisconnected', () => updateTray());
 
-  connectionManager.on('cloudChannelDisconnected', () => {
-    updateTray();
-  });
+  connectionManager.autoConnect(config);
+}
 
-  await connectionManager.autoConnect(config);
+async function startAutoConnect() {
+  const config = loadConfig();
+
+  if (connectionManager) {
+    connectionManager.stop();
+    connectionManager = null;
+  }
+
+  // Stage 1: always show loading screen first
+  showLoadingScreen();
+
+  if (config && config.serverUrl) {
+    // Configured device: hold loading 1.5s then open main player
+    serverUrl = config.serverUrl;
+    setTimeout(() => {
+      closeLoadingScreen();
+      if (!mainWindow) createWindow();
+    }, 1500);
+    // Start connection manager for cloud channel + health checks in background
+    initConnectionManager(config);
+    return;
+  }
+
+  // Unconfigured device: 5s local discovery (bonjour polling + network scan)
+  let resolved = false;
+  networkScanner = new NetworkScanner();
+
+  function complete(url) {
+    if (!url) return;
+    serverUrl = url;
+    saveConfig(url, true);
+    if (!mainWindow) createWindow();
+    initConnectionManager({ serverUrl: url, manualOverride: true });
+    updateTray();
+  }
+
+  async function onLocalFound(server) {
+    if (resolved) return;
+    resolved = true;
+    clearTimeout(discoveryTimer);
+    clearInterval(localPoll);
+    closeLoadingScreen();
+    console.log(`[main] Local hub found: ${server.url}, showing pairing screen`);
+    const url = await showPairingScreen(server);
+    complete(url);
+  }
+
+  const discoveryTimer = setTimeout(async () => {
+    if (resolved) return;
+    resolved = true;
+    clearInterval(localPoll);
+    closeLoadingScreen();
+    console.log('[main] No local hub found after 5s, showing setup prompt');
+    const url = await showSetupPrompt();
+    complete(url);
+  }, 5000);
+
+  // Poll bonjour every 500ms
+  const localPoll = setInterval(() => {
+    if (resolved) return;
+    const servers = bonjourBrowser ? bonjourBrowser.getServers() : [];
+    if (servers.length > 0) onLocalFound(servers[0]);
+  }, 500);
+
+  // Run network scan in parallel — resolves if network scan finds a hub first
+  networkScanner.scan().then((found) => {
+    if (!resolved && found && found.length > 0) onLocalFound(found[0]);
+  }).catch(() => {});
 }
 
 app.on('ready', async () => {

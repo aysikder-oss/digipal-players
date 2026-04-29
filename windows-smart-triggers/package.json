@@ -1,6 +1,6 @@
 {
   "name": "digipal-player-smart-triggers",
-  "version": "2.0.0",
+  "version": "2.2.2",
   "description": "Digipal Digital Signage Player for Windows (Smart Triggers)",
   "main": "main.js",
   "scripts": {
