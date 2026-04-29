@@ -686,18 +686,19 @@ public class ServerSetupActivity extends Activity {
         serverListContainer.addView(card);
     }
 
+    private static final Pattern PRIVATE_IP = Pattern.compile(
+        "^(10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|" +
+        "172\\.(1[6-9]|2\\d|3[01])\\.\\d{1,3}\\.\\d{1,3}|" +
+        "192\\.168\\.\\d{1,3}\\.\\d{1,3})$"
+    );
+
     private boolean isPrivateNetworkUrl(String url) {
         try {
             URI uri = new URI(url);
             String host = uri.getHost();
             if (host == null) return false;
-            if (host.equals("localhost") || host.equals("127.0.0.1")) return true;
-            Pattern privateIp = Pattern.compile(
-                "^(10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|" +
-                "172\\.(1[6-9]|2\\d|3[01])\\.\\d{1,3}\\.\\d{1,3}|" +
-                "192\\.168\\.\\d{1,3}\\.\\d{1,3})$"
-            );
-            return privateIp.matcher(host).matches();
+            if (host.equals("localhost") || host.equals("127.0.0.1") || host.equals("::1")) return true;
+            return PRIVATE_IP.matcher(host).matches();
         } catch (Exception e) {
             return false;
         }
