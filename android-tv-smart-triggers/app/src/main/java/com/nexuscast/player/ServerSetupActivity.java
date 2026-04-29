@@ -1,4 +1,4 @@
-package com.digipal.signage;
+package com.nexuscast.player;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
@@ -84,8 +84,10 @@ public class ServerSetupActivity extends Activity {
 
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setFlags(
-            WindowManager.LayoutParams.FLAG_FULLSCREEN,
-            WindowManager.LayoutParams.FLAG_FULLSCREEN
+            WindowManager.LayoutParams.FLAG_FULLSCREEN |
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+            WindowManager.LayoutParams.FLAG_FULLSCREEN |
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
         );
 
         nsdManager = (NsdManager) getSystemService(Context.NSD_SERVICE);
@@ -117,7 +119,7 @@ public class ServerSetupActivity extends Activity {
                 logo.setImageResource(logoResId);
                 logo.setAdjustViewBounds(true);
                 logo.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(dp(280), dp(68));
+                LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(dp(280), dp(72));
                 logoParams.gravity = Gravity.CENTER_HORIZONTAL;
                 logoParams.bottomMargin = dp(8);
                 logo.setLayoutParams(logoParams);
@@ -208,7 +210,7 @@ public class ServerSetupActivity extends Activity {
         desc.setLayoutParams(descParams);
         layout.addView(desc);
 
-        Button btn = createButton("Connect to Cloud Server \u203a", "#3b82f6");
+        Button btn = createButton("Connect to Cloud Server ›", "#3b82f6");
         btn.setOnClickListener(v -> {
             // Mark cloud pairing pending — config saved only after notifyPaired fires
             SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
@@ -247,7 +249,7 @@ public class ServerSetupActivity extends Activity {
         desc.setLayoutParams(descParams);
         layout.addView(desc);
 
-        scanButton = createButton("Scan for Local Servers \u203a", "#14b8a6");
+        scanButton = createButton("Scan for Local Servers ›", "#14b8a6");
         scanButton.setOnClickListener(v -> startDiscovery());
         layout.addView(scanButton);
 
@@ -328,7 +330,7 @@ public class ServerSetupActivity extends Activity {
         manualUrlInput.setLayoutParams(inputParams);
         layout.addView(manualUrlInput);
 
-        Button connectBtn = createButton("Connect to Manual Server \u203a", "#f97316");
+        Button connectBtn = createButton("Connect to Manual Server ›", "#f97316");
         connectBtn.setOnClickListener(v -> {
             String url = manualUrlInput.getText().toString().trim();
             if (url.isEmpty()) {
@@ -498,7 +500,7 @@ public class ServerSetupActivity extends Activity {
         scanTimeoutRunnable = () -> {
             stopDiscovery();
             if (discoveredServers.isEmpty()) {
-                scanStatus.setText("No servers found. Make sure your local server is running.");
+                scanStatus.setText("No servers found. Check that your local server is running.");
             } else {
                 scanStatus.setText(discoveredServers.size() + " server(s) found");
             }
@@ -538,12 +540,12 @@ public class ServerSetupActivity extends Activity {
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(16), dp(12), dp(16), dp(12));
+        card.setPadding(dp(14), dp(12), dp(14), dp(12));
 
         GradientDrawable cardBg = new GradientDrawable();
-        cardBg.setColor(Color.parseColor("#ffffff"));
+        cardBg.setColor(Color.parseColor("#f0fdf4"));
         cardBg.setCornerRadius(dp(8));
-        cardBg.setStroke(dp(1), Color.parseColor("#c7d2fe"));
+        cardBg.setStroke(dp(1), Color.parseColor("#bbf7d0"));
         card.setBackground(cardBg);
 
         LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(
@@ -553,22 +555,22 @@ public class ServerSetupActivity extends Activity {
 
         TextView nameView = new TextView(this);
         nameView.setText(server.name);
-        nameView.setTextColor(Color.parseColor("#0f172a"));
-        nameView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        nameView.setTextColor(Color.parseColor("#065f46"));
+        nameView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         nameView.setTypeface(null, Typeface.BOLD);
         card.addView(nameView);
 
         TextView addrView = new TextView(this);
         addrView.setText(server.host + ":" + server.port);
         addrView.setTextColor(Color.parseColor("#64748b"));
-        addrView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        addrView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         LinearLayout.LayoutParams addrParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         addrParams.topMargin = dp(2);
         addrView.setLayoutParams(addrParams);
         card.addView(addrView);
 
-        Button connectBtn = createButton("Connect \u203a", "#14b8a6");
+        Button connectBtn = createButton("Connect ›", "#14b8a6");
         LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(40));
         btnParams.topMargin = dp(8);
