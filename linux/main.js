@@ -22,6 +22,7 @@ let mediaManager = null;
 let bonjourBrowser = null;
 let connectionManager = null;
 let networkScanner = null;
+let cloudUrlPending = false; // true when cloud URL chosen — skip saveConfig until device:paired
 let cursorHideTimer = null;
 let cursorHidden = false;
 
@@ -170,6 +171,7 @@ function showSetupPrompt() {
     const onCloudSelected = (_event, url) => {
       // Navigate to cloud URL without saving to disk — saved only after device:paired
       serverUrl = url;
+      cloudUrlPending = true;
       ipcMain.removeListener('server-url-submitted', onSubmit);
       promptWindow.close();
       resolve(url);
@@ -519,6 +521,7 @@ function setupMediaIPC() {
   ipcMain.on('device:paired', (_event, url) => {
     const pairUrl = url || serverUrl;
     if (pairUrl) {
+      cloudUrlPending = false;
       saveConfig(pairUrl, false);
       console.log('[main] Device paired — config saved:', pairUrl);
     }
@@ -618,9 +621,13 @@ async function startAutoConnect() {
   function complete(url) {
     if (!url) return;
     serverUrl = url;
-    saveConfig(url, true);
+    const isCloud = cloudUrlPending;
+    cloudUrlPending = false;
+    if (!isCloud) {
+      saveConfig(url, true);
+    }
     if (!mainWindow) createWindow();
-    initConnectionManager({ serverUrl: url, manualOverride: true });
+    initConnectionManager({ serverUrl: url, manualOverride: !isCloud });
     updateTray();
   }
 
