@@ -179,6 +179,7 @@
                                 A1000007 /* MediaManager.swift in Sources */,
                                 A1000008 /* BonjourBrowser.swift in Sources */,
                                 A100000A /* CloudChannel.swift in Sources */,
+                                A100000F /* NetworkScanner.swift in Sources */,
                         );
                         runOnlyForDeploymentPostprocessing = 0;
                 };
