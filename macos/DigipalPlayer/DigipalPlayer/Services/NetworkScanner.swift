@@ -24,8 +24,10 @@ import Foundation
               if isUp && !isLoopback {
                   if addr.pointee.ifa_addr.pointee.sa_family == UInt8(AF_INET) {
                       var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-                      if getnameinfo(addr.pointee.ifa_addr, socklen_t(addr.pointee.ifa_addr.pointee.sa_len),
-                                     &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST) == 0 {
+                      if getnameinfo(addr.pointee.ifa_addr,
+                                     socklen_t(addr.pointee.ifa_addr.pointee.sa_len),
+                                     &hostname, socklen_t(hostname.count),
+                                     nil, 0, NI_NUMERICHOST) == 0 {
                           let ip = String(cString: hostname)
                           let parts = ip.split(separator: ".")
                           if parts.count == 4 {
@@ -48,58 +50,55 @@ import Foundation
           let subnets = getLocalSubnets()
           NSLog("[NetworkScanner] Scanning subnets: %@", subnets.joined(separator: ", "))
 
-          if subnets.isEmpty {
+          guard !subnets.isEmpty else {
               NSLog("[NetworkScanner] No local subnets found")
               await MainActor.run { isScanning = false }
               return []
           }
 
-          var found: [DiscoveredServer] = []
+          // Build ordered probe list: priority IPs first, then the rest
+          var probes: [(ip: String, port: Int)] = []
+          let priorityLastOctets = [1, 100, 200, 2, 3, 10, 50, 150, 254]
+          var allLastOctets = priorityLastOctets
+          for i in 1...254 where !priorityLastOctets.contains(i) {
+              allLastOctets.append(i)
+          }
 
           for subnet in subnets {
-              let priorityIPs = [1, 100, 200, 2, 3, 10, 50, 150, 254]
-              var allIPs: [Int] = priorityIPs
-              for i in 1...254 {
-                  if !allIPs.contains(i) { allIPs.append(i) }
-              }
-
-              for batchStart in stride(from: 0, to: allIPs.count, by: 20) {
-                  let batchEnd = min(batchStart + 20, allIPs.count)
-                  let batch = Array(allIPs[batchStart..<batchEnd])
-
-                  let results = await withTaskGroup(of: DiscoveredServer?.self) { group in
-                      for lastOctet in batch {
-                          let ip = "\(subnet).\(lastOctet)"
-                          for port in scanPorts {
-                              group.addTask {
-                                  return await self.probeHost(ip: ip, port: port)
-                              }
-                          }
-                      }
-
-                      var batchResults: [DiscoveredServer] = []
-                      for await result in group {
-                          if let server = result {
-                              batchResults.append(server)
-                          }
-                      }
-                      return batchResults
-                  }
-
-                  if !results.isEmpty {
-                      found.append(contentsOf: results)
-                      NSLog("[NetworkScanner] Found hub(s): %@", results.map { $0.url }.joined(separator: ", "))
-                      await MainActor.run {
-                          discoveredServers = found
-                          isScanning = false
-                      }
-                      return found
+              for octet in allLastOctets {
+                  for port in scanPorts {
+                      probes.append((ip: "\(subnet).\(octet)", port: port))
                   }
               }
           }
 
-          NSLog("[NetworkScanner] No hubs found on local network")
-          await MainActor.run { isScanning = false }
+          // Single task group — collect all results as value type, no captured var
+          let found: [DiscoveredServer] = await withTaskGroup(of: DiscoveredServer?.self) { group in
+              for probe in probes {
+                  group.addTask {
+                      return await self.probeHost(ip: probe.ip, port: probe.port)
+                  }
+              }
+
+              var results: [DiscoveredServer] = []
+              for await result in group {
+                  if let server = result {
+                      results.append(server)
+                  }
+              }
+              return results
+          }
+
+          NSLog("[NetworkScanner] Scan complete. Found %d hub(s)", found.count)
+          if !found.isEmpty {
+              NSLog("[NetworkScanner] Hubs: %@", found.map { $0.url }.joined(separator: ", "))
+          }
+
+          let snapshot = found
+          await MainActor.run {
+              discoveredServers = snapshot
+              isScanning = false
+          }
           return found
       }
 
@@ -120,8 +119,7 @@ import Foundation
                       port: port
                   )
               }
-          } catch {
-          }
+          } catch {}
           return nil
       }
 
