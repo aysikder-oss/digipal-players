@@ -114,6 +114,12 @@ struct PlayerWebView: NSViewRepresentable {
             window.webkit.messageHandlers.digipal.postMessage({
                 action: 'restartApp'
             });
+        },
+        scanLocalServers: function() {
+            return new Promise(function(resolve) {
+                window.__digipal_resolveLocalScan = resolve;
+                window.webkit.messageHandlers.digipal.postMessage({ action: 'scanLocalServers' });
+            });
         }
     };
     window.__digipal_localPaths = {};
@@ -191,9 +197,21 @@ struct PlayerWebView: NSViewRepresentable {
                 MediaManager.shared.deleteAllMedia()
                 updateStorageInfo()
 
-            default:
-                break
-            }
+            case "scanLocalServers":
+                  let bonjourBrowser = BonjourBrowser()
+                  bonjourBrowser.startBrowsing()
+                  DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self, bonjourBrowser] in
+                      let servers = bonjourBrowser.discoveredServers
+                      bonjourBrowser.stopBrowsing()
+                      let urlList = servers.map { "\"\($0.url)\"" }.joined(separator: ",")
+                      let json = "[\(urlList)]"
+                      let js = "if(window.__digipal_resolveLocalScan){window.__digipal_resolveLocalScan(\(json));window.__digipal_resolveLocalScan=null;}"
+                      self?.webView?.evaluateJavaScript(js)
+                  }
+
+              default:
+                  break
+              }
         }
 
         private func notifyMediaDownloaded(objectPath: String, localUrl: String) {
