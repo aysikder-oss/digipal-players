@@ -382,6 +382,11 @@ function setupMediaIPC() {
     event.returnValue = bonjourBrowser ? JSON.stringify(bonjourBrowser.getServers()) : '[]';
   });
 
+  ipcMain.on('network:scanLocalServers', (event) => {
+    const servers = bonjourBrowser ? bonjourBrowser.getServers() : [];
+    event.returnValue = JSON.stringify(servers.map(s => s.url));
+  });
+
   ipcMain.on('device:paired', (_event, url) => {
     const pairUrl = url || serverUrl;
     if (pairUrl) {
