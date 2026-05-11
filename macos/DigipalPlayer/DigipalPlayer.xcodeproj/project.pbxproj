@@ -18,7 +18,6 @@
 		A100000F /* NetworkScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000E; };
                 A1000009 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A2000009; };
                 A100000A /* CloudChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000D; };
-                                A100000F /* NetworkScanner.swift in Sources */,
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
