@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { HardwareManager } = require('./hardware');
 const MediaManager = require('./media-manager');
+const BonjourBrowser = require('./bonjour-browser');
 
 const PLAYER_PATH = '/tv';
 const CONFIG_FILE = 'config.json';
@@ -13,6 +14,7 @@ let kioskMode = false;
 let hardwareManager = null;
 let serverUrl = '';
 let mediaManager = null;
+let bonjourBrowser = null;
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'local-media', privileges: { bypassCSP: true, stream: true, supportFetchAPI: true } }
@@ -301,7 +303,12 @@ function setupMediaIPC() {
   });
 
   ipcMain.on('bonjour:getServers', (event) => {
-    event.returnValue = '[]';
+    event.returnValue = bonjourBrowser ? JSON.stringify(bonjourBrowser.getServers()) : '[]';
+  });
+
+  ipcMain.on('network:scanLocalServers', (event) => {
+    const servers = bonjourBrowser ? bonjourBrowser.getServers() : [];
+    event.returnValue = JSON.stringify(servers.map(s => s.url));
   });
 
   ipcMain.on('device:paired', (_event, url) => {
@@ -321,6 +328,10 @@ app.on('ready', async () => {
 
   mediaManager = new MediaManager(app.getPath('userData'));
   mediaManager.cleanupOrphans();
+
+  bonjourBrowser = new BonjourBrowser();
+  bonjourBrowser.start();
+
   setupMediaIPC();
 
   // Stage 1: always show loading screen first
@@ -347,6 +358,7 @@ app.on('window-all-closed', () => {
   if (hardwareManager) {
     hardwareManager.stop();
   }
+  if (bonjourBrowser) bonjourBrowser.stop();
   globalShortcut.unregisterAll();
   app.quit();
 });
