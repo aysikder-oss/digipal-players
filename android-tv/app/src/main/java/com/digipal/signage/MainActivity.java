@@ -259,7 +259,68 @@ public class MainActivity extends Activity {
             return getServerUrl();
         }
 
-        @JavascriptInterface
+
+          @JavascriptInterface
+          public String scanLocalServers() {
+              android.net.nsd.NsdManager nsdManager =
+                  (android.net.nsd.NsdManager) getSystemService(Context.NSD_SERVICE);
+              if (nsdManager == null) return "[]";
+
+              final java.util.List<String> found =
+                  java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+              final java.util.concurrent.atomic.AtomicInteger pending =
+                  new java.util.concurrent.atomic.AtomicInteger(0);
+
+              android.net.nsd.NsdManager.DiscoveryListener discoveryListener =
+                  new android.net.nsd.NsdManager.DiscoveryListener() {
+                      @Override public void onStartDiscoveryFailed(String t, int e) {}
+                      @Override public void onStopDiscoveryFailed(String t, int e) {}
+                      @Override public void onDiscoveryStarted(String t) {}
+                      @Override public void onDiscoveryStopped(String t) {}
+                      @Override public void onServiceLost(android.net.nsd.NsdServiceInfo si) {}
+                      @Override
+                      public void onServiceFound(android.net.nsd.NsdServiceInfo serviceInfo) {
+                          pending.incrementAndGet();
+                          nsdManager.resolveService(serviceInfo,
+                              new android.net.nsd.NsdManager.ResolveListener() {
+                                  @Override public void onResolveFailed(android.net.nsd.NsdServiceInfo si, int err) {
+                                      pending.decrementAndGet();
+                                  }
+                                  @Override
+                                  public void onServiceResolved(android.net.nsd.NsdServiceInfo si) {
+                                      try {
+                                          java.net.InetAddress host = si.getHost();
+                                          if (host != null) {
+                                              found.add("http://" + host.getHostAddress() + ":" + si.getPort());
+                                          }
+                                      } catch (Exception ignored) {
+                                      } finally {
+                                          pending.decrementAndGet();
+                                      }
+                                  }
+                              });
+                      }
+                  };
+
+              try {
+                  nsdManager.discoverServices("_digipal._tcp.",
+                      android.net.nsd.NsdManager.PROTOCOL_DNS_SD, discoveryListener);
+                  Thread.sleep(3000);
+                  nsdManager.stopServiceDiscovery(discoveryListener);
+                  long deadline = System.currentTimeMillis() + 1000;
+                  while (pending.get() > 0 && System.currentTimeMillis() < deadline) {
+                      Thread.sleep(100);
+                  }
+              } catch (InterruptedException e) {
+                  Thread.currentThread().interrupt();
+              } catch (Exception ignored) {}
+
+              org.json.JSONArray arr = new org.json.JSONArray();
+              for (String url : found) arr.put(url);
+              return arr.toString();
+          }
+
+          @JavascriptInterface
         public void notifyPaired(String url) {
             SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
             if (prefs.getBoolean("cloud_pairing_pending", false)) {
