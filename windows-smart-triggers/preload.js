@@ -4,6 +4,9 @@ contextBridge.exposeInMainWorld('Android', {
   notifyPaired: (url) => {
     ipcRenderer.send('device:paired', url || '');
   },
+  scanLocalServers: () => {
+    return ipcRenderer.sendSync('network:scanLocalServers');
+  },
 });
 
 const HW_CHANNELS = [
