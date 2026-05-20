@@ -2,7 +2,7 @@ import Foundation
 import Network
 import Combine
 
-struct DiscoveredServer: Identifiable {
+struct DiscoveredServer: Identifiable, Equatable {
     let id = UUID()
     let name: String
     let url: String
