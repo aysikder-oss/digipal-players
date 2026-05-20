@@ -57,6 +57,29 @@ DigipalPlayer/
     └── BonjourBrowser.swift  # mDNS browser for _digipal._tcp
 ```
 
+## First Launch (Unsigned Build)
+
+Because the app is not signed or notarized, macOS Gatekeeper will block it on first run. The DMG includes **"Open Digipal Player.command"** — a helper script that clears the quarantine flag automatically.
+
+**Quickest method — use the included launcher:**
+1. Open the DMG and drag `Digipal Player.app` to your Applications folder (or keep it on your Desktop).
+2. Copy `Open Digipal Player.command` to the **same folder** as the app.
+3. Double-click `Open Digipal Player.command`. The app will open immediately.
+4. After the first successful launch, you can open the app normally.
+
+**Manual method — Terminal:**
+```bash
+xattr -dr com.apple.quarantine "/Applications/Digipal Player.app"
+open "/Applications/Digipal Player.app"
+```
+
+**Manual method — Right-click:**
+1. Right-click (or Control-click) `Digipal Player.app`
+2. Choose **Open** from the context menu
+3. Click **Open** in the Gatekeeper dialog
+
+> You only need to do this once. After the first approved launch, macOS remembers the exception.
+
 ## Distribution
 
 GitHub Actions builds unsigned `.dmg` and `.app` bundles. For signed distribution:
