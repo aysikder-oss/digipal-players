@@ -48,14 +48,12 @@ class AppState: ObservableObject {
     }
 
     private let defaultCloudUrl = "https://digipalsignage.com"
-    private let discoveryTimeoutSeconds: Double = 8.0
+    private let discoveryTimeoutSeconds: Double = 4.0
     private let healthCheckIntervalSeconds: Double = 30.0
     private let reconnectBaseSeconds: Double = 5.0
     private let reconnectMaxSeconds: Double = 60.0
-    private let maxRetryBeforeSetup: Int = 3
 
     private var bonjourBrowser: BonjourBrowser?
-    private var networkScanner: NetworkScanner?
     private var discoveryTimer: Timer?
     private var healthCheckTimer: Timer?
     private var localHealthFailures: Int = 0
@@ -85,7 +83,6 @@ class AppState: ObservableObject {
     func startAutoDiscovery() {
         isSearching = true
         showSetup = false
-        neitherReachableAttempts = 0
 
         bonjourBrowser = BonjourBrowser()
         bonjourBrowser?.startBrowsing()
@@ -115,56 +112,35 @@ class AppState: ObservableObject {
     }
 
     private func checkCloudAndConnect() {
-        Task {
-            let scanner = NetworkScanner()
-            self.networkScanner = scanner
-            print("[AppState] Bonjour discovery failed, trying network scan...")
-            let found = await scanner.scan()
-            if let hub = found.first {
-                await MainActor.run {
-                    self.neitherReachableAttempts = 0
-                    self.connectTo(url: hub.url, mode: "LOCAL", manual: false)
-                }
-                return
-            }
-
-            guard let url = URL(string: "\(defaultCloudUrl)/api/health") else {
-                await MainActor.run { self.handleConnectionFailure() }
-                return
-            }
-
-            var request = URLRequest(url: url)
-            request.timeoutInterval = 5
-
-            URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
-                DispatchQueue.main.async {
-                    guard let self = self else { return }
-                    if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-                        self.neitherReachableAttempts = 0
-                        self.connectTo(url: self.defaultCloudUrl, mode: "CLOUD", manual: false)
-                    } else {
-                        self.handleConnectionFailure()
-                    }
-                }
-            }.resume()
-        }
-    }
-
-    private func handleConnectionFailure() {
-        neitherReachableAttempts += 1
-
-        if neitherReachableAttempts >= maxRetryBeforeSetup {
-            print("[AppState] Max retries reached (\(maxRetryBeforeSetup)), showing setup screen")
-            showSetupScreen()
+        guard let url = URL(string: "\(defaultCloudUrl)/api/health") else {
+            startNeitherReachableRetry()
             return
         }
 
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 5
+
+        URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                    self.neitherReachableAttempts = 0
+                    self.connectTo(url: self.defaultCloudUrl, mode: "CLOUD", manual: false)
+                } else {
+                    self.startNeitherReachableRetry()
+                }
+            }
+        }.resume()
+    }
+
+    private func startNeitherReachableRetry() {
+        neitherReachableAttempts += 1
         let delay = min(
             reconnectBaseSeconds * pow(2.0, Double(neitherReachableAttempts - 1)),
             reconnectMaxSeconds
         )
 
-        print("[AppState] Neither server reachable, retrying in \(Int(delay))s (attempt \(neitherReachableAttempts)/\(maxRetryBeforeSetup))")
+        print("[AppState] Neither server reachable, retrying in \(Int(delay))s (attempt \(neitherReachableAttempts))")
 
         neitherReachableTimer?.invalidate()
         neitherReachableTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
@@ -178,12 +154,6 @@ class AppState: ObservableObject {
 
             self.checkCloudAndConnect()
         }
-    }
-
-    private func showSetupScreen() {
-        isSearching = false
-        showSetup = true
-        startMdnsBrowsingBackground()
     }
 
     func connectTo(url: String, mode: String, manual: Bool) {
