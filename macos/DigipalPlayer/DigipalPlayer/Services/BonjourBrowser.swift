@@ -1,103 +1,126 @@
 import Foundation
-  import Combine
+import Network
+import Combine
 
-  struct DiscoveredServer: Identifiable, Equatable {
-      let id = UUID()
-      let name: String
-      let url: String
-      let port: Int
+struct DiscoveredServer: Identifiable {
+    let id = UUID()
+    let name: String
+    let url: String
+    let port: Int
+}
 
-      static func == (lhs: DiscoveredServer, rhs: DiscoveredServer) -> Bool {
-          lhs.url == rhs.url && lhs.name == rhs.name
-      }
-  }
+class BonjourBrowser: ObservableObject {
+    @Published var discoveredServers: [DiscoveredServer] = []
 
-  class BonjourBrowser: NSObject, ObservableObject, NetServiceBrowserDelegate, NetServiceDelegate {
-      @Published var discoveredServers: [DiscoveredServer] = []
+    private var browser: NWBrowser?
+    private var pendingConnections: [String: NWConnection] = [:]
 
-      private var browser: NetServiceBrowser?
-      private var resolvingServices: [NetService] = []
+    func startBrowsing() {
+        stopBrowsing()
 
-      func startBrowsing() {
-          NSLog("[Bonjour] Starting browser for _digipal._tcp in domain local.")
-          browser = NetServiceBrowser()
-          browser?.delegate = self
-          browser?.searchForServices(ofType: "_digipal._tcp.", inDomain: "local.")
-      }
+        let parameters = NWParameters.tcp
+        parameters.includePeerToPeer = true
 
-      func stopBrowsing() {
-          NSLog("[Bonjour] Stopping browser")
-          browser?.stop()
-          browser = nil
-          resolvingServices.removeAll()
-      }
+        let descriptor = NWBrowser.Descriptor.bonjourWithTXTRecord(
+            type: "_digipal._tcp",
+            domain: "local."
+        )
 
-      func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
-          NSLog("[Bonjour] Found service: %@ (moreComing: %@)", service.name, moreComing ? "yes" : "no")
-          service.delegate = self
-          resolvingServices.append(service)
-          service.resolve(withTimeout: 5.0)
-      }
+        let b = NWBrowser(for: descriptor, using: parameters)
+        self.browser = b
 
-      func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
-          NSLog("[Bonjour] Lost service: %@", service.name)
-          DispatchQueue.main.async {
-              self.discoveredServers.removeAll { $0.name == service.name }
-          }
-      }
+        b.browseResultsChangedHandler = { [weak self] _, changes in
+            guard let self = self else { return }
+            for change in changes {
+                switch change {
+                case .added(let result):
+                    self.resolveService(result.endpoint)
+                case .removed(let result):
+                    self.handleRemoval(result.endpoint)
+                default:
+                    break
+                }
+            }
+        }
 
-      func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
-          NSLog("[Bonjour] Browser failed to search: %@", errorDict.description)
-      }
+        b.start(queue: .main)
+    }
 
-      func netServiceBrowserDidStopSearch(_ browser: NetServiceBrowser) {
-          NSLog("[Bonjour] Browser stopped searching")
-      }
+    func stopBrowsing() {
+        browser?.cancel()
+        browser = nil
+        pendingConnections.values.forEach { $0.cancel() }
+        pendingConnections.removeAll()
+        DispatchQueue.main.async { self.discoveredServers.removeAll() }
+    }
 
-      func netServiceDidResolveAddress(_ sender: NetService) {
-          guard let addresses = sender.addresses else {
-              NSLog("[Bonjour] Service %@ resolved but has no addresses", sender.name)
-              return
-          }
+    private func endpointKey(_ endpoint: NWEndpoint) -> String {
+        "\(endpoint)"
+    }
 
-          NSLog("[Bonjour] Resolving service: %@ (%d addresses)", sender.name, addresses.count)
+    private func resolveService(_ endpoint: NWEndpoint) {
+        let key = endpointKey(endpoint)
+        guard pendingConnections[key] == nil else { return }
 
-          for addressData in addresses {
-              let address = addressData.withUnsafeBytes { ptr -> String? in
-                  let sockAddr = ptr.load(as: sockaddr.self)
-                  if sockAddr.sa_family == UInt8(AF_INET) {
-                      let addr4 = ptr.load(as: sockaddr_in.self)
-                      var hostname = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
-                      var addr = addr4.sin_addr
-                      inet_ntop(AF_INET, &addr, &hostname, socklen_t(INET_ADDRSTRLEN))
-                      return String(cString: hostname)
-                  }
-                  return nil
-              }
+        let conn = NWConnection(to: endpoint, using: .tcp)
+        pendingConnections[key] = conn
 
-              if let ip = address {
-                  let port = sender.port
-                  let url = "http://\(ip):\(port)"
-                  let server = DiscoveredServer(
-                      name: sender.name,
-                      url: url,
-                      port: port
-                  )
+        conn.stateUpdateHandler = { [weak self] state in
+            guard let self = self else { return }
+            switch state {
+            case .ready:
+                if let remoteEP = conn.currentPath?.remoteEndpoint,
+                   case .hostPort(let host, let port) = remoteEP {
+                    let hostStr = self.cleanHost("\(host)")
+                    let portInt = Int(port.rawValue)
+                    let name = self.serviceName(from: endpoint)
+                    let url = self.formatUrl(host: hostStr, port: portInt)
+                    DispatchQueue.main.async {
+                        if !self.discoveredServers.contains(where: { $0.url == url }) {
+                            self.discoveredServers.append(
+                                DiscoveredServer(name: name, url: url, port: portInt)
+                            )
+                        }
+                    }
+                }
+                conn.cancel()
+                DispatchQueue.main.async { self.pendingConnections.removeValue(forKey: key) }
+            case .failed, .cancelled:
+                DispatchQueue.main.async { self.pendingConnections.removeValue(forKey: key) }
+            default:
+                break
+            }
+        }
 
-                  NSLog("[Bonjour] Resolved service: %@ at %@", sender.name, url)
+        conn.start(queue: .global(qos: .utility))
+    }
 
-                  DispatchQueue.main.async {
-                      if !self.discoveredServers.contains(where: { $0.url == url }) {
-                          self.discoveredServers.append(server)
-                      }
-                  }
-                  break
-              }
-          }
-      }
+    private func handleRemoval(_ endpoint: NWEndpoint) {
+        let key = endpointKey(endpoint)
+        pendingConnections[key]?.cancel()
+        pendingConnections.removeValue(forKey: key)
+        let name = serviceName(from: endpoint)
+        DispatchQueue.main.async {
+            self.discoveredServers.removeAll { $0.name == name }
+        }
+    }
 
-      func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
-          NSLog("[Bonjour] Failed to resolve service: %@ error: %@", sender.name, errorDict.description)
-      }
-  }
-  
+    private func serviceName(from endpoint: NWEndpoint) -> String {
+        if case .service(let name, _, _, _) = endpoint { return name }
+        return "Digipal Hub"
+    }
+
+    private func cleanHost(_ raw: String) -> String {
+        if let idx = raw.firstIndex(of: "%") {
+            return String(raw[..<idx])
+        }
+        return raw
+    }
+
+    private func formatUrl(host: String, port: Int) -> String {
+        if host.contains(":") {
+            return "http://[\(host)]:\(port)"
+        }
+        return "http://\(host):\(port)"
+    }
+}
