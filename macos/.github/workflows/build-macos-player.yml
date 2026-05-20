@@ -41,6 +41,12 @@ jobs:
           mkdir -p build/app
           cp -R "build/DigipalPlayer.xcarchive/Products/Applications/Digipal Player.app" build/app/
 
+      - name: Add launcher script to app folder
+        working-directory: DigipalPlayer
+        run: |
+          cp ../open-digipal-player.command "build/app/Open Digipal Player.command"
+          chmod +x "build/app/Open Digipal Player.command"
+
       - name: Create DMG
         working-directory: DigipalPlayer
         run: |
