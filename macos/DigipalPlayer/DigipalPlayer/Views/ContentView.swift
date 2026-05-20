@@ -35,11 +35,20 @@ struct ContentView: View {
                     .environmentObject(appState)
                     .edgesIgnoringSafeArea(.all)
                     .onAppear {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        var token: NSObjectProtocol?
+                        token = NotificationCenter.default.addObserver(
+                            forName: NSWindow.didBecomeMainNotification,
+                            object: nil,
+                            queue: .main
+                        ) { _ in
                             if let window = NSApp.mainWindow,
                                !window.styleMask.contains(.fullScreen) {
                                 window.toggleFullScreen(nil)
                             }
+                            if let t = token {
+                                NotificationCenter.default.removeObserver(t)
+                            }
+                            token = nil
                         }
                     }
             } else {
