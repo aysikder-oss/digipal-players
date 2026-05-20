@@ -13,6 +13,9 @@ const CONFIG_FILE = 'config.json';
 const CURSOR_HIDE_DELAY = 3000;
 const DEFAULT_CLOUD_URL = 'https://digipalsignage.com';
 
+app.commandLine.appendSwitch('no-sandbox');
+app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
+
 let mainWindow = null;
 let loadingWindow = null;
 let tray = null;
@@ -454,7 +457,7 @@ function setupAutoStart(enabled) {
   const desktopEntry = `[Desktop Entry]
 Type=Application
 Name=Digipal Player
-Exec=digipal-linux-player
+Exec=digipal-linux-player --no-sandbox
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=${enabled}
