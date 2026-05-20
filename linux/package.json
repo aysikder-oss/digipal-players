@@ -26,7 +26,7 @@
   },
   "build": {
     "appId": "com.digipal.linux-player",
-    "productName": "Digipal Player",
+    "productName": "DigipalPlayer",
     "directories": {
       "output": "release"
     },
@@ -44,24 +44,15 @@
       "target": [
         {
           "target": "deb",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
+          "arch": ["x64", "arm64"]
         },
         {
           "target": "AppImage",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
+          "arch": ["x64", "arm64"]
         },
         {
           "target": "rpm",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
+          "arch": ["x64", "arm64"]
         }
       ],
       "icon": "icon.png",
@@ -104,10 +95,5 @@
         "avahi-libs"
       ]
     }
-  },
-  "homepage": "https://digipal.app",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/aysikder-oss/digipal-players.git"
   }
 }
