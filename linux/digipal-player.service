@@ -7,11 +7,10 @@ StartLimitIntervalSec=60
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/digipal-linux-player
+ExecStart=/usr/bin/digipal-linux-player --no-sandbox
 Restart=on-failure
 RestartSec=5
-Environment=DISPLAY=:0
-Environment=XAUTHORITY=%h/.Xauthority
+Environment=ELECTRON_OZONE_PLATFORM_HINT=auto
 
 [Install]
 WantedBy=default.target
