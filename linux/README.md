@@ -102,6 +102,53 @@ systemctl --user enable digipal-player
 systemctl --user start digipal-player
 ```
 
+## Troubleshooting
+
+### App won't open / silently exits after installation
+
+**Symptom:** Double-clicking the app does nothing, or the app closes immediately after launch.
+
+**Cause:** Electron requires the `--no-sandbox` flag on modern Linux kernels (Ubuntu 22.04+, Fedora 37+) when running without root privileges. This is already included in the packaged release. If you're running from source or an older build, pass the flag explicitly:
+
+```bash
+digipal-linux-player --no-sandbox
+# or from source:
+npx electron . --no-sandbox
+```
+
+### App doesn't open on Wayland (GNOME/KDE)
+
+If you're on a Wayland session and the app doesn't appear, the display backend may not be detected correctly. The packaged release sets `ELECTRON_OZONE_PLATFORM_HINT=auto` automatically. For manual overrides:
+
+```bash
+# Force Wayland
+ELECTRON_OZONE_PLATFORM_HINT=wayland digipal-linux-player --no-sandbox
+
+# Force X11 (XWayland fallback)
+ELECTRON_OZONE_PLATFORM_HINT=x11 digipal-linux-player --no-sandbox
+```
+
+### systemd service won't start (headless kiosk)
+
+Make sure your user session has a running display server before starting the service. For headless kiosks, use a display manager like `lightdm` with auto-login, or start an X session manually:
+
+```bash
+# Check if the service can see a display
+systemctl --user status digipal-player
+
+# View logs
+journalctl --user -u digipal-player -f
+```
+
+### Installation path issues
+
+The app installs to `/opt/DigipalPlayer/`. If you see errors referencing `/opt/Digipal Player/` (with a space), you have a build from before v1.5.3. Uninstall and reinstall the latest package:
+
+```bash
+sudo dpkg --remove digipal-linux-player
+sudo dpkg -i digipal-player_1.5.3_amd64.deb
+```
+
 ## Raspberry Pi Setup
 
 ### Recommended Hardware
