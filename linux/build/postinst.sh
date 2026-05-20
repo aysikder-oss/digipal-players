@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-APP_DIR="/opt/Digipal Player"
+APP_DIR="/opt/DigipalPlayer"
 RESOURCES_DIR="$APP_DIR/resources"
 
 SYSTEMD_SERVICE_SRC="$RESOURCES_DIR/digipal-player.service"
