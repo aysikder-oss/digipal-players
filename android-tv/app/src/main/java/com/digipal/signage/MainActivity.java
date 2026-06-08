@@ -263,7 +263,7 @@ public class MainActivity extends Activity {
           @JavascriptInterface
           public String scanLocalServers() {
               android.net.nsd.NsdManager nsdManager =
-                  (android.net.nsd.NsdManager) getSystemService(Context.NSD_SERVICE);
+                  (android.net.nsd.NsdManager) getSystemService(android.content.Context.NSD_SERVICE);
               if (nsdManager == null) return "[]";
 
               final java.util.List<String> found =
