@@ -37,7 +37,7 @@ public class MediaDownloadManager {
     public MediaDownloadManager(Context context) {
         this.context = context;
         this.prefs = context.getSharedPreferences(MANIFEST_PREFS, Context.MODE_PRIVATE);
-        this.executor = Executors.newFixedThreadPool(2);
+        this.executor = Executors.newFixedThreadPool(4);
         this.mainHandler = new Handler(Looper.getMainLooper());
         this.activeDownloads = new HashSet<>();
     }
