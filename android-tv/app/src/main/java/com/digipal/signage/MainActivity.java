@@ -271,12 +271,17 @@ public class MainActivity extends Activity {
               final java.util.concurrent.atomic.AtomicInteger pending =
                   new java.util.concurrent.atomic.AtomicInteger(0);
 
+              final java.util.concurrent.CountDownLatch stopLatch =
+                  new java.util.concurrent.CountDownLatch(1);
+              final java.util.concurrent.CountDownLatch resolveLatch =
+                  new java.util.concurrent.CountDownLatch(1);
+
               android.net.nsd.NsdManager.DiscoveryListener discoveryListener =
                   new android.net.nsd.NsdManager.DiscoveryListener() {
-                      @Override public void onStartDiscoveryFailed(String t, int e) {}
+                      @Override public void onStartDiscoveryFailed(String t, int e) { stopLatch.countDown(); }
                       @Override public void onStopDiscoveryFailed(String t, int e) {}
                       @Override public void onDiscoveryStarted(String t) {}
-                      @Override public void onDiscoveryStopped(String t) {}
+                      @Override public void onDiscoveryStopped(String t) { stopLatch.countDown(); }
                       @Override public void onServiceLost(android.net.nsd.NsdServiceInfo si) {}
                       @Override
                       public void onServiceFound(android.net.nsd.NsdServiceInfo serviceInfo) {
@@ -284,7 +289,7 @@ public class MainActivity extends Activity {
                           nsdManager.resolveService(serviceInfo,
                               new android.net.nsd.NsdManager.ResolveListener() {
                                   @Override public void onResolveFailed(android.net.nsd.NsdServiceInfo si, int err) {
-                                      pending.decrementAndGet();
+                                      if (pending.decrementAndGet() == 0) resolveLatch.countDown();
                                   }
                                   @Override
                                   public void onServiceResolved(android.net.nsd.NsdServiceInfo si) {
@@ -295,7 +300,7 @@ public class MainActivity extends Activity {
                                           }
                                       } catch (Exception ignored) {
                                       } finally {
-                                          pending.decrementAndGet();
+                                          if (pending.decrementAndGet() == 0) resolveLatch.countDown();
                                       }
                                   }
                               });
@@ -305,11 +310,12 @@ public class MainActivity extends Activity {
               try {
                   nsdManager.discoverServices("_digipal._tcp.",
                       android.net.nsd.NsdManager.PROTOCOL_DNS_SD, discoveryListener);
-                  Thread.sleep(3000);
-                  nsdManager.stopServiceDiscovery(discoveryListener);
-                  long deadline = System.currentTimeMillis() + 1000;
-                  while (pending.get() > 0 && System.currentTimeMillis() < deadline) {
-                      Thread.sleep(100);
+                  new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                      try { nsdManager.stopServiceDiscovery(discoveryListener); } catch (Exception ignored) {}
+                  }, 3000);
+                  stopLatch.await(4000, java.util.concurrent.TimeUnit.MILLISECONDS);
+                  if (pending.get() > 0) {
+                      resolveLatch.await(1000, java.util.concurrent.TimeUnit.MILLISECONDS);
                   }
               } catch (InterruptedException e) {
                   Thread.currentThread().interrupt();
