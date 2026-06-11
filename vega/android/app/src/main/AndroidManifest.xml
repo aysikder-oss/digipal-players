@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
     <!-- Declare this is a Leanback (TV) app -->
     <uses-feature android:name="android.software.leanback" android:required="true" />
@@ -35,16 +36,49 @@
             </intent-filter>
         </activity>
 
-        <!-- Auto-start on boot -->
+        <!--
+            BootReceiver: auto-start on device power-on.
+
+            Three intents are handled:
+              BOOT_COMPLETED        — standard boot (all Android/FireOS versions)
+              LOCKED_BOOT_COMPLETED — FireOS 8 fires this earlier, before user credential
+                                      unlock; directBootAware="true" lets us receive it
+              QUICKBOOT_POWERON     — Amazon fast-boot / HTC variant
+
+            The receiver starts BootLaunchService instead of calling startActivity()
+            directly because Android 10+ / FireOS 7+ silently drops background
+            startActivity() calls from non-system apps.
+        -->
         <receiver
-            android:name=".BootReceiver"
+            android:name="com.digipalvega.BootReceiver"
             android:enabled="true"
-            android:exported="true">
+            android:exported="true"
+            android:directBootAware="true">
             <intent-filter android:priority="1000">
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
+
+        <!--
+            BootLaunchService: short-lived foreground service that opens MainActivity.
+            Runs as a foreground service so it can call startActivity() on Android 10+.
+            Stops itself immediately after launching the activity and WatchdogService.
+        -->
+        <service
+            android:name="com.digipalvega.BootLaunchService"
+            android:exported="false"
+            android:directBootAware="true" />
+
+        <!--
+            WatchdogService: persistent foreground service that relaunches the app
+            if it crashes or is killed by the OS.
+            START_STICKY ensures the OS restarts this service automatically.
+        -->
+        <service
+            android:name="com.digipalvega.WatchdogService"
+            android:exported="false" />
 
     </application>
 
