@@ -104,6 +104,15 @@ public class MainActivity extends Activity {
         mediaDownloadManager.setWebView(webView);
         mediaDownloadManager.cleanupOrphans();
 
+        
+          // Start crash watchdog — relaunches app within 10s if it crashes or is killed.
+          Intent watchdogIntent = new Intent(this, WatchdogService.class);
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+              startForegroundService(watchdogIntent);
+          } else {
+              startService(watchdogIntent);
+          }
+  
         String serverUrl = getServerUrl();
         loadPlayerUrl(serverUrl);
     }
