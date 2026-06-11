@@ -85,11 +85,19 @@
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"
-            android:exported="true">
+            android:exported="true"
+            android:directBootAware="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
-    </application>
-</manifest>
+        <!-- Foreground service that safely opens MainActivity on boot (API 29+ fix). -->
+          <service android:name=".BootLaunchService" android:exported="false" android:directBootAware="true" />
+
+          <!-- Persistent watchdog: polls every 10s, restarts app within 1s of crash. -->
+          <service android:name=".WatchdogService" android:enabled="true" android:exported="false" />
+
+      </application>
+  </manifest>
