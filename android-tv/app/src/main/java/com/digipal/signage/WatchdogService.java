@@ -23,7 +23,7 @@ package com.digipal.signage;
   public class WatchdogService extends Service {
       private static final String CHANNEL_ID = "digipal_watchdog";
       private static final int NOTIF_ID = 1002;
-      private static final long CHECK_MS = 10_000L;
+      private static final long CHECK_MS = 30_000L;
       private static final long RESTART_MS = 1_000L;
       private Handler handler;
       private Runnable loop;
@@ -53,7 +53,7 @@ package com.digipal.signage;
           List<ActivityManager.RunningAppProcessInfo> ps = am.getRunningAppProcesses();
           if (ps == null) return true;
           for (ActivityManager.RunningAppProcessInfo p : ps)
-              if (p.processName.equals(getPackageName()) && p.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND) return true;
+              if (p.processName.equals(getPackageName()) && p.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE) return true;
           return false;
       }
 
