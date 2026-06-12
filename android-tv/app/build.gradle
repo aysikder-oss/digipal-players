@@ -19,7 +19,7 @@ plugins {
           applicationId "com.digipal.signage"
           minSdk 21
           targetSdk 35
-          versionCode 15
+          versionCode 16
           versionName "3.8.6"
 
           buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
