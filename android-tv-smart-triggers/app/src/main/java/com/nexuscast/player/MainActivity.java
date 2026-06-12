@@ -74,7 +74,7 @@ public class MainActivity extends Activity {
         );
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            getWindow().setSustainedPerformanceMode(true);
+            try { getWindow().setSustainedPerformanceMode(true); } catch (Exception ignored) {}
         }
 
         hideSystemUI();
@@ -82,8 +82,20 @@ public class MainActivity extends Activity {
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.parseColor("#0a0e1a"));
 
-        webView = new WebView(this);
-        setupWebView();
+        try {
+              webView = new WebView(this);
+          } catch (Exception e) {
+              android.widget.TextView errTv = new android.widget.TextView(this);
+              errTv.setText("WebView unavailable.\n\nPlease update Android System WebView from the Play Store, then relaunch Digipal.");
+              errTv.setTextColor(android.graphics.Color.WHITE);
+              errTv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 16f);
+              errTv.setPadding(80, 80, 80, 80);
+              errTv.setGravity(android.view.Gravity.CENTER);
+              root.addView(errTv);
+              setContentView(root);
+              return;
+          }
+          setupWebView();
         root.addView(webView, new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
@@ -140,7 +152,7 @@ public class MainActivity extends Activity {
                 });
             }
         });
-        hardwareManager.start();
+        try { hardwareManager.start(); } catch (Exception ignored) {}
 
         mediaDownloadManager = new MediaDownloadManager(this);
         mediaDownloadManager.setWebView(webView);
