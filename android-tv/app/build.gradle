@@ -1,49 +1,59 @@
 plugins {
-    id 'com.android.application'
-}
+      id 'com.android.application'
+  }
 
-android {
-    namespace 'com.digipal.signage'
-    compileSdk 35
+  android {
+      namespace 'com.digipal.signage'
+      compileSdk 35
 
-    defaultConfig {
-        applicationId "com.digipal.signage"
-        minSdk 21
-        targetSdk 35
-        versionCode 14
-        versionName "3.8.6"
+      signingConfigs {
+          release {
+              storeFile file(System.getenv("KEYSTORE_FILE") ?: "keystore.jks")
+              storePassword System.getenv("KEYSTORE_PASSWORD") ?: ""
+              keyAlias System.getenv("KEY_ALIAS") ?: ""
+              keyPassword System.getenv("KEY_PASSWORD") ?: ""
+          }
+      }
 
-        // The URL of your Digipal server - change this to your published URL
-        buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
-    }
+      defaultConfig {
+          applicationId "com.digipal.signage"
+          minSdk 21
+          targetSdk 35
+          versionCode 14
+          versionName "3.8.6"
 
-    buildTypes {
-        release {
-            minifyEnabled true
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-        }
-        debug {
-            minifyEnabled false
-        }
-    }
+          buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
+      }
 
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
-    }
+      buildTypes {
+          release {
+              signingConfig signingConfigs.release
+              minifyEnabled true
+              proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+          }
+          debug {
+              minifyEnabled false
+          }
+      }
 
-    buildFeatures {
-        buildConfig true
-    }
+      compileOptions {
+          sourceCompatibility JavaVersion.VERSION_1_8
+          targetCompatibility JavaVersion.VERSION_1_8
+      }
 
-    lintOptions {
-        abortOnError false
-    }
-}
+      buildFeatures {
+          buildConfig true
+      }
 
-dependencies {
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-    implementation 'androidx.leanback:leanback:1.0.0'
-    implementation 'androidx.webkit:webkit:1.9.0'
-    implementation 'com.google.android.material:material:1.11.0'
-}
+      lintOptions {
+          abortOnError false
+      }
+  }
+
+  dependencies {
+      implementation 'androidx.appcompat:appcompat:1.6.1'
+      implementation 'androidx.leanback:leanback:1.0.0'
+      implementation 'androidx.webkit:webkit:1.9.0'
+      implementation 'com.google.android.material:material:1.11.0'
+  }
+  
