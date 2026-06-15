@@ -32,7 +32,11 @@ package com.digipal.signage;
       public void onCreate() {
           super.onCreate();
           ensureChannel();
-          startForeground(NOTIF_ID, buildNotif());
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+              startForeground(NOTIF_ID, buildNotif(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
+          } else {
+              startForeground(NOTIF_ID, buildNotif());
+          }
           handler = new Handler(Looper.getMainLooper());
           loop = new Runnable() {
               @Override public void run() {
