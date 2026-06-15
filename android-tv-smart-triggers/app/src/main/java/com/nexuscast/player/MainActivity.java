@@ -58,6 +58,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        try {
 
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setFlags(
@@ -74,7 +75,7 @@ public class MainActivity extends Activity {
         );
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            try { getWindow().setSustainedPerformanceMode(true); } catch (Exception ignored) {}
+            try { getWindow().setSustainedPerformanceMode(true); } catch (Throwable ignored) {}
         }
 
         hideSystemUI();
@@ -84,7 +85,7 @@ public class MainActivity extends Activity {
 
         try {
               webView = new WebView(this);
-          } catch (Exception e) {
+          } catch (Throwable e) {
               android.widget.TextView errTv = new android.widget.TextView(this);
               errTv.setText("WebView unavailable.\n\nPlease update Android System WebView from the Play Store, then relaunch Digipal.");
               errTv.setTextColor(android.graphics.Color.WHITE);
@@ -152,7 +153,7 @@ public class MainActivity extends Activity {
                 });
             }
         });
-        try { hardwareManager.start(); } catch (Exception ignored) {}
+        try { hardwareManager.start(); } catch (Throwable ignored) {}
 
         mediaDownloadManager = new MediaDownloadManager(this);
         mediaDownloadManager.setWebView(webView);
@@ -169,7 +170,25 @@ public class MainActivity extends Activity {
   
         String serverUrl = getServerUrl();
         loadPlayerUrl(serverUrl);
-    }
+          } catch (Throwable _onCreate_err) {
+              try {
+                  android.widget.LinearLayout errRoot = new android.widget.LinearLayout(this);
+                  errRoot.setOrientation(android.widget.LinearLayout.VERTICAL);
+                  errRoot.setGravity(android.view.Gravity.CENTER);
+                  errRoot.setBackgroundColor(android.graphics.Color.parseColor("#0a0e1a"));
+                  android.widget.TextView errMsg = new android.widget.TextView(this);
+                  errMsg.setText("Startup error (" + "ST" + "):\n"
+                      + _onCreate_err.getClass().getSimpleName() + ": " + _onCreate_err.getMessage()
+                      + "\n\nPlease contact support or reinstall.");
+                  errMsg.setTextColor(android.graphics.Color.WHITE);
+                  errMsg.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15f);
+                  errMsg.setPadding(80, 80, 80, 80);
+                  errMsg.setGravity(android.view.Gravity.CENTER);
+                  errRoot.addView(errMsg);
+                  setContentView(errRoot);
+              } catch (Throwable ignored) {}
+          }
+      }
 
     @SuppressLint("SetJavaScriptEnabled")
     private void setupWebView() {
@@ -367,7 +386,7 @@ public class MainActivity extends Activity {
                 if (alarmManager != null) {
                     alarmManager.set(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + delayMs, pendingIntent);
                 }
-            } catch (Exception ignored) {}
+            } catch (Throwable ignored) {}
         }
     }
 
@@ -393,7 +412,7 @@ public class MainActivity extends Activity {
                     showError("Security Error", "HTTP connections are only allowed to local network servers. Use https:// for public servers.");
                     return;
                 }
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 showError("Invalid URL", "Could not parse server address.");
                 return;
             }
