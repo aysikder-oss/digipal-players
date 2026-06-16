@@ -63,7 +63,7 @@ import android.net.wifi.WifiManager;
     private int dpadPressCount = 0;
     private long dpadFirstPressMs = 0L;
     private android.view.View diagnosticsOverlay = null;
-    private android.os.Handler diagDismissHandler = null;
+    private android.os.Handler diagDismissHandler = new Handler(Looper.getMainLooper());
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -657,14 +657,14 @@ import android.net.wifi.WifiManager;
       }
 
       private void hideDiagnosticsOverlay() {
-          diagDismissHandler.removeCallbacksAndMessages(null);
-          if (diagnosticsOverlay != null) {
-              try {
+          try {
+              diagDismissHandler.removeCallbacksAndMessages(null);
+              if (diagnosticsOverlay != null) {
                   android.widget.FrameLayout root = (android.widget.FrameLayout) getWindow().getDecorView();
                   root.removeView(diagnosticsOverlay);
-              } catch (Throwable ignored) {}
-              diagnosticsOverlay = null;
-          }
+                  diagnosticsOverlay = null;
+              }
+          } catch (Throwable ignored) {}
       }
   
 }
