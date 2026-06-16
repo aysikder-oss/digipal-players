@@ -13,6 +13,7 @@ package com.nexuscast.player;
   import android.os.Handler;
   import android.os.IBinder;
   import android.os.Looper;
+  import android.os.SystemClock;
   import java.util.List;
 
   /**
@@ -27,6 +28,7 @@ package com.nexuscast.player;
       private static final long RESTART_MS = 1_000L;
       private Handler handler;
       private Runnable loop;
+      private PendingIntent crashAlarmPi;
 
       @Override
       public void onCreate() {
@@ -45,11 +47,29 @@ package com.nexuscast.player;
               }
           };
           handler.postDelayed(loop, CHECK_MS);
-      }
+
+            // Standing crash-recovery alarm: fires in 90s and re-arms each cycle.
+            // Ensures app relaunches even if this service is hard-killed before the
+            // periodic Handler loop gets a chance to run.
+            int cpf = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
+            crashAlarmPi = PendingIntent.getService(this, 99, new Intent(this, BootLaunchService.class), cpf);
+            AlarmManager crashAm = (AlarmManager) getSystemService(ALARM_SERVICE);
+            if (crashAm != null) {
+                long earliest = SystemClock.elapsedRealtime() + 90_000L;
+                crashAm.setWindow(AlarmManager.ELAPSED_REALTIME_WAKEUP, earliest, 30_000L, crashAlarmPi);
+            }
+        }
 
       @Override public int onStartCommand(Intent i, int f, int s) { return START_STICKY; }
       @Override public IBinder onBind(Intent i) { return null; }
-      @Override public void onDestroy() { if (handler!=null) handler.removeCallbacks(loop); super.onDestroy(); }
+      @Override public void onDestroy() {
+            if (handler != null) handler.removeCallbacks(loop);
+            if (crashAlarmPi != null) {
+                AlarmManager am2 = (AlarmManager) getSystemService(ALARM_SERVICE);
+                if (am2 != null) am2.cancel(crashAlarmPi);
+            }
+            super.onDestroy();
+        }
 
       private boolean inForeground() {
           ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
@@ -62,10 +82,11 @@ package com.nexuscast.player;
       }
 
       private void restart() {
-          Intent i = new Intent(this, MainActivity.class);
-          i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-          int f = PendingIntent.FLAG_ONE_SHOT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
-          PendingIntent pi = PendingIntent.getActivity(this, 2, i, f);
+            // Use getService(BootLaunchService) — starting a foreground service from an
+            // alarm is not subject to Android 12+ background-activity-launch restrictions.
+            Intent i = new Intent(this, BootLaunchService.class);
+            int f = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
+            PendingIntent pi = PendingIntent.getService(this, 2, i, f);
           AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
           if (am == null) return;
           long at = System.currentTimeMillis() + RESTART_MS;
