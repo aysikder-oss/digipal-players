@@ -72,13 +72,12 @@ package com.digipal.signage;
         }
 
       private boolean inForeground() {
-          ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
-          if (am == null) return true;
-          List<ActivityManager.RunningAppProcessInfo> ps = am.getRunningAppProcesses();
-          if (ps == null) return true;
-          for (ActivityManager.RunningAppProcessInfo p : ps)
-              if (p.processName.equals(getPackageName()) && p.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE) return true;
-          return false;
+          // Use the Activity's own visibility flag instead of process importance.
+          // IMPORTANCE_FOREGROUND_SERVICE (125) is wrong: while WatchdogService runs
+          // as a foreground service the process stays at 125 even when the Activity
+          // is backgrounded by the Home button, so the old check always returned true
+          // and never triggered a relaunch.
+          return MainActivity.activityVisible;
       }
 
       private void restart() {
