@@ -123,11 +123,19 @@ public class HardwareManager {
     }
 
     public void start() {
-        IntentFilter filter = new IntentFilter();
-        filter.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
-        filter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
-        filter.addAction(ACTION_USB_PERMISSION);
-        context.registerReceiver(usbReceiver, filter);
+        // System USB broadcasts come from the OS and need RECEIVER_EXPORTED on API 33+.
+        // Our private permission result must use RECEIVER_NOT_EXPORTED for security.
+        IntentFilter systemFilter = new IntentFilter();
+        systemFilter.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
+        systemFilter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
+        IntentFilter permFilter = new IntentFilter(ACTION_USB_PERMISSION);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(usbReceiver, systemFilter, Context.RECEIVER_EXPORTED);
+            context.registerReceiver(usbReceiver, permFilter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            context.registerReceiver(usbReceiver, systemFilter);
+            context.registerReceiver(usbReceiver, permFilter);
+        }
 
         scanExistingUsbDevices();
         Log.i(TAG, "Hardware manager started");
