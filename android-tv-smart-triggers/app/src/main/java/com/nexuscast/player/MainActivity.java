@@ -63,7 +63,7 @@ import android.net.wifi.WifiManager;
     private int dpadPressCount = 0;
     private long dpadFirstPressMs = 0L;
     private android.view.View diagnosticsOverlay = null;
-    private android.os.Handler diagDismissHandler = new Handler(Looper.getMainLooper());
+    private android.os.Handler diagDismissHandler = new android.os.Handler(android.os.Looper.getMainLooper());
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
