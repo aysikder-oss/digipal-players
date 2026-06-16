@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.digipal.player.smarttriggers">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <!--
+        Required on Android 14+ (API 34) when using foregroundServiceType.
+        Without this permission, startForeground() throws on API 34+ devices.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+    <!-- Camera and microphone permissions for smart trigger detectors
+         (face detection via face-api.js, hand gestures via MediaPipe, etc.).
+         All processing runs on-device; no video frames are sent to the server. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- Declare this is a Leanback (TV) app -->
+    <uses-feature android:name="android.software.leanback" android:required="true" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <!-- Camera is used by smart triggers but not strictly required to run -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.front" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <application
+        android:label="Digipal Smart Player"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:hardwareAccelerated="true"
+        android:largeHeap="true"
+        android:usesCleartextTraffic="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:label="Digipal Smart Player"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:screenOrientation="landscape"
+            android:hardwareAccelerated="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <!-- Leanback launcher for Fire TV / Android TV -->
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            BootReceiver: auto-start on device power-on.
+
+            Three intents are handled:
+              BOOT_COMPLETED        — standard boot (all Android/FireOS versions)
+              LOCKED_BOOT_COMPLETED — FireOS 8 fires this earlier, before user
+                                      credential unlock; directBootAware="true"
+                                      lets us receive it
+              QUICKBOOT_POWERON     — Amazon fast-boot / HTC variant
+
+            The receiver starts BootLaunchService instead of calling
+            startActivity() directly because Android 10+ / FireOS 7+ silently
+            drops background startActivity() calls from non-system apps.
+        -->
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="true"
+            android:directBootAware="true">
+            <intent-filter android:priority="1000">
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+            BootLaunchService: short-lived foreground service that opens
+            MainActivity. Runs in a foreground context so it can call
+            startActivity() on Android 10+. Stops itself after launching
+            MainActivity and WatchdogService.
+
+            foregroundServiceType="specialUse" is required on Android 14+
+            (API 34) — without it, startForeground() throws a
+            MissingForegroundServiceTypeException.
+        -->
+        <service
+            android:name=".BootLaunchService"
+            android:exported="false"
+            android:directBootAware="true"
+            android:foregroundServiceType="specialUse" />
+
+        <!--
+            WatchdogService: persistent foreground service that polls every
+            10 s and relaunches MainActivity within 1 s of detecting it is
+            no longer in the foreground. START_STICKY ensures the OS restarts
+            this service automatically after OOM kills.
+
+            foregroundServiceType includes camera and microphone because the
+            Smart Triggers player keeps the WebView camera/audio session alive
+            for on-device audience detection (face-api.js, MediaPipe).
+            specialUse covers the watchdog purpose itself.
+        -->
+        <service
+            android:name=".WatchdogService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse|camera|microphone" />
+
+    </application>
+
+</manifest>
