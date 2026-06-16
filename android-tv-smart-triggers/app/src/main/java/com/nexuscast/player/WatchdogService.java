@@ -79,7 +79,7 @@ package com.nexuscast.player;
           // as a foreground service the process stays at 125 even when the Activity
           // is backgrounded by the Home button, so the old check always returned true
           // and never triggered a relaunch.
-          return MainActivity.activityVisible;
+          return MainActivity.activityAlive;
       }
 
       private void restart() {
