@@ -42,6 +42,8 @@ public class MainActivity extends Activity {
     private static final String KEY_AUTO_RELAUNCH = "auto_relaunch";
     private static final int PERMISSION_REQUEST_CAMERA = 1001;
     private boolean isUserClosing = false;
+    private View customView;
+    private FrameLayout customViewContainer;
     private HardwareManager hardwareManager;
 
     private static final java.util.regex.Pattern PRIVATE_IP_PATTERN = java.util.regex.Pattern.compile(
@@ -93,7 +95,15 @@ public class MainActivity extends Activity {
               errTv.setPadding(80, 80, 80, 80);
               errTv.setGravity(android.view.Gravity.CENTER);
               root.addView(errTv);
-              setContentView(root);
+              customViewContainer = new FrameLayout(this);
+        customViewContainer.setBackgroundColor(Color.BLACK);
+        customViewContainer.setVisibility(View.GONE);
+        root.addView(customViewContainer, new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+
+        setContentView(root);
               return;
           }
           setupWebView();
@@ -253,6 +263,29 @@ public class MainActivity extends Activity {
             @Override
             public void onPermissionRequest(final PermissionRequest request) {
                 runOnUiThread(() -> request.grant(request.getResources()));
+            }
+
+            @Override
+            public void onShowCustomView(View view, CustomViewCallback callback) {
+                if (customView != null) { callback.onCustomViewHidden(); return; }
+                customView = view;
+                customViewContainer.addView(view, new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                ));
+                customViewContainer.setVisibility(View.VISIBLE);
+                webView.setVisibility(View.GONE);
+                hideSystemUI();
+            }
+
+            @Override
+            public void onHideCustomView() {
+                if (customView == null) return;
+                customViewContainer.removeView(customView);
+                customView = null;
+                customViewContainer.setVisibility(View.GONE);
+                webView.setVisibility(View.VISIBLE);
+                hideSystemUI();
             }
         });
     }
