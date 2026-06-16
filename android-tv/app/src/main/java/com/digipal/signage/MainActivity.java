@@ -214,6 +214,18 @@ import android.net.wifi.WifiManager;
                 if (!hasHttpError) {
                     errorContainer.setVisibility(View.GONE);
                     webView.setVisibility(View.VISIBLE);
+                    // Suppress webkit media controls and the native video
+                    // loading overlay shown during playlist transitions.
+                    webView.evaluateJavascript(
+                        "(function(){" +
+                        "var s=document.createElement('style');" +
+                        "s.textContent=" +
+                        "'video::-webkit-media-controls{display:none!important}" +
+                        "video::-webkit-media-controls-enclosure{display:none!important}" +
+                        "video::-webkit-media-controls-panel{display:none!important}';" +
+                        "document.head&&document.head.appendChild(s);" +
+                        "})();",
+                        null);
                 }
             }
 
@@ -245,6 +257,16 @@ import android.net.wifi.WifiManager;
         });
 
         webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public View getVideoLoadingProgressView() {
+                // Suppress the default grey overlay + play-button that Android
+                // WebView renders while a <video> element is buffering or
+                // switching sources between playlist items.
+                FrameLayout empty = new FrameLayout(MainActivity.this);
+                empty.setVisibility(View.GONE);
+                return empty;
+            }
+
             @Override
             public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
                 return true;
