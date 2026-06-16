@@ -32,7 +32,9 @@ import android.widget.TextView;
 
 import org.json.JSONObject;
 
-public class MainActivity extends Activity {
+import android.net.wifi.WifiManager;
+  import android.text.format.Formatter;
+  public class MainActivity extends Activity {
 
     private WebView webView;
     private FrameLayout errorContainer;
@@ -107,6 +109,8 @@ public class MainActivity extends Activity {
               return;
           }
           setupWebView();
+        webView.setFocusableInTouchMode(true);
+        webView.requestFocus();
         root.addView(webView, new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
@@ -514,11 +518,29 @@ public class MainActivity extends Activity {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
-        if (keyCode == KeyEvent.KEYCODE_BACK) {
-            return true;
-        }
-        return super.onKeyDown(keyCode, event);
-    }
+          if (keyCode == KeyEvent.KEYCODE_HOME
+                  || keyCode == KeyEvent.KEYCODE_APP_SWITCH
+                  || keyCode == KeyEvent.KEYCODE_MENU
+                  || keyCode == KeyEvent.KEYCODE_BACK) {
+              return true;
+          }
+          if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                  || keyCode == KeyEvent.KEYCODE_ENTER
+                  || keyCode == KeyEvent.KEYCODE_BUTTON_A
+                  || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) {
+              long now = System.currentTimeMillis();
+              if (now - dpadFirstPressMs > 5_000L) { dpadPressCount = 0; dpadFirstPressMs = now; }
+              dpadPressCount++;
+              if (dpadPressCount >= 7) {
+                  dpadPressCount = 0;
+                  if (diagnosticsOverlay != null) hideDiagnosticsOverlay();
+                  else showDiagnosticsOverlay();
+                  return true;
+              }
+          }
+          if (webView != null) webView.dispatchKeyEvent(event);
+          return true;
+      }
 
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
@@ -573,4 +595,62 @@ public class MainActivity extends Activity {
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
     }
+      @Override
+      public boolean dispatchKeyEvent(KeyEvent event) {
+          if (webView != null && event.getAction() == KeyEvent.ACTION_DOWN) {
+              int k = event.getKeyCode();
+              if (k != KeyEvent.KEYCODE_BACK && k != KeyEvent.KEYCODE_HOME
+                      && k != KeyEvent.KEYCODE_APP_SWITCH && k != KeyEvent.KEYCODE_MENU) {
+                  webView.dispatchKeyEvent(event);
+              }
+          }
+          return super.dispatchKeyEvent(event);
+      }
+
+      private void showDiagnosticsOverlay() {
+          if (diagnosticsOverlay != null) return;
+          try {
+              android.widget.FrameLayout root = (android.widget.FrameLayout) getWindow().getDecorView();
+              android.widget.TextView diagTv = new android.widget.TextView(this);
+              diagTv.setBackgroundColor(0xCC000000);
+              diagTv.setTextColor(0xFFFFFFFF);
+              diagTv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 16);
+              diagTv.setPadding(60, 60, 60, 60);
+              diagTv.setGravity(android.view.Gravity.CENTER);
+              String ip = "unavailable";
+              try {
+                  WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+                  if (wm != null) ip = Formatter.formatIpAddress(wm.getConnectionInfo().getIpAddress());
+              } catch (Throwable ignored) {}
+              long uptimeSec = android.os.SystemClock.elapsedRealtime() / 1000;
+              String uptime = String.format("%dh %02dm %02ds", uptimeSec / 3600, (uptimeSec % 3600) / 60, uptimeSec % 60);
+              String ver = "?";
+              try { ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Throwable ignored) {}
+              diagTv.setText("DIGIPAL DIAGNOSTICS\n\nPackage: " + getPackageName()
+                      + "\nVersion:  " + ver
+                      + "\nIP:       " + ip
+                      + "\nUptime:   " + uptime
+                      + "\n\nPress SELECT again or wait 10s to dismiss");
+              android.widget.FrameLayout.LayoutParams lp = new android.widget.FrameLayout.LayoutParams(
+                      android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                      android.widget.FrameLayout.LayoutParams.MATCH_PARENT);
+              root.addView(diagTv, lp);
+              diagnosticsOverlay = diagTv;
+              diagDismissHandler.postDelayed(this::hideDiagnosticsOverlay, 10_000L);
+          } catch (Throwable e) {
+              android.util.Log.e("Digipal", "showDiagnosticsOverlay failed", e);
+          }
+      }
+
+      private void hideDiagnosticsOverlay() {
+          diagDismissHandler.removeCallbacksAndMessages(null);
+          if (diagnosticsOverlay != null) {
+              try {
+                  android.widget.FrameLayout root = (android.widget.FrameLayout) getWindow().getDecorView();
+                  root.removeView(diagnosticsOverlay);
+              } catch (Throwable ignored) {}
+              diagnosticsOverlay = null;
+          }
+      }
+  
 }
