@@ -52,7 +52,9 @@ package com.digipal.signage;
             // Ensures app relaunches even if this service is hard-killed before the
             // periodic Handler loop gets a chance to run.
             int cpf = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
-            crashAlarmPi = PendingIntent.getService(this, 99, new Intent(this, BootLaunchService.class), cpf);
+            crashAlarmPi = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                ? PendingIntent.getForegroundService(this, 99, new Intent(this, BootLaunchService.class), cpf)
+                : PendingIntent.getService(this, 99, new Intent(this, BootLaunchService.class), cpf);
             AlarmManager crashAm = (AlarmManager) getSystemService(ALARM_SERVICE);
             if (crashAm != null) {
                 long earliest = SystemClock.elapsedRealtime() + 90_000L;
@@ -81,11 +83,13 @@ package com.digipal.signage;
       }
 
       private void restart() {
-            // Use getService(BootLaunchService) — starting a foreground service from an
-            // alarm is not subject to Android 12+ background-activity-launch restrictions.
+            // On Android O+ the alarm must use getForegroundService so the
+            // PendingIntent can promote BootLaunchService to foreground.
             Intent i = new Intent(this, BootLaunchService.class);
             int f = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
-            PendingIntent pi = PendingIntent.getService(this, 2, i, f);
+            PendingIntent pi = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                ? PendingIntent.getForegroundService(this, 2, i, f)
+                : PendingIntent.getService(this, 2, i, f);
           AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
           if (am == null) return;
           long at = System.currentTimeMillis() + RESTART_MS;
