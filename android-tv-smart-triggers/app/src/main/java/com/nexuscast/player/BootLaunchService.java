@@ -8,6 +8,7 @@ package com.nexuscast.player;
   import android.app.Service;
   import android.content.Intent;
   import android.os.Build;
+  import android.content.pm.ServiceInfo;
   import android.os.IBinder;
   import android.os.SystemClock;
 
@@ -30,9 +31,18 @@ package com.nexuscast.player;
       @Override
       public int onStartCommand(Intent intent, int flags, int startId) {
           ensureChannel();
-          startForeground(NOTIF_ID, buildNotif());
+          // API 34+ requires a declared foreground-service type.
+          // shortService is correct for a short-lived boot-launch helper.
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+              startForeground(NOTIF_ID, buildNotif(),
+                  ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE);
+          } else {
+              startForeground(NOTIF_ID, buildNotif());
+          }
           scheduleLaunch();
-          startWatchdog();
+          // WatchdogService is started in MainActivity.onCreate() after the
+          // Activity is visible. Android 15 blocks mediaPlayback FGS from
+          // the BOOT_COMPLETED chain, so we must not start it here.
           stopSelf();
           return START_NOT_STICKY;
       }
@@ -56,14 +66,6 @@ package com.nexuscast.player;
               // Gives the window manager time to finish initialising after boot.
               long earliest = SystemClock.elapsedRealtime() + 500;
               am.setWindow(AlarmManager.ELAPSED_REALTIME_WAKEUP, earliest, 5_000L, pi);
-          } catch (Exception ignored) {}
-      }
-
-      private void startWatchdog() {
-          try {
-              Intent wd = new Intent(this, WatchdogService.class);
-              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(wd);
-              else startService(wd);
           } catch (Exception ignored) {}
       }
 
