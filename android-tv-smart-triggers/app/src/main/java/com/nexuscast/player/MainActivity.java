@@ -57,8 +57,10 @@ import android.net.wifi.WifiManager;
         "|\\[::1\\])$"
     );
     private MediaDownloadManager mediaDownloadManager;
-      private int dpadPressCount = 0;
-      private long dpadFirstPressMs = 0L;
+    private int dpadPressCount = 0;
+    private long dpadFirstPressMs = 0L;
+    private android.view.View diagnosticsOverlay = null;
+    private android.os.Handler diagDismissHandler = null;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
