@@ -33,6 +33,8 @@ import android.net.wifi.WifiManager;
 
     /** Set true in onResume, false in onStop — read by WatchdogService.inForeground(). */
     public static volatile boolean activityVisible = false;
+    /** Set true in onCreate, false in onDestroy — used by WatchdogService to detect real crashes vs Home-press. */
+    public static volatile boolean activityAlive = false;
 
     private WebView webView;
     private FrameLayout errorContainer;
@@ -64,6 +66,7 @@ import android.net.wifi.WifiManager;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        activityAlive = true;
         try {
 
         requestWindowFeature(Window.FEATURE_NO_TITLE);
@@ -449,7 +452,7 @@ import android.net.wifi.WifiManager;
     private void scheduleAppRelaunch(long delayMs) {
         try {
             Intent intent = new Intent(this, MainActivity.class);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
 
             int flags = PendingIntent.FLAG_ONE_SHOT;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -473,7 +476,7 @@ import android.net.wifi.WifiManager;
             // Fallback: try non-exact alarm if exact alarm permission not granted
             try {
                 Intent intent = new Intent(this, MainActivity.class);
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
                 int flags = PendingIntent.FLAG_ONE_SHOT;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     flags |= PendingIntent.FLAG_IMMUTABLE;
@@ -661,6 +664,7 @@ import android.net.wifi.WifiManager;
         if (webView != null) {
             webView.destroy();
         }
+        activityAlive = false;
         super.onDestroy();
     }
       @Override
