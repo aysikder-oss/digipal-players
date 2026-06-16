@@ -36,6 +36,9 @@ import android.net.wifi.WifiManager;
   import android.text.format.Formatter;
   public class MainActivity extends Activity {
 
+    /** Set true in onResume, false in onStop — read by WatchdogService.inForeground(). */
+    public static volatile boolean activityVisible = false;
+
     private WebView webView;
     private FrameLayout errorContainer;
     private PowerManager.WakeLock wakeLock;
@@ -557,6 +560,7 @@ import android.net.wifi.WifiManager;
     @Override
     protected void onResume() {
         super.onResume();
+        activityVisible = true;
         if (wakeLock != null && !wakeLock.isHeld()) {
             wakeLock.acquire(24 * 60 * 60 * 1000L);
         }
@@ -571,6 +575,12 @@ import android.net.wifi.WifiManager;
             wakeLock.release();
         }
         webView.onPause();
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        activityVisible = false;
     }
 
     @Override
