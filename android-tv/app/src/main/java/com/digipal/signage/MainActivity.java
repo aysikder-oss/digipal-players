@@ -521,7 +521,7 @@ import android.net.wifi.WifiManager;
         if (!playerUrl.endsWith("/")) {
             playerUrl += "/";
         }
-        playerUrl += "player";
+        playerUrl += "player?platform=android_tv";
         webView.loadUrl(playerUrl);
     }
 
