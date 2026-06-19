@@ -306,6 +306,13 @@ import android.net.wifi.WifiManager;
         public void setAutoRelaunch(boolean enabled) {
             SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
             prefs.edit().putBoolean(KEY_AUTO_RELAUNCH, enabled).apply();
+            // Restart WatchdogService so the new setting takes effect immediately
+            Intent ws = new Intent(MainActivity.this, WatchdogService.class);
+            stopService(ws);
+            if (enabled) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(ws);
+                else startService(ws);
+            }
         }
 
         @JavascriptInterface
