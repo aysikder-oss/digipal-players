@@ -30,8 +30,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-      - run: npm install
-      - run: npx electron-builder --win --publish never
+      - name: Configure MSVC for node-gyp
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Install dependencies (skip native scripts)
+        run: npm install --ignore-scripts
+      - name: Rebuild native modules for Electron
+        run: npx electron-rebuild --force
+      - name: Build Windows executables
+        run: npx electron-builder --win --publish never
       - uses: actions/upload-artifact@v5
         with:
           name: DigipalPlayer-SmartTriggers-Installer
@@ -53,4 +59,3 @@ jobs:
         with:
           files: artifacts/**/*.exe
           generate_release_notes: true
-  
