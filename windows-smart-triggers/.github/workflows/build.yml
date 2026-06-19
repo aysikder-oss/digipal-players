@@ -1,61 +1,68 @@
 name: Build Windows Player (Smart Triggers)
 
-on:
-  push:
-    branches: [main]
-  workflow_dispatch:
+  on:
+    push:
+      branches: [main]
+    workflow_dispatch:
 
-permissions:
-  contents: write
+  permissions:
+    contents: write
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  env:
+    FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
-jobs:
-  build:
-    runs-on: windows-latest
+  jobs:
+    build:
+      runs-on: windows-latest
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      steps:
+        - name: Checkout
+          uses: actions/checkout@v5
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: '20'
+        - name: Setup Node.js
+          uses: actions/setup-node@v5
+          with:
+            node-version: '20'
 
-      - name: Setup Python for node-gyp
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
+        - name: Setup Python for node-gyp
+          uses: actions/setup-python@v6
+          with:
+            python-version: '3.11'
 
-      - name: Install dependencies
-        run: npm install
+        - name: Configure MSVC for node-gyp
+          uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Build Windows executables
-        run: npm run build
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        - name: Install dependencies (skip native compilation)
+          run: npm install --ignore-scripts
 
-      - name: Upload Installer
-        uses: actions/upload-artifact@v5
-        with:
-          name: DigipalPlayer-SmartTriggers-Installer
-          path: dist/*.exe
-          retention-days: 90
-          if-no-files-found: warn
+        - name: Rebuild native modules for Electron
+          run: npx electron-rebuild --force
 
-      - name: Create Release
-        if: github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v2.0.${{ github.run_number }}
-          name: Digipal Player (Smart Triggers) v2.0.${{ github.run_number }}
-          files: dist/*.exe
-          make_latest: true
-          body: |
-            Digipal Player for Windows (Smart Triggers) v2.0.${{ github.run_number }}
-            
-            Includes hardware sensor/button integration (USB HID, serial, BLE) and camera/media support.
-            
-            Built from commit ${{ github.sha }}
+        - name: Build Windows executables
+          run: npm run build
+          env:
+            GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+        - name: Upload Installer
+          uses: actions/upload-artifact@v5
+          with:
+            name: DigipalPlayer-SmartTriggers-Installer
+            path: dist/*.exe
+            retention-days: 90
+            if-no-files-found: warn
+
+        - name: Create Release
+          if: github.ref == 'refs/heads/main'
+          uses: softprops/action-gh-release@v2
+          with:
+            tag_name: v2.0.${{ github.run_number }}
+            name: Digipal Player (Smart Triggers) v2.0.${{ github.run_number }}
+            files: dist/*.exe
+            make_latest: true
+            body: |
+              Digipal Player for Windows (Smart Triggers) v2.0.${{ github.run_number }}
+              
+              Includes hardware sensor/button integration (USB HID, serial, BLE) and camera/media support.
+              
+              Built from commit ${{ github.sha }}
+  
