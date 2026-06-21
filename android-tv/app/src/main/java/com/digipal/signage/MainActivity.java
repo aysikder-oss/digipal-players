@@ -37,6 +37,7 @@ import android.net.wifi.WifiManager;
     public static volatile boolean activityAlive = false;
 
     private WebView webView;
+    private FrameLayout rootLayout;
     private FrameLayout errorContainer;
     private PowerManager.WakeLock wakeLock;
     private MediaDownloadManager mediaDownloadManager;
@@ -90,6 +91,7 @@ import android.net.wifi.WifiManager;
         hideSystemUI();
 
         FrameLayout root = new FrameLayout(this);
+        rootLayout = root;
         root.setBackgroundColor(Color.parseColor("#0a0e1a"));
 
         try {
@@ -152,6 +154,8 @@ import android.net.wifi.WifiManager;
   
         String serverUrl = getServerUrl();
         loadPlayerUrl(serverUrl);
+
+        startAnrWatchdog();
           } catch (Throwable _onCreate_err) {
               try {
                   android.widget.LinearLayout errRoot = new android.widget.LinearLayout(this);
@@ -257,6 +261,19 @@ import android.net.wifi.WifiManager;
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 return false;
             }
+
+            @android.annotation.TargetApi(Build.VERSION_CODES.O)
+            @Override
+            public boolean onRenderProcessGone(WebView view, android.webkit.RenderProcessGoneDetail detail) {
+                android.util.Log.w("Digipal", "WebView render process gone; didCrash="
+                    + (detail != null && detail.didCrash()));
+                if (view != webView) {
+                    try { view.destroy(); } catch (Throwable ignored) {}
+                    return true;
+                }
+                recoverFromRenderProcessGone(view);
+                return true;
+            }
         });
 
         webView.setWebChromeClient(new WebChromeClient() {
@@ -357,6 +374,39 @@ import android.net.wifi.WifiManager;
                 return mediaDownloadManager.getStorageInfo();
             }
             return "{\"usedBytes\":0,\"freeBytes\":0,\"totalSpace\":0,\"totalFiles\":0}";
+        }
+
+        /**
+         * Device resource snapshot for the web player to throttle itself before a
+         * crash. Method name must stay exactly "getResourceStats" — the player's
+         * native bridge depends on it.
+         */
+        @JavascriptInterface
+        public String getResourceStats() {
+            try {
+                org.json.JSONObject o = new org.json.JSONObject();
+                android.app.ActivityManager am =
+                    (android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE);
+                android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+                if (am != null) {
+                    am.getMemoryInfo(mi);
+                    o.put("availMemBytes", mi.availMem);
+                    o.put("totalMemBytes", mi.totalMem);
+                    o.put("lowMemory", mi.lowMemory);
+                    o.put("memThresholdBytes", mi.threshold);
+                }
+                Runtime rt = Runtime.getRuntime();
+                o.put("appHeapUsedBytes", rt.totalMemory() - rt.freeMemory());
+                o.put("appHeapMaxBytes", rt.maxMemory());
+                java.io.File dir = getFilesDir();
+                o.put("freeStorageBytes", dir.getUsableSpace());
+                o.put("totalStorageBytes", dir.getTotalSpace());
+                o.put("uptimeMs", android.os.SystemClock.elapsedRealtime());
+                o.put("sdkInt", Build.VERSION.SDK_INT);
+                return o.toString();
+            } catch (Throwable e) {
+                return "{}";
+            }
         }
 
         @JavascriptInterface
@@ -574,6 +624,144 @@ import android.net.wifi.WifiManager;
         }, 5000);
     }
 
+    // ---- Crash resilience: renderer recovery, memory pressure, ANR watchdog ----
+
+    private final long[] renderGoneTimestamps = new long[3];
+    private int renderGoneIdx = 0;
+    private long lastMemoryReloadMs = 0L;
+    private Thread anrWatchdogThread;
+    private volatile boolean anrWatchdogRunning = false;
+    private final android.os.Handler anrMainHandler =
+        new android.os.Handler(android.os.Looper.getMainLooper());
+
+    /**
+     * Called when the WebView renderer process is killed (OOM or GPU driver crash).
+     * Rebuilds a fresh WebView in place and reloads the player so the screen
+     * recovers on its own instead of dropping to the launcher. Falls back to a
+     * full activity relaunch if the renderer keeps dying (crash loop).
+     */
+    private void recoverFromRenderProcessGone(WebView deadView) {
+        long now = System.currentTimeMillis();
+        renderGoneTimestamps[renderGoneIdx % renderGoneTimestamps.length] = now;
+        renderGoneIdx++;
+        if (renderGoneIdx >= renderGoneTimestamps.length) {
+            long oldest = Long.MAX_VALUE;
+            for (long t : renderGoneTimestamps) { if (t > 0 && t < oldest) oldest = t; }
+            if (now - oldest < 60_000L) {
+                // Renderer is crash-looping — relaunch the whole activity with backoff.
+                if (isAutoRelaunchEnabled()) scheduleAppRelaunch(5000);
+                isUserClosing = true;
+                finish();
+                return;
+            }
+        }
+        try {
+            if (deadView != null && rootLayout != null) {
+                try { rootLayout.removeView(deadView); } catch (Throwable ignored) {}
+            }
+            try { if (deadView != null) deadView.destroy(); } catch (Throwable ignored) {}
+
+            webView = new WebView(this);
+            setupWebView();
+            webView.setFocusableInTouchMode(true);
+            webView.requestFocus();
+            if (rootLayout != null) {
+                rootLayout.addView(webView, 0, new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT));
+            }
+            if (mediaDownloadManager != null) mediaDownloadManager.setWebView(webView);
+            loadPlayerUrl(getServerUrl());
+        } catch (Throwable e) {
+            if (isAutoRelaunchEnabled()) scheduleAppRelaunch(3000);
+            isUserClosing = true;
+            finish();
+        }
+    }
+
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        handleMemoryPressure(level);
+    }
+
+    @Override
+    public void onLowMemory() {
+        super.onLowMemory();
+        handleMemoryPressure(android.content.ComponentCallbacks2.TRIM_MEMORY_COMPLETE);
+    }
+
+    /**
+     * React to Android memory-pressure callbacks. On moderate pressure we ask the
+     * web player to drop caches; on critical pressure we clear the WebView cache
+     * and schedule a clean reload (debounced) so the OS does not kill us first.
+     */
+    private void handleMemoryPressure(int level) {
+        try {
+            if (webView == null) return;
+            if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL
+                    || level == android.content.ComponentCallbacks2.TRIM_MEMORY_COMPLETE) {
+                webView.evaluateJavascript(
+                    "window.dispatchEvent(new CustomEvent('android-memory-pressure',{detail:{level:'critical'}}));",
+                    null);
+                try { webView.clearCache(false); } catch (Throwable ignored) {}
+                long now = System.currentTimeMillis();
+                if (now - lastMemoryReloadMs > 120_000L) {
+                    lastMemoryReloadMs = now;
+                    // Give the player a few seconds to recover gracefully, then
+                    // reload natively as a safety net if we are still alive.
+                    webView.postDelayed(() -> {
+                        try { loadPlayerUrl(getServerUrl()); } catch (Throwable ignored) {}
+                    }, 4000);
+                }
+            } else if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+                webView.evaluateJavascript(
+                    "window.dispatchEvent(new CustomEvent('android-memory-pressure',{detail:{level:'moderate'}}));",
+                    null);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * Lightweight ANR watchdog: posts a heartbeat to the main-thread Handler every
+     * few seconds. If the UI thread fails to process several consecutive
+     * heartbeats it is hung, so we relaunch and kill the stuck process.
+     */
+    private void startAnrWatchdog() {
+        if (anrWatchdogThread != null) return;
+        anrWatchdogRunning = true;
+        anrWatchdogThread = new Thread(() -> {
+            int missed = 0;
+            while (anrWatchdogRunning) {
+                final java.util.concurrent.atomic.AtomicBoolean ticked =
+                    new java.util.concurrent.atomic.AtomicBoolean(false);
+                try { anrMainHandler.post(() -> ticked.set(true)); } catch (Throwable ignored) {}
+                try { Thread.sleep(5000); } catch (InterruptedException e) { break; }
+                if (ticked.get()) {
+                    missed = 0;
+                } else {
+                    missed++;
+                    if (missed >= 3 && activityVisible && isAutoRelaunchEnabled()) {
+                        // Main thread hung ~15s — schedule relaunch then kill the stuck process.
+                        scheduleAppRelaunch(2000);
+                        android.os.Process.killProcess(android.os.Process.myPid());
+                        return;
+                    }
+                }
+            }
+        }, "digipal-anr-watchdog");
+        anrWatchdogThread.setDaemon(true);
+        anrWatchdogThread.start();
+    }
+
+    private void stopAnrWatchdog() {
+        anrWatchdogRunning = false;
+        if (anrWatchdogThread != null) {
+            try { anrWatchdogThread.interrupt(); } catch (Throwable ignored) {}
+            anrWatchdogThread = null;
+        }
+    }
+
     private void hideSystemUI() {
         View decorView = getWindow().getDecorView();
         decorView.setSystemUiVisibility(
@@ -665,6 +853,7 @@ import android.net.wifi.WifiManager;
 
     @Override
     protected void onDestroy() {
+        stopAnrWatchdog();
         if (isAutoRelaunchEnabled() && !isUserClosing) {
             scheduleAppRelaunch(3000);
         }
