@@ -198,6 +198,7 @@ import android.net.wifi.WifiManager;
         loadPlayerUrl(serverUrl);
 
         startAnrWatchdog();
+        startHeartbeatWatchdog();
           } catch (Throwable _onCreate_err) {
               try {
                   android.widget.LinearLayout errRoot = new android.widget.LinearLayout(this);
@@ -361,6 +362,12 @@ import android.net.wifi.WifiManager;
         @JavascriptInterface
         public void scheduleRelaunch() {
             scheduleAppRelaunch(2000);
+        }
+
+        @JavascriptInterface
+        public void heartbeat() {
+            lastHeartbeatMs = System.currentTimeMillis();
+            heartbeatReceived = true;
         }
 
         @JavascriptInterface
@@ -598,6 +605,21 @@ import android.net.wifi.WifiManager;
     private final long[] renderGoneTimestamps = new long[3];
     private int renderGoneIdx = 0;
     private long lastMemoryReloadMs = 0L;
+    // --- Self-heal watchdog (heartbeat-based WebView reload) ----------------
+    // The web player calls Android.heartbeat() from its JS event loop every few
+    // seconds. This main-thread Handler keeps ticking even when the WebView JS
+    // freezes (e.g. page wedged "Offline" after a brief server loss), so if
+    // heartbeats stop while the network is still up we reload the WebView once
+    // (with back-off) to un-wedge it. Complements WatchdogService (dead process)
+    // and the ANR watchdog (hung UI thread).
+    private volatile long lastHeartbeatMs = 0;
+    private volatile boolean heartbeatReceived = false;
+    private long lastWatchdogReloadMs = 0;
+    private android.os.Handler heartbeatWatchdogHandler;
+    private Runnable heartbeatWatchdogRunnable;
+    private static final long HEARTBEAT_STALE_MS = 90000;
+    private static final long WATCHDOG_CHECK_INTERVAL_MS = 15000;
+    private static final long WATCHDOG_RELOAD_BACKOFF_MS = 120000;
     private Thread anrWatchdogThread;
     private volatile boolean anrWatchdogRunning = false;
     private final android.os.Handler anrMainHandler =
@@ -731,6 +753,81 @@ import android.net.wifi.WifiManager;
         }
     }
 
+    // Reloads the WebView when the web player stops heart-beating (frozen JS)
+    // while the device still has a network. Armed only after the first
+    // heartbeat, so the setup screen and cold start are never disturbed.
+    private void startHeartbeatWatchdog() {
+        heartbeatWatchdogHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+        heartbeatWatchdogRunnable = new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (heartbeatReceived) {
+                        long now = System.currentTimeMillis();
+                        if (now - lastHeartbeatMs > HEARTBEAT_STALE_MS
+                                && isNetworkConnectedForWatchdog()
+                                && now - lastWatchdogReloadMs > WATCHDOG_RELOAD_BACKOFF_MS) {
+                            lastWatchdogReloadMs = now;
+                            lastHeartbeatMs = now; // avoid immediate re-fire
+                            android.util.Log.w("DigipalWatchdog",
+                                "Player heartbeat stale with network up - reloading WebView");
+                            forcePlayerReload();
+                        }
+                    }
+                } catch (Exception ignored) {
+                } finally {
+                    if (heartbeatWatchdogHandler != null) {
+                        heartbeatWatchdogHandler.postDelayed(this, WATCHDOG_CHECK_INTERVAL_MS);
+                    }
+                }
+            }
+        };
+        heartbeatWatchdogHandler.postDelayed(heartbeatWatchdogRunnable, WATCHDOG_CHECK_INTERVAL_MS);
+    }
+
+    private void stopHeartbeatWatchdog() {
+        if (heartbeatWatchdogHandler != null) {
+            heartbeatWatchdogHandler.removeCallbacksAndMessages(null);
+            heartbeatWatchdogHandler = null;
+        }
+    }
+
+    private void forcePlayerReload() {
+        runOnUiThread(() -> {
+            try {
+                if (errorContainer != null) errorContainer.setVisibility(View.GONE);
+                String url = webView != null ? webView.getUrl() : null;
+                if (webView != null && url != null && !url.startsWith("about:")) {
+                    webView.reload();
+                } else {
+                    loadPlayerUrl(getServerUrl());
+                }
+            } catch (Exception e) {
+                try { loadPlayerUrl(getServerUrl()); } catch (Exception ignored) {}
+            }
+        });
+    }
+
+    private boolean isNetworkConnectedForWatchdog() {
+        try {
+            android.net.ConnectivityManager cm =
+                (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (cm == null) return true;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                android.net.Network n = cm.getActiveNetwork();
+                if (n == null) return false;
+                android.net.NetworkCapabilities caps = cm.getNetworkCapabilities(n);
+                return caps != null && caps.hasCapability(
+                    android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET);
+            } else {
+                android.net.NetworkInfo ni = cm.getActiveNetworkInfo();
+                return ni != null && ni.isConnected();
+            }
+        } catch (Exception e) {
+            return true; // fail-open: do not suppress self-heal if network is unknown
+        }
+    }
+
     private void hideSystemUI() {
         View decorView = getWindow().getDecorView();
         decorView.setSystemUiVisibility(
@@ -806,6 +903,7 @@ import android.net.wifi.WifiManager;
     @Override
     protected void onDestroy() {
         stopAnrWatchdog();
+        stopHeartbeatWatchdog();
         if (hardwareManager != null) {
             hardwareManager.stop();
         }
