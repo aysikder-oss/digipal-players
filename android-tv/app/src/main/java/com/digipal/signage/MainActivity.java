@@ -723,7 +723,7 @@ import android.os.Looper;
                           "fill".equals(scaleType)  ? android.widget.ImageView.ScaleType.FIT_XY :
                           android.widget.ImageView.ScaleType.FIT_CENTER;
                       nativeImageView.setScaleType(st);
-                      nativeImageView.setVisibility(View.INVISIBLE) // kept invisible until Glide loads;
+                      nativeImageView.setVisibility(View.INVISIBLE); // kept invisible until Glide loads
                       com.bumptech.glide.Glide.with(MainActivity.this)
                             .load(url)
                             .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
@@ -739,8 +739,8 @@ import android.os.Looper;
                                 public boolean onResourceReady(android.graphics.drawable.Drawable resource, Object model,
                                         com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
                                         com.bumptech.glide.load.DataSource dataSource, boolean isFirstResource) {
+                                    nativeImageView.setVisibility(View.VISIBLE);
                                     webView.evaluateJavascript(
-                                        nativeImageView.setVisibility(View.VISIBLE);
                                         "if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady()", null);
                                     return false;
                                 }
