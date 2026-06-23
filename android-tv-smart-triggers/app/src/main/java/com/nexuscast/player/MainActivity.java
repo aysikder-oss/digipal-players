@@ -624,8 +624,6 @@ import android.os.Looper;
                             }
                         };
                         exoPlayer.addListener(nativeVideoListener);
-                            }
-                        });
                     } catch (Exception e) { android.util.Log.e("DigipalNative", "playNativeVideo error", e); }
                 });
             }
@@ -637,10 +635,10 @@ import android.os.Looper;
                     if (videoReadyHandler != null && videoReadyRunnable != null) {
                         videoReadyHandler.removeCallbacks(videoReadyRunnable);
                         videoReadyHandler = null; videoReadyRunnable = null;
-                     if (nativeVideoListener != null) {
+                    }
+                    if (nativeVideoListener != null) {
                         if (exoPlayer != null) exoPlayer.removeListener(nativeVideoListener);
-                         nativeVideoListener = null;
-                     }
+                        nativeVideoListener = null;
                     }
                         if (exoPlayer != null) { exoPlayer.stop(); exoPlayer.clearMediaItems(); }
                         nativeVideoView.setVisibility(View.INVISIBLE);
