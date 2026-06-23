@@ -68,6 +68,7 @@ import android.os.Looper;
     // Handler/Runnable for first-frame video ready callback (or 8s safety timeout)
     private android.os.Handler videoReadyHandler;
     private Runnable videoReadyRunnable;
+    private androidx.media3.common.Player.Listener nativeVideoListener;
 
     private static final java.util.regex.Pattern PRIVATE_IP_PATTERN = java.util.regex.Pattern.compile(
         "^(10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}" +
@@ -594,21 +595,27 @@ import android.os.Looper;
                       lp.leftMargin = (int)(x * d);
                       lp.topMargin = (int)(y * d);
                       nativeVideoView.setLayoutParams(lp);
-                      // Cancel any pending ready-callback from a previous call (rapid content switch).
+                      // Cancel pending callback and remove any lingering listener from a
+                      // previous call — prevents accumulation on rapid content switches.
                       if (videoReadyHandler != null && videoReadyRunnable != null) {
                           videoReadyHandler.removeCallbacks(videoReadyRunnable);
                           videoReadyHandler = null; videoReadyRunnable = null;
+                      }
+                      if (nativeVideoListener != null) {
+                          exoPlayer.removeListener(nativeVideoListener);
+                          nativeVideoListener = null;
                       }
                       // NOTE: do NOT setVisibility(VISIBLE) here — PlayerView stays invisible
                       // until onRenderedFirstFrame so the grey surface is never shown.
                       exoPlayer.prepare();
                       exoPlayer.play();
-                      // 8-second safety: make visible + fire callback if onRenderedFirstFrame
-                      // never arrives (network failure, unsupported codec, etc.).
+                      // 8-second safety: fire callback if neither onRenderedFirstFrame
+                      // nor onPlayerError arrive (e.g. bridge totally unresponsive).
                       final android.os.Handler readyHandler = new android.os.Handler(android.os.Looper.getMainLooper());
                       final Runnable readyCb = new Runnable() {
                           @Override public void run() {
                               videoReadyHandler = null; videoReadyRunnable = null;
+                              nativeVideoListener = null;
                               nativeVideoView.setVisibility(View.VISIBLE);
                               webView.evaluateJavascript(
                                   "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
@@ -617,12 +624,12 @@ import android.os.Looper;
                       videoReadyHandler = readyHandler;
                       videoReadyRunnable = readyCb;
                       readyHandler.postDelayed(readyCb, 8000);
-                      // Fire on first real painted frame — not just STATE_READY.
-                      final androidx.media3.exoplayer.ExoPlayer playerRef = exoPlayer;
-                      playerRef.addListener(new androidx.media3.common.Player.Listener() {
+                      // Fire on first real painted frame; handle errors immediately.
+                      nativeVideoListener = new androidx.media3.common.Player.Listener() {
                           @Override
                           public void onRenderedFirstFrame() {
-                              playerRef.removeListener(this);
+                              if (exoPlayer != null) exoPlayer.removeListener(this);
+                              nativeVideoListener = null;
                               if (videoReadyHandler != null) {
                                   videoReadyHandler.removeCallbacks(videoReadyRunnable);
                                   videoReadyHandler = null; videoReadyRunnable = null;
@@ -633,7 +640,22 @@ import android.os.Looper;
                                       "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
                               });
                           }
-                      });
+                          @Override
+                          public void onPlayerError(androidx.media3.common.PlaybackException error) {
+                              if (exoPlayer != null) exoPlayer.removeListener(this);
+                              nativeVideoListener = null;
+                              if (videoReadyHandler != null) {
+                                  videoReadyHandler.removeCallbacks(videoReadyRunnable);
+                                  videoReadyHandler = null; videoReadyRunnable = null;
+                              }
+                              android.util.Log.w("DigipalNative", "ExoPlayer error, advancing playlist: " + error.getMessage());
+                              // Keep native view INVISIBLE — don't expose error state.
+                              // Fire ready callback so the JS playlist advances immediately.
+                              webView.evaluateJavascript(
+                                  "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
+                          }
+                      };
+                      exoPlayer.addListener(nativeVideoListener);
                     } catch (Exception e) { android.util.Log.e("DigipalNative", "playNativeVideo error", e); }
                 });
             }
@@ -645,6 +667,10 @@ import android.os.Looper;
                    if (videoReadyHandler != null && videoReadyRunnable != null) {
                        videoReadyHandler.removeCallbacks(videoReadyRunnable);
                        videoReadyHandler = null; videoReadyRunnable = null;
+                   }
+                   if (nativeVideoListener != null) {
+                       if (exoPlayer != null) exoPlayer.removeListener(nativeVideoListener);
+                       nativeVideoListener = null;
                    }
                       if (exoPlayer != null) { exoPlayer.stop(); exoPlayer.clearMediaItems(); }
                       nativeVideoView.setVisibility(View.INVISIBLE);
@@ -697,7 +723,7 @@ import android.os.Looper;
                           "fill".equals(scaleType)  ? android.widget.ImageView.ScaleType.FIT_XY :
                           android.widget.ImageView.ScaleType.FIT_CENTER;
                       nativeImageView.setScaleType(st);
-                      nativeImageView.setVisibility(View.VISIBLE);
+                      nativeImageView.setVisibility(View.INVISIBLE) // kept invisible until Glide loads;
                       com.bumptech.glide.Glide.with(MainActivity.this)
                             .load(url)
                             .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
@@ -714,6 +740,7 @@ import android.os.Looper;
                                         com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
                                         com.bumptech.glide.load.DataSource dataSource, boolean isFirstResource) {
                                     webView.evaluateJavascript(
+                                        nativeImageView.setVisibility(View.VISIBLE);
                                         "if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady()", null);
                                     return false;
                                 }
