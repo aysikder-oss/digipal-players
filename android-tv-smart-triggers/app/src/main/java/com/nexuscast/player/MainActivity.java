@@ -77,6 +77,9 @@ import android.os.Looper;
       private androidx.media3.ui.PlayerView nativeVideoView;
       private android.widget.ImageView nativeImageView;
       private androidx.media3.exoplayer.ExoPlayer exoPlayer;
+    // Handler/Runnable for first-frame video ready callback (or 8s safety timeout)
+    private android.os.Handler videoReadyHandler;
+    private Runnable videoReadyRunnable;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -149,6 +152,7 @@ import android.os.Looper;
         // Native media overlay views (ExoPlayer video + Glide image).
         nativeVideoView = new androidx.media3.ui.PlayerView(this);
         nativeVideoView.setUseController(false);
+        nativeVideoView.setBackgroundColor(android.graphics.Color.TRANSPARENT);
         nativeVideoView.setVisibility(View.INVISIBLE);
         root.addView(nativeVideoView, new FrameLayout.LayoutParams(1, 1));
 
@@ -558,18 +562,44 @@ import android.os.Looper;
                         lp.leftMargin = (int)(x * d);
                         lp.topMargin = (int)(y * d);
                         nativeVideoView.setLayoutParams(lp);
-                        nativeVideoView.setVisibility(View.VISIBLE);
+                        // Cancel any pending ready-callback from a previous call (rapid content switch).
+                        if (videoReadyHandler != null && videoReadyRunnable != null) {
+                            videoReadyHandler.removeCallbacks(videoReadyRunnable);
+                            videoReadyHandler = null; videoReadyRunnable = null;
+                        }
+                        // NOTE: do NOT setVisibility(VISIBLE) here — PlayerView stays invisible
+                        // until onRenderedFirstFrame so the grey surface is never shown.
                         exoPlayer.prepare();
                         exoPlayer.play();
+                        // 8-second safety: make visible + fire callback if onRenderedFirstFrame
+                        // never arrives (network failure, unsupported codec, etc.).
+                        final android.os.Handler readyHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+                        final Runnable readyCb = new Runnable() {
+                            @Override public void run() {
+                                videoReadyHandler = null; videoReadyRunnable = null;
+                                nativeVideoView.setVisibility(View.VISIBLE);
+                                webView.evaluateJavascript(
+                                    "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
+                            }
+                        };
+                        videoReadyHandler = readyHandler;
+                        videoReadyRunnable = readyCb;
+                        readyHandler.postDelayed(readyCb, 8000);
+                        // Fire on first real painted frame — not just STATE_READY.
                         final androidx.media3.exoplayer.ExoPlayer playerRef = exoPlayer;
                         playerRef.addListener(new androidx.media3.common.Player.Listener() {
                             @Override
-                            public void onPlaybackStateChanged(int state) {
-                                if (state == androidx.media3.common.Player.STATE_READY) {
-                                    playerRef.removeListener(this);
-                                    runOnUiThread(() -> webView.evaluateJavascript(
-                                        "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null));
+                            public void onRenderedFirstFrame() {
+                                playerRef.removeListener(this);
+                                if (videoReadyHandler != null) {
+                                    videoReadyHandler.removeCallbacks(videoReadyRunnable);
+                                    videoReadyHandler = null; videoReadyRunnable = null;
                                 }
+                                runOnUiThread(() -> {
+                                    nativeVideoView.setVisibility(View.VISIBLE);
+                                    webView.evaluateJavascript(
+                                        "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
+                                });
                             }
                         });
                     } catch (Exception e) { android.util.Log.e("DigipalNative", "playNativeVideo error", e); }
@@ -580,6 +610,10 @@ import android.os.Looper;
             public void stopNativeVideo() {
                 runOnUiThread(() -> {
                     try {
+                    if (videoReadyHandler != null && videoReadyRunnable != null) {
+                        videoReadyHandler.removeCallbacks(videoReadyRunnable);
+                        videoReadyHandler = null; videoReadyRunnable = null;
+                    }
                         if (exoPlayer != null) { exoPlayer.stop(); exoPlayer.clearMediaItems(); }
                         nativeVideoView.setVisibility(View.INVISIBLE);
                     } catch (Exception e) {}
@@ -1111,6 +1145,10 @@ import android.os.Looper;
             webView.destroy();
         }
         activityAlive = false;
+        if (videoReadyHandler != null && videoReadyRunnable != null) {
+            videoReadyHandler.removeCallbacks(videoReadyRunnable);
+            videoReadyHandler = null; videoReadyRunnable = null;
+        }
         if (exoPlayer != null) { exoPlayer.release(); exoPlayer = null; }
         super.onDestroy();
     }
