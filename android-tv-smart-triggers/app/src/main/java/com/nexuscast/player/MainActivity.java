@@ -74,6 +74,9 @@ import android.os.Looper;
     private long dpadFirstPressMs = 0L;
     private android.view.View diagnosticsOverlay = null;
     private android.os.Handler diagDismissHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+      private androidx.media3.ui.PlayerView nativeVideoView;
+      private android.widget.ImageView nativeImageView;
+      private androidx.media3.exoplayer.ExoPlayer exoPlayer;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -142,6 +145,16 @@ import android.os.Looper;
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
         ));
+
+        // Native media overlay views (ExoPlayer video + Glide image).
+        nativeVideoView = new androidx.media3.ui.PlayerView(this);
+        nativeVideoView.setUseController(false);
+        nativeVideoView.setVisibility(View.INVISIBLE);
+        root.addView(nativeVideoView, new FrameLayout.LayoutParams(1, 1));
+
+        nativeImageView = new android.widget.ImageView(this);
+        nativeImageView.setVisibility(View.INVISIBLE);
+        root.addView(nativeImageView, new FrameLayout.LayoutParams(1, 1));
 
         setContentView(root);
 
@@ -522,6 +535,149 @@ import android.os.Looper;
                       },
                       new Handler(Looper.getMainLooper()));
           }
+
+            @android.webkit.JavascriptInterface
+            public void playNativeVideo(String url, float x, float y, float w, float h, String objectFit, boolean loop, float volume) {
+                runOnUiThread(() -> {
+                    try {
+                        if (exoPlayer == null) {
+                            exoPlayer = new androidx.media3.exoplayer.ExoPlayer.Builder(MainActivity.this).build();
+                        }
+                        exoPlayer.stop();
+                        exoPlayer.clearMediaItems();
+                        exoPlayer.setRepeatMode(loop ? androidx.media3.common.Player.REPEAT_MODE_ONE : androidx.media3.common.Player.REPEAT_MODE_OFF);
+                        exoPlayer.setVolume(volume);
+                        exoPlayer.setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.parse(url)));
+                        nativeVideoView.setPlayer(exoPlayer);
+                        nativeVideoView.setResizeMode(
+                            "cover".equals(objectFit) ? androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM :
+                            "fill".equals(objectFit)  ? androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL :
+                            androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT);
+                        float d = getResources().getDisplayMetrics().density;
+                        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams((int)(w * d), (int)(h * d));
+                        lp.leftMargin = (int)(x * d);
+                        lp.topMargin = (int)(y * d);
+                        nativeVideoView.setLayoutParams(lp);
+                        nativeVideoView.setVisibility(View.VISIBLE);
+                        exoPlayer.prepare();
+                        exoPlayer.play();
+                        final androidx.media3.exoplayer.ExoPlayer playerRef = exoPlayer;
+                        playerRef.addListener(new androidx.media3.common.Player.Listener() {
+                            @Override
+                            public void onPlaybackStateChanged(int state) {
+                                if (state == androidx.media3.common.Player.STATE_READY) {
+                                    playerRef.removeListener(this);
+                                    runOnUiThread(() -> webView.evaluateJavascript(
+                                        "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null));
+                                }
+                            }
+                        });
+                    } catch (Exception e) { android.util.Log.e("DigipalNative", "playNativeVideo error", e); }
+                });
+            }
+
+            @android.webkit.JavascriptInterface
+            public void stopNativeVideo() {
+                runOnUiThread(() -> {
+                    try {
+                        if (exoPlayer != null) { exoPlayer.stop(); exoPlayer.clearMediaItems(); }
+                        nativeVideoView.setVisibility(View.INVISIBLE);
+                    } catch (Exception e) {}
+                });
+            }
+
+            @android.webkit.JavascriptInterface
+            public void pauseNativeVideo() {
+                runOnUiThread(() -> { try { if (exoPlayer != null) exoPlayer.pause(); } catch (Exception e) {} });
+            }
+
+            @android.webkit.JavascriptInterface
+            public void resumeNativeVideo() {
+                runOnUiThread(() -> { try { if (exoPlayer != null) exoPlayer.play(); } catch (Exception e) {} });
+            }
+
+            @android.webkit.JavascriptInterface
+            public void seekNativeVideo(long positionMs) {
+                runOnUiThread(() -> { try { if (exoPlayer != null) exoPlayer.seekTo(positionMs); } catch (Exception e) {} });
+            }
+
+            @android.webkit.JavascriptInterface
+            public void setNativeVideoRect(float x, float y, float w, float h) {
+                runOnUiThread(() -> {
+                    try {
+                        float d = getResources().getDisplayMetrics().density;
+                        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams((int)(w * d), (int)(h * d));
+                        lp.leftMargin = (int)(x * d); lp.topMargin = (int)(y * d);
+                        nativeVideoView.setLayoutParams(lp);
+                    } catch (Exception e) {}
+                });
+            }
+
+            @android.webkit.JavascriptInterface
+            public long getNativeVideoPosition() {
+                try { return exoPlayer != null ? exoPlayer.getCurrentPosition() : 0L; } catch (Exception e) { return 0L; }
+            }
+
+            @android.webkit.JavascriptInterface
+            public void showNativeImage(String url, float x, float y, float w, float h, String scaleType) {
+                runOnUiThread(() -> {
+                    try {
+                        float d = getResources().getDisplayMetrics().density;
+                        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams((int)(w * d), (int)(h * d));
+                        lp.leftMargin = (int)(x * d); lp.topMargin = (int)(y * d);
+                        nativeImageView.setLayoutParams(lp);
+                        android.widget.ImageView.ScaleType st =
+                            "cover".equals(scaleType) ? android.widget.ImageView.ScaleType.CENTER_CROP :
+                            "fill".equals(scaleType)  ? android.widget.ImageView.ScaleType.FIT_XY :
+                            android.widget.ImageView.ScaleType.FIT_CENTER;
+                        nativeImageView.setScaleType(st);
+                        nativeImageView.setVisibility(View.VISIBLE);
+                        com.bumptech.glide.Glide.with(MainActivity.this)
+                            .load(url)
+                            .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
+                                @Override
+                                public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e,
+                                        Object model, com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
+                                        boolean isFirstResource) {
+                                    webView.evaluateJavascript(
+                                        "if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady()", null);
+                                    return false;
+                                }
+                                @Override
+                                public boolean onResourceReady(android.graphics.drawable.Drawable resource, Object model,
+                                        com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
+                                        com.bumptech.glide.load.DataSource dataSource, boolean isFirstResource) {
+                                    webView.evaluateJavascript(
+                                        "if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady()", null);
+                                    return false;
+                                }
+                            })
+                            .into(nativeImageView);
+                    } catch (Exception e) { android.util.Log.e("DigipalNative", "showNativeImage error", e); }
+                });
+            }
+
+            @android.webkit.JavascriptInterface
+            public void hideNativeImage() {
+                runOnUiThread(() -> {
+                    try {
+                        com.bumptech.glide.Glide.with(MainActivity.this).clear(nativeImageView);
+                        nativeImageView.setVisibility(View.INVISIBLE);
+                    } catch (Exception e) {}
+                });
+            }
+
+            @android.webkit.JavascriptInterface
+            public void setNativeImageRect(float x, float y, float w, float h) {
+                runOnUiThread(() -> {
+                    try {
+                        float d = getResources().getDisplayMetrics().density;
+                        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams((int)(w * d), (int)(h * d));
+                        lp.leftMargin = (int)(x * d); lp.topMargin = (int)(y * d);
+                        nativeImageView.setLayoutParams(lp);
+                    } catch (Exception e) {}
+                });
+            }
     }
 
     private void scheduleAppRelaunch(long delayMs) {
@@ -955,6 +1111,7 @@ import android.os.Looper;
             webView.destroy();
         }
         activityAlive = false;
+        if (exoPlayer != null) { exoPlayer.release(); exoPlayer = null; }
         super.onDestroy();
     }
 
