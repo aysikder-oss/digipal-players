@@ -33,6 +33,11 @@ import android.widget.TextView;
 import org.json.JSONObject;
 
 import android.net.wifi.WifiManager;
+import android.graphics.Bitmap;
+import android.graphics.Rect;
+import android.util.Base64;
+import android.view.PixelCopy;
+import java.io.ByteArrayOutputStream;
   import android.text.format.Formatter;
   public class MainActivity extends Activity {
 
@@ -481,6 +486,40 @@ import android.net.wifi.WifiManager;
                     .apply();
             }
         }
+
+          @JavascriptInterface
+          public void captureScreenshot(String requestId) {
+              if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                  // PixelCopy requires API 26+; signal null so the web side falls back to html2canvas
+                  runOnUiThread(() ->
+                      webView.evaluateJavascript(
+                          "if(window.__digipalNativeScreenshot)window.__digipalNativeScreenshot('"
+                              + requestId + "',null)", null));
+                  return;
+              }
+              Bitmap bmp = Bitmap.createBitmap(
+                      webView.getWidth(), webView.getHeight(), Bitmap.Config.ARGB_8888);
+              PixelCopy.request(
+                      getWindow(),
+                      new Rect(0, 0, webView.getWidth(), webView.getHeight()),
+                      bmp,
+                      copyResult -> {
+                          String b64 = null;
+                          if (copyResult == PixelCopy.SUCCESS) {
+                              ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                              bmp.compress(Bitmap.CompressFormat.JPEG, 85, baos);
+                              b64 = "data:image/jpeg;base64,"
+                                      + Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP);
+                          }
+                          final String payload = b64;
+                          runOnUiThread(() ->
+                              webView.evaluateJavascript(
+                                  "if(window.__digipalNativeScreenshot)window.__digipalNativeScreenshot('"
+                                      + requestId + "'," + (payload == null ? "null" : "'" + payload + "'") + ")",
+                                  null));
+                      },
+                      new Handler(Looper.getMainLooper()));
+          }
     }
 
     private void scheduleAppRelaunch(long delayMs) {
