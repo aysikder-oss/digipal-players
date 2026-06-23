@@ -593,9 +593,21 @@ import android.os.Looper;
                       nativeVideoView.setVisibility(View.VISIBLE);
                       exoPlayer.prepare();
                       exoPlayer.play();
-                  } catch (Exception e) { android.util.Log.e("DigipalNative", "playNativeVideo error", e); }
-              });
-          }
+                        // Notify JS when ExoPlayer reaches STATE_READY (first decoded frame).
+                        final androidx.media3.exoplayer.ExoPlayer playerRef = exoPlayer;
+                        playerRef.addListener(new androidx.media3.common.Player.Listener() {
+                            @Override
+                            public void onPlaybackStateChanged(int state) {
+                                if (state == androidx.media3.common.Player.STATE_READY) {
+                                    playerRef.removeListener(this);
+                                    runOnUiThread(() -> webView.evaluateJavascript(
+                                        "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null));
+                                }
+                            }
+                        });
+                    } catch (Exception e) { android.util.Log.e("DigipalNative", "playNativeVideo error", e); }
+                });
+            }
 
           @android.webkit.JavascriptInterface
           public void stopNativeVideo() {
@@ -653,10 +665,30 @@ import android.os.Looper;
                           android.widget.ImageView.ScaleType.FIT_CENTER;
                       nativeImageView.setScaleType(st);
                       nativeImageView.setVisibility(View.VISIBLE);
-                      com.bumptech.glide.Glide.with(MainActivity.this).load(url).into(nativeImageView);
-                  } catch (Exception e) { android.util.Log.e("DigipalNative", "showNativeImage error", e); }
-              });
-          }
+                      com.bumptech.glide.Glide.with(MainActivity.this)
+                            .load(url)
+                            .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
+                                @Override
+                                public boolean onLoadFailed(@android.annotation.Nullable com.bumptech.glide.load.engine.GlideException e,
+                                        Object model, com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
+                                        boolean isFirstResource) {
+                                    webView.evaluateJavascript(
+                                        "if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady()", null);
+                                    return false;
+                                }
+                                @Override
+                                public boolean onResourceReady(android.graphics.drawable.Drawable resource, Object model,
+                                        com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
+                                        com.bumptech.glide.load.DataSource dataSource, boolean isFirstResource) {
+                                    webView.evaluateJavascript(
+                                        "if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady()", null);
+                                    return false;
+                                }
+                            })
+                            .into(nativeImageView);
+                    } catch (Exception e) { android.util.Log.e("DigipalNative", "showNativeImage error", e); }
+                });
+            }
 
           @android.webkit.JavascriptInterface
           public void hideNativeImage() {
