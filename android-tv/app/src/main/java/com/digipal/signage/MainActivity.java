@@ -669,7 +669,7 @@ import android.os.Looper;
                             .load(url)
                             .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
                                 @Override
-                                public boolean onLoadFailed(@android.annotation.Nullable com.bumptech.glide.load.engine.GlideException e,
+                                public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e,
                                         Object model, com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
                                         boolean isFirstResource) {
                                     webView.evaluateJavascript(
