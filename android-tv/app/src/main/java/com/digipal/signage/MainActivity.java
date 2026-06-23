@@ -33,6 +33,8 @@ import android.graphics.Rect;
 import android.util.Base64;
 import android.view.PixelCopy;
 import java.io.ByteArrayOutputStream;
+import android.os.Handler;
+import android.os.Looper;
   import android.text.format.Formatter;
   public class MainActivity extends Activity {
 
