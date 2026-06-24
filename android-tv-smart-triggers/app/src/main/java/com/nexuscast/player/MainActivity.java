@@ -135,7 +135,11 @@ import android.os.Looper;
         rootLayout = root;
         root.setBackgroundColor(Color.parseColor("#0a0e1a"));
 
-        try {
+        // Pre-warm WebView renderer process before first content load (API 33+, OptiSigns technique)
+          if (Build.VERSION.SDK_INT >= 33) {
+              try { android.webkit.WebView.preloadWebView(this); } catch (Throwable ignored) {}
+          }
+          try {
               webView = new WebView(this);
           } catch (Throwable e) {
               android.widget.TextView errTv = new android.widget.TextView(this);
@@ -306,7 +310,12 @@ import android.os.Looper;
         webView.setVerticalScrollBarEnabled(false);
         webView.setHorizontalScrollBarEnabled(false);
 
-        webView.addJavascriptInterface(new WebAppInterface(), "Android");
+          // Keep WebView renderer alive and auto-restart it under memory pressure (API 26+, OptiSigns technique)
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+              webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true);
+          }
+
+          webView.addJavascriptInterface(new WebAppInterface(), "Android");
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
