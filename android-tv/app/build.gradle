@@ -66,5 +66,7 @@ plugins {
         // Room — offline playlist cache
         implementation 'androidx.room:room-runtime:2.6.1'
         annotationProcessor 'androidx.room:room-compiler:2.6.1'
+        // WorkManager — crash recovery with back-off
+        implementation 'androidx.work:work-runtime:2.9.0'
   }
   
