@@ -81,6 +81,12 @@ import android.os.Looper;
     private android.os.Handler videoReadyHandler;
     private Runnable videoReadyRunnable;
     private androidx.media3.common.Player.Listener nativeVideoListener;
+    // Preload — background ExoPlayer/Glide to buffer the next playlist item before it plays
+    private androidx.media3.exoplayer.ExoPlayer preloadPlayer;
+    private String preloadedVideoUrl;
+    @SuppressWarnings("rawtypes")
+    private com.bumptech.glide.request.target.Target preloadImageTarget;
+    private String preloadedImageUrl;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -545,15 +551,30 @@ import android.os.Looper;
             public void playNativeVideo(String url, float x, float y, float w, float h, String objectFit, boolean loop, float volume) {
                 runOnUiThread(() -> {
                     try {
-                        if (exoPlayer == null) {
-                            exoPlayer = new androidx.media3.exoplayer.ExoPlayer.Builder(MainActivity.this).build();
-                        }
-                        exoPlayer.stop();
-                        exoPlayer.clearMediaItems();
-                        exoPlayer.setRepeatMode(loop ? androidx.media3.common.Player.REPEAT_MODE_ONE : androidx.media3.common.Player.REPEAT_MODE_OFF);
-                        exoPlayer.setVolume(volume);
-                        exoPlayer.setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.parse(url)));
-                        nativeVideoView.setPlayer(exoPlayer);
+                        // Swap in preloaded player if URL matches — already buffered, near-instant.
+                          boolean fromPreload = url.equals(preloadedVideoUrl) && preloadPlayer != null;
+                          if (fromPreload) {
+                              if (exoPlayer != null) {
+                                  if (nativeVideoListener != null) { exoPlayer.removeListener(nativeVideoListener); nativeVideoListener = null; }
+                                  try { exoPlayer.release(); } catch (Throwable ignored) {}
+                              }
+                              exoPlayer = preloadPlayer;
+                              preloadPlayer = null; preloadedVideoUrl = null;
+                          } else {
+                              if (preloadPlayer != null) {
+                                  try { preloadPlayer.release(); } catch (Throwable ignored) {}
+                                  preloadPlayer = null; preloadedVideoUrl = null;
+                              }
+                              if (exoPlayer == null) {
+                                  exoPlayer = new androidx.media3.exoplayer.ExoPlayer.Builder(MainActivity.this).build();
+                              }
+                              exoPlayer.stop();
+                              exoPlayer.clearMediaItems();
+                              exoPlayer.setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.parse(url)));
+                          }
+                          exoPlayer.setRepeatMode(loop ? androidx.media3.common.Player.REPEAT_MODE_ONE : androidx.media3.common.Player.REPEAT_MODE_OFF);
+                          exoPlayer.setVolume(volume);
+                          nativeVideoView.setPlayer(exoPlayer);
                         nativeVideoView.setResizeMode(
                             "cover".equals(objectFit) ? androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM :
                             "fill".equals(objectFit)  ? androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL :
@@ -573,11 +594,11 @@ import android.os.Looper;
                             exoPlayer.removeListener(nativeVideoListener);
                             nativeVideoListener = null;
                         }
-                        // NOTE: do NOT setVisibility(VISIBLE) here — PlayerView stays invisible
-                        // until onRenderedFirstFrame so the grey surface is never shown.
-                        exoPlayer.prepare();
-                        exoPlayer.play();
-                        // 8-second safety: fire callback if neither onRenderedFirstFrame
+                          // NOTE: do NOT setVisibility(VISIBLE) here — PlayerView stays invisible
+                          // until onRenderedFirstFrame so the grey surface is never shown.
+                          if (!fromPreload) exoPlayer.prepare();
+                          exoPlayer.play();
+                          // 8-second safety: fire callback if neither onRenderedFirstFrame
                         // nor onPlayerError arrive (e.g. bridge totally unresponsive).
                         final android.os.Handler readyHandler = new android.os.Handler(android.os.Looper.getMainLooper());
                         final Runnable readyCb = new Runnable() {
@@ -736,12 +757,56 @@ import android.os.Looper;
                         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams((int)(w * d), (int)(h * d));
                         lp.leftMargin = (int)(x * d); lp.topMargin = (int)(y * d);
                         nativeImageView.setLayoutParams(lp);
-                    } catch (Exception e) {}
                 });
-            }
-    }
+              }
 
-    private void scheduleAppRelaunch(long delayMs) {
+              @android.webkit.JavascriptInterface
+              public void preloadNativeVideo(String url) {
+                  runOnUiThread(() -> {
+                      try {
+                          if (url.equals(preloadedVideoUrl) && preloadPlayer != null) return;
+                          if (preloadPlayer != null) { try { preloadPlayer.release(); } catch (Throwable ignored) {} preloadPlayer = null; }
+                          preloadedVideoUrl = null;
+                          android.app.ActivityManager am = (android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE);
+                          android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+                          am.getMemoryInfo(mi);
+                          if (mi.lowMemory) return;
+                          preloadPlayer = new androidx.media3.exoplayer.ExoPlayer.Builder(MainActivity.this).build();
+                          preloadPlayer.setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.parse(url)));
+                          preloadPlayer.setPlayWhenReady(false);
+                          preloadPlayer.prepare();
+                          preloadedVideoUrl = url;
+                      } catch (Exception e) { android.util.Log.w("DigipalNative", "preloadNativeVideo error: " + e.getMessage()); }
+                  });
+              }
+
+              @android.webkit.JavascriptInterface
+              public void preloadNativeImage(String url) {
+                  runOnUiThread(() -> {
+                      try {
+                          if (url.equals(preloadedImageUrl) && preloadImageTarget != null) return;
+                          if (preloadImageTarget != null) { try { com.bumptech.glide.Glide.with(MainActivity.this).clear(preloadImageTarget); } catch (Throwable ignored) {} preloadImageTarget = null; }
+                          preloadedImageUrl = null;
+                          preloadImageTarget = com.bumptech.glide.Glide.with(MainActivity.this).load(url).preload();
+                          preloadedImageUrl = url;
+                      } catch (Exception e) { android.util.Log.w("DigipalNative", "preloadNativeImage error: " + e.getMessage()); }
+                  });
+              }
+
+              @android.webkit.JavascriptInterface
+              public void cancelNativePreload() {
+                  runOnUiThread(() -> {
+                      try {
+                          if (preloadPlayer != null) { try { preloadPlayer.release(); } catch (Throwable ignored) {} preloadPlayer = null; }
+                          preloadedVideoUrl = null;
+                          if (preloadImageTarget != null) { try { com.bumptech.glide.Glide.with(MainActivity.this).clear(preloadImageTarget); } catch (Throwable ignored) {} preloadImageTarget = null; }
+                          preloadedImageUrl = null;
+                      } catch (Exception e) {}
+                  });
+              }
+      }
+
+      private void scheduleAppRelaunch(long delayMs) {
         try {
             Intent intent = new Intent(this, MainActivity.class);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
