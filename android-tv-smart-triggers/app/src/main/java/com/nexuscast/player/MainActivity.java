@@ -666,6 +666,10 @@ import android.os.Looper;
                         final androidx.media3.ui.PlayerView preloadView = activeVideoViewIsA ? nativeVideoViewB : nativeVideoView;
                         // Discard any pending-old player that was never cleaned up (e.g. back-to-back plays)
                           if (pendingOldPlayer != null) { try { pendingOldPlayer.stop(); pendingOldPlayer.release(); } catch (Throwable ignored) {} pendingOldPlayer = null; }
+                          // DIAG: timing + device state for every video transition
+                          final long diagT0 = android.os.SystemClock.elapsedRealtime();
+                          final String diagPath = fromPreload ? (preloadVideoReady ? "preload-ready" : "preload-waiting") : "cold-load";
+                          { android.app.ActivityManager.MemoryInfo diagMi = new android.app.ActivityManager.MemoryInfo(); ((android.app.ActivityManager)getSystemService(ACTIVITY_SERVICE)).getMemoryInfo(diagMi); android.util.Log.i("DigipalMetrics", "[playNativeVideo] path=" + diagPath + " memAvailMB=" + (diagMi.availMem/1048576L) + " lowMem=" + diagMi.lowMemory + " url=…" + (url.length()>50 ? url.substring(url.length()-50) : url)); }
                           if (fromPreload) {
                               // Capture old player â keep it running on activeView until new frame confirmed visible
                               final androidx.media3.exoplayer.ExoPlayer oldPlayer = exoPlayer;
@@ -694,16 +698,19 @@ import android.os.Looper;
                                           });
                                       }
                                       @Override public void onPlayerError(androidx.media3.common.PlaybackException error) {
-                                          if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
-                                          if (done[0]) return; done[0] = true;
-                                            // Silence ExoPlayer startup timeout (action=1) — video hadn't a fair chance to buffer; let ExoPlayer retry internally
+                                            // DIAG: log full error before any early-return
+                                            android.util.Log.w("DigipalMetrics", "[preload onPlayerError] " + error.getClass().getSimpleName() + ": " + error.getMessage() + (error.getCause() != null ? " cause=" + error.getCause().getClass().getSimpleName() : ""));
+                                            // FIX: silence check FIRST — keep listener + 2.5s fallback alive so ExoPlayer's
+                                            // internal retry can reach onRenderedFirstFrame and swap the view.
                                             if (error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException) {
                                                 androidx.media3.exoplayer.ExoTimeoutException toe = (androidx.media3.exoplayer.ExoTimeoutException) error.getCause();
                                                 if (toe.timeoutActionCode == 1) {
-                                                    android.util.Log.w("DigipalNative", "ExoPlayer preload startup timeout silenced (action=1)");
+                                                    android.util.Log.w("DigipalNative", "ExoPlayer preload startup timeout silenced (action=1) — keeping listener for retry");
                                                     return;
                                                 }
                                             }
+                                          if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
+                                          if (done[0]) return; done[0] = true;
                                           if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
                                           pendingOldPlayer = null; if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
                                           webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
@@ -734,25 +741,30 @@ import android.os.Looper;
                               final androidx.media3.exoplayer.ExoPlayer oldPlayer = exoPlayer;
                               exoPlayer = coldPlayer; pendingOldPlayer = oldPlayer;
                               final android.os.Handler rH2 = new android.os.Handler(android.os.Looper.getMainLooper());
-                              final Runnable rCb2 = new Runnable() { @Override public void run() { videoReadyHandler = null; videoReadyRunnable = null; nativeVideoListener = null; preloadView.setVisibility(View.VISIBLE); activeView.setVisibility(View.INVISIBLE); activeVideoViewIsA = !activeVideoViewIsA; pendingOldPlayer = null; if (oldPlayer != null) { try { oldPlayer.stop(); oldPlayer.release(); } catch (Throwable ignored) {} } webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null); } };
+                              final Runnable rCb2 = new Runnable() { @Override public void run() { videoReadyHandler = null; videoReadyRunnable = null; nativeVideoListener = null; long diagFbMs = android.os.SystemClock.elapsedRealtime() - diagT0; android.util.Log.w("DigipalMetrics", "[8s fallback fired] cold-load — onRenderedFirstFrame never arrived, latencyMs=" + diagFbMs); preloadView.setVisibility(View.VISIBLE); activeView.setVisibility(View.INVISIBLE); activeVideoViewIsA = !activeVideoViewIsA; pendingOldPlayer = null; if (oldPlayer != null) { try { oldPlayer.stop(); oldPlayer.release(); } catch (Throwable ignored) {} } webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null); webView.evaluateJavascript("if(window.__digipalNativeMetrics)window.__digipalNativeMetrics({type:'videoFallback',path:'cold-load',latencyMs:" + diagFbMs + "})", null); } };
                               videoReadyHandler = rH2; videoReadyRunnable = rCb2; rH2.postDelayed(rCb2, 8000);
                               nativeVideoListener = new androidx.media3.common.Player.Listener() {
                                   @Override public void onRenderedFirstFrame() {
                                       if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
                                       if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
-                                      runOnUiThread(() -> { preloadView.setVisibility(View.VISIBLE); activeView.setVisibility(View.INVISIBLE); activeVideoViewIsA = !activeVideoViewIsA; pendingOldPlayer = null; if (oldPlayer != null) { try { oldPlayer.stop(); oldPlayer.release(); } catch (Throwable ignored) {} } webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null); });
+                                      final long diagLatencyMs = android.os.SystemClock.elapsedRealtime() - diagT0;
+                                      android.util.Log.i("DigipalMetrics", "[onRenderedFirstFrame] path=" + diagPath + " latencyMs=" + diagLatencyMs);
+                                      runOnUiThread(() -> { preloadView.setVisibility(View.VISIBLE); activeView.setVisibility(View.INVISIBLE); activeVideoViewIsA = !activeVideoViewIsA; pendingOldPlayer = null; if (oldPlayer != null) { try { oldPlayer.stop(); oldPlayer.release(); } catch (Throwable ignored) {} } webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null); webView.evaluateJavascript("if(window.__digipalNativeMetrics)window.__digipalNativeMetrics({type:'videoReady',path:'" + diagPath + "',latencyMs:" + diagLatencyMs + "})", null); });
                                   }
                                   @Override public void onPlayerError(androidx.media3.common.PlaybackException error) {
-                                      if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
-                                      if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
-                                        // Silence ExoPlayer startup timeout (action=1) — video hadn't a fair chance to buffer; let ExoPlayer retry internally
+                                        // DIAG: log full error before any early-return
+                                        android.util.Log.w("DigipalMetrics", "[cold onPlayerError] " + error.getClass().getSimpleName() + ": " + error.getMessage() + (error.getCause() != null ? " cause=" + error.getCause().getClass().getSimpleName() : ""));
+                                        // FIX: silence check FIRST — keep listener + 8s fallback alive so ExoPlayer's
+                                        // internal retry can reach onRenderedFirstFrame and swap the view.
                                         if (error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException) {
                                             androidx.media3.exoplayer.ExoTimeoutException toe = (androidx.media3.exoplayer.ExoTimeoutException) error.getCause();
                                             if (toe.timeoutActionCode == 1) {
-                                                android.util.Log.w("DigipalNative", "ExoPlayer startup timeout silenced (action=1)");
+                                                android.util.Log.w("DigipalNative", "ExoPlayer cold-load startup timeout silenced (action=1) — keeping listener + 8s fallback for retry");
                                                 return;
                                             }
                                         }
+                                      if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
+                                      if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
                                       preloadView.setVisibility(View.VISIBLE); activeView.setVisibility(View.INVISIBLE); activeVideoViewIsA = !activeVideoViewIsA;
                                       pendingOldPlayer = null; if (oldPlayer != null) { try { oldPlayer.stop(); oldPlayer.release(); } catch (Throwable ignored) {} }
                                       webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
