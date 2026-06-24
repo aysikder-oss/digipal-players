@@ -298,6 +298,27 @@ import android.os.Looper;
                         "document.head&&document.head.appendChild(s);" +
                         "})();",
                         null);
+                // Inject offline playlist cache for immediate use by React app (window.__digipalOfflineCache)
+                  if (cacheDb != null) {
+                      final android.webkit.WebView _wv = webView;
+                      new Thread(() -> {
+                          try {
+                              java.util.List<CacheDatabase.CacheObject> all = cacheDb.cacheDao().findAll();
+                              if (all == null || all.isEmpty()) return;
+                              StringBuilder js = new StringBuilder(
+                                  "if(!window.__digipalOfflineCache)window.__digipalOfflineCache={};");
+                              for (CacheDatabase.CacheObject item : all) {
+                                  js.append("window.__digipalOfflineCache[\"")
+                                    .append(item.key.replace("\\", "\\\\").replace("\"", "\\\""))
+                                    .append("\"] = ").append(item.json).append(";");
+                              }
+                              final String script = js.toString();
+                              runOnUiThread(() -> _wv.evaluateJavascript(script, null));
+                          } catch (Throwable e) {
+                              android.util.Log.w("Digipal", "Offline cache inject: " + e.getMessage());
+                          }
+                      }).start();
+                  }
                 }
             }
 
