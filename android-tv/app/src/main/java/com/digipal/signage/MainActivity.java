@@ -38,9 +38,9 @@ import android.os.Looper;
   import android.text.format.Formatter;
   public class MainActivity extends Activity {
 
-    /** Set true in onResume, false in onStop — read by WatchdogService.inForeground(). */
+    /** Set true in onResume, false in onStop â read by WatchdogService.inForeground(). */
     public static volatile boolean activityVisible = false;
-    /** Set true in onCreate, false in onDestroy — used by WatchdogService to detect real crashes vs Home-press. */
+    /** Set true in onCreate, false in onDestroy â used by WatchdogService to detect real crashes vs Home-press. */
     public static volatile boolean activityAlive = false;
 
     private WebView webView;
@@ -61,7 +61,7 @@ import android.os.Looper;
       private android.view.View diagnosticsOverlay = null;
       private final android.os.Handler diagDismissHandler = new android.os.Handler(android.os.Looper.getMainLooper());
 
-    // Native media overlay views (ExoPlayer + Glide) — Android TV only
+    // Native media overlay views (ExoPlayer + Glide) â Android TV only
     private androidx.media3.ui.PlayerView nativeVideoView;
     private android.widget.ImageView nativeImageView;
     private androidx.media3.exoplayer.ExoPlayer exoPlayer;
@@ -72,13 +72,13 @@ import android.os.Looper;
     private android.os.Handler videoReadyHandler;
     private Runnable videoReadyRunnable;
     private androidx.media3.common.Player.Listener nativeVideoListener;
-    // Preload — background ExoPlayer/Glide to buffer the next playlist item before it plays
+    // Preload â background ExoPlayer/Glide to buffer the next playlist item before it plays
     private androidx.media3.exoplayer.ExoPlayer preloadPlayer;
     private String preloadedVideoUrl;
     private boolean preloadVideoReady = false;
     private String preloadedImageUrl;
     private boolean preloadImageReady = false;
-    // Dual-buffer B views — preloaded content renders here silently while A is visible
+    // Dual-buffer B views â preloaded content renders here silently while A is visible
     private androidx.media3.ui.PlayerView nativeVideoViewB;
     private android.widget.ImageView nativeImageViewB;
     private boolean activeVideoViewIsA = true;
@@ -86,7 +86,7 @@ import android.os.Looper;
     // Old player held alive during swap-wait so activeView stays visible; released after new frame confirmed
     private androidx.media3.exoplayer.ExoPlayer pendingOldPlayer;
 
-    // Room-based offline playlist cache — survives boot, no blank screen on restart
+    // Room-based offline playlist cache â survives boot, no blank screen on restart
     private CacheDatabase.AppDatabase cacheDb;
 
     private static final java.util.regex.Pattern PRIVATE_IP_PATTERN = java.util.regex.Pattern.compile(
@@ -174,23 +174,23 @@ import android.os.Looper;
             FrameLayout.LayoutParams.MATCH_PARENT
         ));
 
-        // Native video overlay (ExoPlayer PlayerView) — sits above WebView and errorContainer
+        // Native video overlay (ExoPlayer PlayerView) â sits above WebView and errorContainer
         nativeVideoView = new androidx.media3.ui.PlayerView(this);
         nativeVideoView.setUseController(false);
         nativeVideoView.setBackgroundColor(android.graphics.Color.TRANSPARENT);
         nativeVideoView.setVisibility(View.INVISIBLE);
         root.addView(nativeVideoView, new FrameLayout.LayoutParams(1, 1));
-        // Dual-buffer B video view — preloaded content renders here while A is visible
+        // Dual-buffer B video view â preloaded content renders here while A is visible
         nativeVideoViewB = new androidx.media3.ui.PlayerView(this);
         nativeVideoViewB.setUseController(false);
         nativeVideoViewB.setBackgroundColor(android.graphics.Color.TRANSPARENT);
         nativeVideoViewB.setVisibility(View.INVISIBLE);
         root.addView(nativeVideoViewB, new FrameLayout.LayoutParams(1, 1));
-        // Native image overlay (Glide ImageView) — sits above nativeVideoView
+        // Native image overlay (Glide ImageView) â sits above nativeVideoView
         nativeImageView = new RecyclingSafeImageView(this);
         nativeImageView.setVisibility(View.INVISIBLE);
         root.addView(nativeImageView, new FrameLayout.LayoutParams(1, 1));
-        // Dual-buffer B image view — preloaded image loads here while A is visible
+        // Dual-buffer B image view â preloaded image loads here while A is visible
         nativeImageViewB = new RecyclingSafeImageView(this);
         nativeImageViewB.setVisibility(View.INVISIBLE);
         root.addView(nativeImageViewB, new FrameLayout.LayoutParams(1, 1));
@@ -208,7 +208,7 @@ import android.os.Looper;
         mediaDownloadManager.cleanupOrphans();
 
         
-          // Start crash watchdog — relaunches app within 10s if it crashes or is killed.
+          // Start crash watchdog â relaunches app within 10s if it crashes or is killed.
           Intent watchdogIntent = new Intent(this, WatchdogService.class);
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
               startForegroundService(watchdogIntent);
@@ -475,7 +475,7 @@ import android.os.Looper;
 
         /**
          * Device resource snapshot for the web player to throttle itself before a
-         * crash. Method name must stay exactly "getResourceStats" — the player's
+         * crash. Method name must stay exactly "getResourceStats" â the player's
          * native bridge depends on it.
          */
         @JavascriptInterface
@@ -656,7 +656,7 @@ import android.os.Looper;
           }
 
           /**
-           * Synchronously returns cached JSON by key (runs on JS bridge thread — not main thread, safe).
+           * Synchronously returns cached JSON by key (runs on JS bridge thread â not main thread, safe).
            * Returns null if no entry exists.
            */
           @android.webkit.JavascriptInterface
@@ -697,11 +697,11 @@ import android.os.Looper;
                         // Discard any pending-old player that was never cleaned up (e.g. back-to-back plays)
                           if (pendingOldPlayer != null) { try { pendingOldPlayer.stop(); pendingOldPlayer.release(); } catch (Throwable ignored) {} pendingOldPlayer = null; }
                           if (fromPreload) {
-                              // ── Dual-buffer instant swap ──────────────────────────────────────────────────
-                              // Capture old player — keep it running on activeView until new frame confirmed visible
+                              // ââ Dual-buffer instant swap ââââââââââââââââââââââââââââââââââââââââââââââââââ
+                              // Capture old player â keep it running on activeView until new frame confirmed visible
                               final androidx.media3.exoplayer.ExoPlayer oldPlayer = exoPlayer;
                               pendingOldPlayer = oldPlayer;
-                              // Promote preloadPlayer → exoPlayer
+                              // Promote preloadPlayer â exoPlayer
                               exoPlayer = preloadPlayer;
                               preloadPlayer = null; preloadedVideoUrl = null;
                               // Apply playback settings and ensure it's playing
@@ -712,7 +712,7 @@ import android.os.Looper;
                               preloadView.setResizeMode(resizeMode);
                               preloadView.setLayoutParams(lp);
                               if (preloadVideoReady) {
-                                  // First frame already rendered on preloadView surface → instant, zero-black swap
+                                  // First frame already rendered on preloadView surface â instant, zero-black swap
                                   preloadView.setVisibility(View.VISIBLE);
                                   activeView.setVisibility(View.INVISIBLE);
                                   activeVideoViewIsA = !activeVideoViewIsA;
@@ -723,7 +723,7 @@ import android.os.Looper;
                                   webView.evaluateJavascript(
                                       "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
                               } else {
-                                  // Preload still buffering — old content stays visible on activeView until first frame
+                                  // Preload still buffering â old content stays visible on activeView until first frame
                                   final boolean[] done = {false};
                                   nativeVideoListener = new androidx.media3.common.Player.Listener() {
                                       @Override public void onRenderedFirstFrame() {
@@ -746,6 +746,14 @@ import android.os.Looper;
                                           if (exoPlayer != null) exoPlayer.removeListener(this);
                                           nativeVideoListener = null;
                                           if (done[0]) return; done[0] = true;
+                                            // Silence ExoPlayer startup timeout (action=1) — video hadn't a fair chance to buffer; let ExoPlayer retry internally
+                                            if (error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException) {
+                                                androidx.media3.exoplayer.ExoTimeoutException toe = (androidx.media3.exoplayer.ExoTimeoutException) error.getCause();
+                                                if (toe.timeoutActionCode == 1) {
+                                                    android.util.Log.w("DigipalNative", "ExoPlayer preload startup timeout silenced (action=1)");
+                                                    return;
+                                                }
+                                            }
                                           if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
                                           pendingOldPlayer = null;
                                           if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
@@ -774,13 +782,13 @@ import android.os.Looper;
                                   readyHandler.postDelayed(readyCb, 2500);
                               }
                           } else {
-                              // ── Cold load: use inactive (preload) view so old content stays visible ─────────
+                              // ââ Cold load: use inactive (preload) view so old content stays visible âââââââââ
                               if (preloadPlayer != null) {
                                   try { preloadPlayer.release(); } catch (Throwable ignored) {}
                                   preloadPlayer = null; preloadedVideoUrl = null; preloadVideoReady = false;
                                   preloadView.setPlayer(null);
                               }
-                              // Build new player on preloadView — old exoPlayer keeps playing on activeView
+                              // Build new player on preloadView â old exoPlayer keeps playing on activeView
                               final androidx.media3.exoplayer.ExoPlayer coldPlayer = buildCachedExoPlayer();
                               preloadView.setPlayer(coldPlayer);
                               preloadView.setResizeMode(resizeMode);
@@ -827,6 +835,15 @@ import android.os.Looper;
                                       if (exoPlayer != null) exoPlayer.removeListener(this);
                                       nativeVideoListener = null;
                                       if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
+
+                                        // Silence ExoPlayer startup timeout (action=1) — video hadn't a fair chance to buffer; let ExoPlayer retry internally
+                                        if (error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException) {
+                                            androidx.media3.exoplayer.ExoTimeoutException toe = (androidx.media3.exoplayer.ExoTimeoutException) error.getCause();
+                                            if (toe.timeoutActionCode == 1) {
+                                                android.util.Log.w("DigipalNative", "ExoPlayer startup timeout silenced (action=1)");
+                                                return;
+                                            }
+                                        }
                                       // On error: swap to preloadView anyway so old content doesn't linger
                                       preloadView.setVisibility(View.VISIBLE);
                                       activeView.setVisibility(View.INVISIBLE);
@@ -911,7 +928,7 @@ import android.os.Looper;
                         final android.widget.ImageView activeImgView  = activeImageViewIsA ? nativeImageView : nativeImageViewB;
                         final android.widget.ImageView preloadImgView = activeImageViewIsA ? nativeImageViewB : nativeImageView;
                         if (url.equals(preloadedImageUrl) && preloadImageReady) {
-                            // Instant swap — image already decoded into preloadImgView
+                            // Instant swap â image already decoded into preloadImgView
                             preloadImgView.setScaleType(st);
                             preloadImgView.setLayoutParams(lp);
                             preloadImgView.setVisibility(View.VISIBLE);
@@ -1001,7 +1018,7 @@ import android.os.Looper;
                           preloadPlayer = buildCachedExoPlayer();
                           preloadView.setPlayer(preloadPlayer);
                           preloadPlayer.setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.parse(url)));
-                          preloadPlayer.setVolume(0f);       // silent — not visible yet
+                          preloadPlayer.setVolume(0f);       // silent â not visible yet
                           preloadPlayer.setPlayWhenReady(false);
                           preloadPlayer.prepare();
                           preloadedVideoUrl = url;
@@ -1070,6 +1087,38 @@ import android.os.Looper;
                       } catch (Exception e) {}
                   });
               }
+
+            @android.webkit.JavascriptInterface
+                public void receiveMessage(String json) {
+                    // Handles cross-origin JS commands from canvas/widget/iframe slides.
+                    // ASK_TOUCH: dispatches a synthetic MotionEvent to the WebView, bypassing Android's
+                    // user-gesture requirement for media autoplay (OptiSigns technique).
+                    // JS usage: window.Android.receiveMessage(JSON.stringify({ event: "sendDataToPlayer", data: { command: "ASK_TOUCH" } }))
+                    try {
+                        org.json.JSONObject msg = new org.json.JSONObject(json);
+                        String event = msg.optString("event", "");
+                        if ("sendDataToPlayer".equals(event)) {
+                            org.json.JSONObject data = msg.optJSONObject("data");
+                            if (data != null && "ASK_TOUCH".equals(data.optString("command", ""))) {
+                                runOnUiThread(() -> {
+                                    try {
+                                        long now = android.os.SystemClock.uptimeMillis();
+                                        float cx = webView.getWidth() / 2f;
+                                        float cy = webView.getHeight() / 2f;
+                                        android.view.MotionEvent down = android.view.MotionEvent.obtain(
+                                            now, now, android.view.MotionEvent.ACTION_DOWN, cx, cy, 0);
+                                        android.view.MotionEvent up = android.view.MotionEvent.obtain(
+                                            now, now + 50, android.view.MotionEvent.ACTION_UP, cx, cy, 0);
+                                        webView.dispatchTouchEvent(down);
+                                        webView.dispatchTouchEvent(up);
+                                        down.recycle();
+                                        up.recycle();
+                                    } catch (Throwable ignored) {}
+                                });
+                            }
+                        }
+                    } catch (Throwable ignored) {}
+                }
       }
 
       private void scheduleAppRelaunch(long delayMs) {
@@ -1244,7 +1293,7 @@ import android.os.Looper;
             long oldest = Long.MAX_VALUE;
             for (long t : renderGoneTimestamps) { if (t > 0 && t < oldest) oldest = t; }
             if (now - oldest < 60_000L) {
-                // Renderer is crash-looping — relaunch the whole activity with backoff.
+                // Renderer is crash-looping â relaunch the whole activity with backoff.
                 if (isAutoRelaunchEnabled()) scheduleAppRelaunch(5000);
                 isUserClosing = true;
                 finish();
@@ -1338,7 +1387,7 @@ import android.os.Looper;
                 } else {
                     missed++;
                     if (missed >= 3 && activityVisible && isAutoRelaunchEnabled()) {
-                        // Main thread hung ~15s — schedule relaunch then kill the stuck process.
+                        // Main thread hung ~15s â schedule relaunch then kill the stuck process.
                         scheduleAppRelaunch(2000);
                         android.os.Process.killProcess(android.os.Process.myPid());
                         return;
@@ -1461,7 +1510,7 @@ import android.os.Looper;
               return true;
           }
           if (keyCode == KeyEvent.KEYCODE_BACK) {
-              // Back is a no-op in kiosk/signage mode — swallow to prevent accidental navigation.
+              // Back is a no-op in kiosk/signage mode â swallow to prevent accidental navigation.
               return true;
           }
           if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
