@@ -63,5 +63,8 @@ plugins {
       // Glide — native image overlay
       implementation 'com.github.bumptech.glide:glide:4.16.0'
         annotationProcessor 'com.github.bumptech.glide:compiler:4.16.0'
+        // Room — offline playlist cache
+        implementation 'androidx.room:room-runtime:2.6.1'
+        annotationProcessor 'androidx.room:room-compiler:2.6.1'
   }
   
