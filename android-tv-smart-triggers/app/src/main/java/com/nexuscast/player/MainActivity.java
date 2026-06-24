@@ -106,6 +106,15 @@ import android.os.Looper;
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         activityAlive = true;
+          // WorkManager crash recovery: cancel pending recovery and reset crash counter on clean start
+          AppRecoverManager.onCleanStart(this);
+          // Install uncaught exception handler to record crash + schedule WorkManager recovery
+          final Thread.UncaughtExceptionHandler _prevCrashHandler = Thread.getDefaultUncaughtExceptionHandler();
+          Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
+              try { AppRecoverManager.scheduleRecovery(getApplicationContext()); } catch (Throwable ignored) {}
+              if (_prevCrashHandler != null) _prevCrashHandler.uncaughtException(thread, throwable);
+              else android.os.Process.killProcess(android.os.Process.myPid());
+          });
         // Initialise Room offline cache (build() is non-blocking; first query opens file on bg thread)
           cacheDb = CacheDatabase.getInstance(this);
             if (videoCache == null) {
@@ -1397,6 +1406,8 @@ import android.os.Looper;
         if (isAutoRelaunchEnabled()) {
             scheduleAppRelaunch(3000);
         }
+        // Schedule WorkManager crash recovery on unexpected exit
+        AppRecoverManager.scheduleRecovery(this);
         if (webView != null) {
             webView.destroy();
         }
