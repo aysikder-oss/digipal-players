@@ -1,6 +1,7 @@
 package com.nexuscast.player;
 
   import android.content.Context;
+  import androidx.annotation.NonNull;
   import androidx.room.ColumnInfo;
   import androidx.room.Dao;
   import androidx.room.Database;
@@ -15,9 +16,9 @@ package com.nexuscast.player;
 
   /**
    * Room-based offline playlist cache.
-   * Stores the last successful server JSON blobs (playlist, device config, schedule)
-   * so the player can inject them into the React WebView immediately on boot — no
-   * blank screen while waiting for a network response. OptiSigns-inspired pattern.
+   * Stores the last successful server JSON blobs so the player can inject them into the
+   * React WebView immediately on boot — no blank screen while waiting for a network response.
+   * OptiSigns-inspired lightweight JSON store (CacheObject entity mirrors their schema).
    */
   public class CacheDatabase {
 
@@ -25,8 +26,9 @@ package com.nexuscast.player;
       @Entity(tableName = "cache_objects")
       public static class CacheObject {
           @PrimaryKey
+          @NonNull
           @ColumnInfo(name = "cache_key")
-          public String key;
+          public String key = "";
 
           @ColumnInfo(name = "json")
           public String json;
