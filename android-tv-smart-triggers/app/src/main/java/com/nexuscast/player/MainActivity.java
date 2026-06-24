@@ -703,11 +703,8 @@ import android.os.Looper;
                                             // FIX: silence check FIRST — keep listener + 2.5s fallback alive so ExoPlayer's
                                             // internal retry can reach onRenderedFirstFrame and swap the view.
                                             if (error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException) {
-                                                androidx.media3.exoplayer.ExoTimeoutException toe = (androidx.media3.exoplayer.ExoTimeoutException) error.getCause();
-                                                if (toe.timeoutActionCode == 1) {
-                                                    android.util.Log.w("DigipalNative", "ExoPlayer preload startup timeout silenced (action=1) — keeping listener for retry");
-                                                    return;
-                                                }
+                                                android.util.Log.w("DigipalNative", "ExoPlayer startup timeout silenced — keeping listener for retry");
+                                                return;
                                             }
                                           if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
                                           if (done[0]) return; done[0] = true;
@@ -757,11 +754,8 @@ import android.os.Looper;
                                         // FIX: silence check FIRST — keep listener + 8s fallback alive so ExoPlayer's
                                         // internal retry can reach onRenderedFirstFrame and swap the view.
                                         if (error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException) {
-                                            androidx.media3.exoplayer.ExoTimeoutException toe = (androidx.media3.exoplayer.ExoTimeoutException) error.getCause();
-                                            if (toe.timeoutActionCode == 1) {
-                                                android.util.Log.w("DigipalNative", "ExoPlayer cold-load startup timeout silenced (action=1) — keeping listener + 8s fallback for retry");
-                                                return;
-                                            }
+                                            android.util.Log.w("DigipalNative", "ExoPlayer startup timeout silenced — keeping listener + 8s fallback for retry");
+                                            return;
                                         }
                                       if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
                                       if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
