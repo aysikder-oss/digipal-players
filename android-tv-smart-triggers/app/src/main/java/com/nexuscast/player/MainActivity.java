@@ -185,11 +185,11 @@ import android.os.Looper;
           nativeVideoViewB.setVisibility(View.INVISIBLE);
           root.addView(nativeVideoViewB, new FrameLayout.LayoutParams(1, 1));
 
-        nativeImageView = new android.widget.ImageView(this);
+        nativeImageView = new RecyclingSafeImageView(this);
         nativeImageView.setVisibility(View.INVISIBLE);
         root.addView(nativeImageView, new FrameLayout.LayoutParams(1, 1));
           // Dual-buffer B image view — preloaded image loads here while A is visible
-          nativeImageViewB = new android.widget.ImageView(this);
+          nativeImageViewB = new RecyclingSafeImageView(this);
           nativeImageViewB.setVisibility(View.INVISIBLE);
           root.addView(nativeImageViewB, new FrameLayout.LayoutParams(1, 1));
 
