@@ -757,11 +757,12 @@ import android.os.Looper;
                         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams((int)(w * d), (int)(h * d));
                         lp.leftMargin = (int)(x * d); lp.topMargin = (int)(y * d);
                         nativeImageView.setLayoutParams(lp);
+                    } catch (Exception e) {}
                 });
-              }
+            }
 
-              @android.webkit.JavascriptInterface
-              public void preloadNativeVideo(String url) {
+            @android.webkit.JavascriptInterface
+            public void preloadNativeVideo(String url) {
                   runOnUiThread(() -> {
                       try {
                           if (url.equals(preloadedVideoUrl) && preloadPlayer != null) return;
@@ -780,8 +781,8 @@ import android.os.Looper;
                   });
               }
 
-              @android.webkit.JavascriptInterface
-              public void preloadNativeImage(String url) {
+            @android.webkit.JavascriptInterface
+            public void preloadNativeImage(String url) {
                   runOnUiThread(() -> {
                       try {
                           if (url.equals(preloadedImageUrl) && preloadImageTarget != null) return;
@@ -793,8 +794,8 @@ import android.os.Looper;
                   });
               }
 
-              @android.webkit.JavascriptInterface
-              public void cancelNativePreload() {
+            @android.webkit.JavascriptInterface
+            public void cancelNativePreload() {
                   runOnUiThread(() -> {
                       try {
                           if (preloadPlayer != null) { try { preloadPlayer.release(); } catch (Throwable ignored) {} preloadPlayer = null; }
