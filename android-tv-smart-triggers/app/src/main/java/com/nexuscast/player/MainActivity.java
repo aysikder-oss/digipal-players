@@ -98,12 +98,17 @@ import android.os.Looper;
     // Old player held alive during swap-wait so activeView stays visible; released after new frame confirmed
     private androidx.media3.exoplayer.ExoPlayer pendingOldPlayer;
 
+      // Room-based offline playlist cache — survives boot, no blank screen on restart
+      private CacheDatabase.AppDatabase cacheDb;
+  
     @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         activityAlive = true;
-          if (videoCache == null) {
+        // Initialise Room offline cache (build() is non-blocking; first query opens file on bg thread)
+          cacheDb = CacheDatabase.getInstance(this);
+            if (videoCache == null) {
               videoCache = new androidx.media3.datasource.cache.SimpleCache(
                   new java.io.File(getCacheDir(), "exo_video_cache"),
                   new androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor(VIDEO_CACHE_SIZE)
@@ -331,6 +336,29 @@ import android.os.Looper;
                     "document.head&&document.head.appendChild(s);" +
                     "})();",
                     null);
+
+                  // Inject offline playlist cache into page for immediate use by React app
+                  if (cacheDb != null) {
+                      final android.webkit.WebView _wv = webView;
+                      new Thread(() -> {
+                          try {
+                              java.util.List<CacheDatabase.CacheObject> all = cacheDb.cacheDao().findAll();
+                              if (all == null || all.isEmpty()) return;
+                              StringBuilder js = new StringBuilder(
+                                  "if(!window.__digipalOfflineCache)window.__digipalOfflineCache={};");
+                              for (CacheDatabase.CacheObject item : all) {
+                                  js.append("window.__digipalOfflineCache[\"")
+                                    .append(item.key.replace("\\","\\\\").replace("\"","\\\""))
+                                    .append("\"] = ")
+                                    .append(item.json).append(";");
+                              }
+                              final String script = js.toString();
+                              runOnUiThread(() -> _wv.evaluateJavascript(script, null));
+                          } catch (Throwable e) {
+                              android.util.Log.w("Digipal", "Offline cache inject: " + e.getMessage());
+                          }
+                      }).start();
+                  }
             }
 
             @Override
@@ -578,7 +606,41 @@ import android.os.Looper;
                       new Handler(Looper.getMainLooper()));
           }
 
-        @android.webkit.JavascriptInterface
+
+          /**
+           * Called by the React player after each successful server fetch.
+           * Upserts the JSON into Room so it's available on the next boot.
+           */
+          @android.webkit.JavascriptInterface
+          public void putCache(String key, String json) {
+              if (cacheDb == null || key == null || json == null) return;
+              try {
+                  CacheDatabase.CacheObject obj = new CacheDatabase.CacheObject();
+                  obj.key = key;
+                  obj.json = json;
+                  obj.updatedAt = System.currentTimeMillis();
+                  cacheDb.cacheDao().upsert(obj);
+              } catch (Throwable e) {
+                  android.util.Log.w("Digipal", "Cache write failed: " + e.getMessage());
+              }
+          }
+
+          /**
+           * Synchronously returns cached JSON by key (runs on the JS bridge thread, not main thread).
+           * Returns null if no entry exists.
+           */
+          @android.webkit.JavascriptInterface
+          public String getCache(String key) {
+              if (cacheDb == null || key == null) return null;
+              try {
+                  CacheDatabase.CacheObject obj = cacheDb.cacheDao().findByKey(key);
+                  return obj != null ? obj.json : null;
+              } catch (Throwable e) {
+                  return null;
+              }
+          }
+
+          @android.webkit.JavascriptInterface
             public void playNativeVideo(String url, float x, float y, float w, float h, String objectFit, boolean loop, float volume) {
                 runOnUiThread(() -> {
                     try {
