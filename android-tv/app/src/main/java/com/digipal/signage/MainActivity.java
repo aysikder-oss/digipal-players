@@ -65,6 +65,9 @@ import android.os.Looper;
     private androidx.media3.ui.PlayerView nativeVideoView;
     private android.widget.ImageView nativeImageView;
     private androidx.media3.exoplayer.ExoPlayer exoPlayer;
+      // ExoPlayer on-disk video cache (OptiSigns-style LRU, 2 GB max)
+      private static androidx.media3.datasource.cache.SimpleCache videoCache;
+      private static final long VIDEO_CACHE_SIZE = 2L * 1024 * 1024 * 1024; // 2 GB
     // Handler/Runnable for first-frame video ready callback (or 8s safety timeout)
     private android.os.Handler videoReadyHandler;
     private Runnable videoReadyRunnable;
@@ -97,7 +100,13 @@ import android.os.Looper;
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         activityAlive = true;
-        try {
+          if (videoCache == null) {
+              videoCache = new androidx.media3.datasource.cache.SimpleCache(
+                  new java.io.File(getCacheDir(), "exo_video_cache"),
+                  new androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor(VIDEO_CACHE_SIZE)
+              );
+          }
+          try {
 
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setFlags(
@@ -707,7 +716,7 @@ import android.os.Looper;
                                   preloadView.setPlayer(null);
                               }
                               // Build new player on preloadView — old exoPlayer keeps playing on activeView
-                              final androidx.media3.exoplayer.ExoPlayer coldPlayer = new androidx.media3.exoplayer.ExoPlayer.Builder(MainActivity.this).build();
+                              final androidx.media3.exoplayer.ExoPlayer coldPlayer = buildCachedExoPlayer();
                               preloadView.setPlayer(coldPlayer);
                               preloadView.setResizeMode(resizeMode);
                               preloadView.setLayoutParams(lp);
@@ -924,7 +933,7 @@ import android.os.Looper;
                           // Size the inactive view to full screen so ExoPlayer has a real surface to decode into
                           preloadView.setLayoutParams(new FrameLayout.LayoutParams(
                               FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-                          preloadPlayer = new androidx.media3.exoplayer.ExoPlayer.Builder(MainActivity.this).build();
+                          preloadPlayer = buildCachedExoPlayer();
                           preloadView.setPlayer(preloadPlayer);
                           preloadPlayer.setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.parse(url)));
                           preloadPlayer.setVolume(0f);       // silent — not visible yet
@@ -1074,7 +1083,22 @@ import android.os.Looper;
         webView.loadUrl(playerUrl);
     }
 
-    private void showError(String title, String message) {
+    private androidx.media3.exoplayer.ExoPlayer buildCachedExoPlayer() {
+          androidx.media3.datasource.DefaultHttpDataSource.Factory httpFactory =
+              new androidx.media3.datasource.DefaultHttpDataSource.Factory();
+          androidx.media3.datasource.DefaultDataSource.Factory upstreamFactory =
+              new androidx.media3.datasource.DefaultDataSource.Factory(this, httpFactory);
+          androidx.media3.datasource.cache.CacheDataSource.Factory cacheFactory =
+              new androidx.media3.datasource.cache.CacheDataSource.Factory()
+                  .setCache(videoCache)
+                  .setUpstreamDataSourceFactory(upstreamFactory)
+                  .setFlags(androidx.media3.datasource.cache.CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR);
+          return new androidx.media3.exoplayer.ExoPlayer.Builder(this)
+              .setMediaSourceFactory(new androidx.media3.exoplayer.source.DefaultMediaSourceFactory(cacheFactory))
+              .build();
+      }
+
+      private void showError(String title, String message) {
         errorContainer.removeAllViews();
 
         LinearLayout layout = new LinearLayout(this);
