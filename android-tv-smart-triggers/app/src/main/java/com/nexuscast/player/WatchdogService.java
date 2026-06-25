@@ -15,22 +15,27 @@ package com.nexuscast.player;
       import android.os.SystemClock;
 
       /**
-       * Persistent foreground watchdog (START_STICKY). Polls every 15s; if the app
-       * is not in the foreground AND auto-relaunch is enabled it schedules a restart
-       * via AlarmManager (1s delay). Android restarts this service automatically
-       * after OOM kills.
+       * Persistent foreground watchdog (START_STICKY). Polls every checkMs (default 15s,
+       * configurable via setRelaunchCheckSec JS bridge); if the app is not in the
+       * foreground AND auto-relaunch is enabled it schedules a restart via AlarmManager
+       * (1s delay). Android restarts this service automatically after OOM kills.
        *
        * Crash-recovery alarm: armed in onCreate() and re-armed each loop tick so it is
-       * always CHECK_MS + 10s ahead. If this service is hard-killed between ticks the
-       * alarm fires within 25s and relaunches the app via BootLaunchService.
+       * always checkMs + 10s ahead. If this service is hard-killed between ticks the
+       * alarm fires within (checkMs + 10s) and relaunches the app via BootLaunchService.
        */
       public class WatchdogService extends Service {
           private static final String CHANNEL_ID = "digipal_watchdog";
           private static final int NOTIF_ID = 1002;
-          private static final long CHECK_MS = 15_000L;
+          /** Default poll interval when no preference has been saved yet. */
+          private static final int DEFAULT_CHECK_SEC = 15;
+          /** SharedPreferences key written by setRelaunchCheckSec() JS bridge. */
+          private static final String KEY_CHECK_SEC = "relaunch_check_sec";
           private static final long RESTART_MS = 1_000L;
           private static final String PREFS_NAME = "DigipalPrefs";
           private static final String KEY_AUTO_RELAUNCH = "auto_relaunch";
+          /** Poll interval in ms, read from prefs on each onCreate(). */
+          private long checkMs;
           private Handler handler;
           private Runnable loop;
           private PendingIntent crashAlarmPi;
@@ -38,6 +43,11 @@ package com.nexuscast.player;
           @Override
           public void onCreate() {
               super.onCreate();
+              // Read configurable interval from prefs (set by setRelaunchCheckSec JS bridge).
+              int checkSec = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                      .getInt(KEY_CHECK_SEC, DEFAULT_CHECK_SEC);
+              checkMs = Math.max(5, Math.min(120, checkSec)) * 1000L;
+
               ensureChannel();
               if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                   startForeground(NOTIF_ID, buildNotif(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
@@ -51,12 +61,12 @@ package com.nexuscast.player;
                       // Re-arm crash alarm each cycle so it is always fresh even if this
                       // service runs for a long time without restarting.
                       if (isAutoRelaunchEnabled() && crashAlarmPi != null) armCrashAlarm();
-                      handler.postDelayed(this, CHECK_MS);
+                      handler.postDelayed(this, checkMs);
                   }
               };
-              handler.postDelayed(loop, CHECK_MS);
+              handler.postDelayed(loop, checkMs);
 
-              // Standing crash-recovery alarm: fires CHECK_MS+10s from now and is
+              // Standing crash-recovery alarm: fires checkMs+10s from now and is
               // re-armed each loop tick. Ensures app relaunches even if this service
               // is hard-killed before the periodic Handler loop gets a chance to run.
               // Only armed when auto-relaunch is enabled.
@@ -97,9 +107,9 @@ package com.nexuscast.player;
           private void armCrashAlarm() {
               AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
               if (am == null || crashAlarmPi == null) return;
-              // Fire CHECK_MS + 10s from now. Re-armed each loop tick so the window
-              // is always fresh. Worst-case delay after a hard kill = CHECK_MS + 10s = 25s.
-              long earliest = SystemClock.elapsedRealtime() + CHECK_MS + 10_000L;
+              // Fire checkMs + 10s from now. Re-armed each loop tick so the window
+              // is always fresh. Worst-case delay after a hard kill = checkMs + 10s.
+              long earliest = SystemClock.elapsedRealtime() + checkMs + 10_000L;
               am.setWindow(AlarmManager.ELAPSED_REALTIME_WAKEUP, earliest, 10_000L, crashAlarmPi);
           }
 
