@@ -55,6 +55,7 @@ import android.os.Looper;
     private static final String PREFS_NAME = "DigipalPrefs";
     private static final String KEY_SERVER_URL = "server_url";
     private static final String KEY_AUTO_RELAUNCH = "auto_relaunch";
+    private static final String KEY_CHECK_SEC = "relaunch_check_sec";
     private static final int PERMISSION_REQUEST_CAMERA = 1001;
     private boolean isUserClosing = false;
     private View customView;
@@ -458,6 +459,20 @@ import android.os.Looper;
             }
         }
 
+
+        @JavascriptInterface
+        public void setRelaunchCheckSec(int seconds) {
+            int clamped = Math.max(5, Math.min(120, seconds));
+            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+            prefs.edit().putInt(KEY_CHECK_SEC, clamped).apply();
+            // Restart WatchdogService to pick up the new interval immediately.
+            if (prefs.getBoolean(KEY_AUTO_RELAUNCH, true)) {
+                Intent ws = new Intent(MainActivity.this, WatchdogService.class);
+                stopService(ws);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(ws);
+                else startService(ws);
+            }
+        }
         @JavascriptInterface
         public void scheduleRelaunch() {
             scheduleAppRelaunch(2000);
