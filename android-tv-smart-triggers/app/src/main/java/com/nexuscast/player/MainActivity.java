@@ -568,6 +568,11 @@ import android.os.Looper;
                     o.put("totalMemBytes", mi.totalMem);
                     o.put("lowMemory", mi.lowMemory);
                     o.put("memThresholdBytes", mi.threshold);
+                    // These two fields are read by parseResourceStats() in
+                    // playerBridge.ts to compute nativeMemRatio. Previously
+                    // missing — caused nativeMemRatio to always report 0.
+                    o.put("memUsedBytes", mi.totalMem - mi.availMem);
+                    o.put("memTotalBytes", mi.totalMem);
                 }
                 Runtime rt = Runtime.getRuntime();
                 o.put("appHeapUsedBytes", rt.totalMemory() - rt.freeMemory());
@@ -851,6 +856,9 @@ import android.os.Looper;
                             webView.evaluateJavascript("if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady()", null);
                         } else {
                             activeImgView.setLayoutParams(lp); activeImgView.setScaleType(st); activeImgView.setVisibility(View.INVISIBLE);
+                            // Trim Glide bitmap cache before cold load to release previous image's
+                            // decoded buffer before allocating the new one (Fire TV OOM fix).
+                            try { com.bumptech.glide.Glide.get(MainActivity.this).trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE); } catch (Throwable ignored) {}
                             com.bumptech.glide.Glide.with(MainActivity.this).load(url)
                                 .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
                                     @Override public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e, Object model, com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target, boolean isFirstResource) {
@@ -920,6 +928,15 @@ import android.os.Looper;
                   runOnUiThread(() -> {
                       try {
                           if (url.equals(preloadedImageUrl) && preloadImageReady) return;
+                          // Low-memory gate: skip image preload under memory pressure.
+                          // Mirrors the video preload gate — prevents Glide from decoding
+                          // a second bitmap when headroom is insufficient (Fire TV OOM fix).
+                          android.app.ActivityManager _am2 = (android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE);
+                          if (_am2 != null) {
+                              android.app.ActivityManager.MemoryInfo _mi2 = new android.app.ActivityManager.MemoryInfo();
+                              _am2.getMemoryInfo(_mi2);
+                              if (_mi2.lowMemory) return;
+                          }
                           final android.widget.ImageView preloadImgView = activeImageViewIsA ? nativeImageViewB : nativeImageView;
                           com.bumptech.glide.Glide.with(MainActivity.this).clear(preloadImgView);
                           preloadedImageUrl = null; preloadImageReady = false;
