@@ -1055,6 +1055,26 @@ import android.os.Looper;
                       }
                   });
               }
+
+                @JavascriptInterface
+                public void requestNativeGC() {
+                    try {
+                        // Trim Glide in-memory cache so decoded bitmaps from the
+                        // outgoing slide are released before ExoPlayer allocates for
+                        // the incoming one.  On low-RAM devices (e.g. BHV5AW) this
+                        // frees 30-60 MB at the playlist_transition peak.
+                        runOnUiThread(() -> {
+                            try {
+                                com.bumptech.glide.Glide.get(MainActivity.this).clearMemory();
+                            } catch (Throwable ignored) {}
+                        });
+                        Runtime.getRuntime().gc();
+                        System.gc();
+                        android.util.Log.d("DigipalNative", "[gc] requestNativeGC: Glide clearMemory + GC nudged");
+                    } catch (Throwable e) {
+                        android.util.Log.e("DigipalNative", "requestNativeGC error", e);
+                    }
+                }
   
       }
 
