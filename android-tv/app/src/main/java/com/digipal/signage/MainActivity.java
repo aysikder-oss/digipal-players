@@ -120,7 +120,12 @@ import android.os.Looper;
               else android.os.Process.killProcess(android.os.Process.myPid());
           });
         // Initialise Room offline cache (build() is non-blocking; first query opens file on bg thread)
-        cacheDb = CacheDatabase.getInstance(this);
+        try {
+            cacheDb = CacheDatabase.getInstance(this);
+        } catch (Exception e) {
+            android.util.Log.e("DigipalCache", "Room DB init failed — offline cache disabled: " + e.getMessage());
+            cacheDb = null;
+        }
           if (videoCache == null) {
               videoCache = new androidx.media3.datasource.cache.SimpleCache(
                   new java.io.File(getCacheDir(), "exo_video_cache"),
