@@ -1,153 +1,183 @@
 package com.digipal.signage;
 
-  import android.os.Handler;
-  import android.os.Looper;
-  import org.json.JSONArray;
-  import org.json.JSONObject;
-  import java.util.ArrayList;
-  import java.util.List;
+    import android.os.Handler;
+    import android.os.Looper;
+    import org.json.JSONArray;
+    import org.json.JSONObject;
+    import java.util.ArrayList;
+    import java.util.List;
 
-  /**
-   * NativePlaylistManager drives video and image slides entirely in native Android
-   * (ExoPlayer / Glide) without WebView involvement. Activated when the dashboard
-   * remotePlayerSettings flag {@code nativeContentLoop} is true. Slide data is
-   * supplied by the WebView via the {@code setNativePlaylist} JavaScript bridge
-   * method so the manager never makes HTTP calls of its own. WebView-delegated
-   * slides (widgets, Design Studio canvases, web URLs) wake the WebView for their
-   * duration and then return control to the native loop.
-   *
-   * <p>Android TV APK v1.0.9+.</p>
-   */
-  public class NativePlaylistManager {
+    /**
+     * NativePlaylistManager drives video and image slides entirely in native Android
+     * (ExoPlayer / Glide) without WebView involvement. Activated when the dashboard
+     * remotePlayerSettings flag {@code nativeContentLoop} is true. Slide data is
+     * supplied by the WebView via the {@code setNativePlaylist} JavaScript bridge
+     * method so the manager never makes HTTP calls of its own. WebView-delegated
+     * slides (widgets, Design Studio canvases, web URLs) wake the WebView for their
+     * duration and then return control to the native loop.
+     */
+    public class NativePlaylistManager {
 
-      /** Provided by MainActivity; allows JS evaluation from any thread. */
-      public interface Delegate {
-          /** Queue JavaScript for execution in the WebView (thread-safe). */
-          void evaluateJs(String js);
-      }
+        public interface Delegate {
+            void evaluateJs(String js);
+        }
 
-      private enum SlideType { VIDEO, IMAGE, WEBVIEW_DELEGATED }
+        private enum SlideType { VIDEO, IMAGE, WEBVIEW_DELEGATED }
 
-      private static class NativeSlide {
-          SlideType type = SlideType.WEBVIEW_DELEGATED;
-          String url = "";
-          int durationSec = 10;
-          int contentId = 0;
-          String objectFit = "contain";
-          boolean loop = true;
-          float volume = 0f;
-          String scaleType = "contain";
-      }
+        private static class NativeSlide {
+            SlideType type = SlideType.WEBVIEW_DELEGATED;
+            String url = "";
+            int durationSec = 10;
+            int contentId = 0;
+            String objectFit = "contain";
+            boolean loop = true;
+            float volume = 0f;
+            String scaleType = "contain";
+        }
 
-      private final Handler handler = new Handler(Looper.getMainLooper());
-      private final Delegate delegate;
-      private List<NativeSlide> slides = new ArrayList<>();
-      private int currentIndex = 0;
-      private boolean running = false;
-      private Runnable advanceRunnable;
+        private final Handler handler = new Handler(Looper.getMainLooper());
+        private final Delegate delegate;
+        private List<NativeSlide> slides = new ArrayList<>();
+        private int currentIndex = 0;
+        private boolean running = false;
+        private Runnable advanceRunnable;
 
-      public NativePlaylistManager(Delegate delegate) {
-          this.delegate = delegate;
-      }
+        public NativePlaylistManager(Delegate delegate) {
+            this.delegate = delegate;
+        }
 
-      /** Replace the slide list and restart the loop from slide 0. */
-      public synchronized void setPlaylist(String json) {
-          stop();
-          slides = parseSlides(json);
-          currentIndex = 0;
-          if (!slides.isEmpty()) {
-              running = true;
-              showCurrentSlide();
-          }
-      }
+        /**
+         * Replace the slide list. If the contentIds and types haven't changed
+         * (same playlist, just refreshed URLs/settings), updates in-place without
+         * restarting from slide 0 — prevents the "jumps back to beginning" issue
+         * caused by WebView reconnects re-calling setNativePlaylist.
+         */
+        public synchronized void setPlaylist(String json) {
+            List<NativeSlide> newSlides = parseSlides(json);
+            if (isSameStructure(newSlides)) {
+                slides = newSlides;
+                return;
+            }
+            stop();
+            slides = newSlides;
+            currentIndex = 0;
+            if (!slides.isEmpty()) {
+                running = true;
+                showCurrentSlide();
+            }
+        }
 
-      /** Stop the loop and cancel any pending advance timer. */
-      public synchronized void stop() {
-          running = false;
-          if (advanceRunnable != null) {
-              handler.removeCallbacks(advanceRunnable);
-              advanceRunnable = null;
-          }
-      }
+        /** True when new slide list has same contentIds+types in the same order. */
+        private boolean isSameStructure(List<NativeSlide> newSlides) {
+            if (!running) return false;
+            if (newSlides.size() != slides.size()) return false;
+            for (int i = 0; i < slides.size(); i++) {
+                if (slides.get(i).contentId != newSlides.get(i).contentId) return false;
+                if (slides.get(i).type != newSlides.get(i).type) return false;
+            }
+            return true;
+        }
 
-      private void showCurrentSlide() {
-          if (!running || slides.isEmpty()) return;
-          if (currentIndex >= slides.size()) currentIndex = 0;
-          final NativeSlide slide = slides.get(currentIndex);
-          final int capturedIndex = currentIndex;
-          final SlideType capturedType = slide.type;
-          android.util.Log.d("NativePlaylist",
-                  "[loop] slide " + capturedIndex + "/" + slides.size()
-                  + " type=" + slide.type + " dur=" + slide.durationSec + "s");
+        public synchronized void stop() {
+            running = false;
+            if (advanceRunnable != null) {
+                handler.removeCallbacks(advanceRunnable);
+                advanceRunnable = null;
+            }
+        }
 
-          switch (slide.type) {
-              case VIDEO:
-                  // Raise dormancy flag then hand ExoPlayer the URL via JS bridge
-                  delegate.evaluateJs(
-                          "try{window.Android.setWebViewDormant(true);}catch(e){}" +
-                          "try{window.Android.playNativeVideo(" +
-                          JSONObject.quote(slide.url) +
-                          ",0,0,window.innerWidth,window.innerHeight," +
-                          JSONObject.quote(slide.objectFit) + "," +
-                          slide.loop + "," + slide.volume + ");}catch(e){}");
-                  break;
-              case IMAGE:
-                  // Raise dormancy flag then hand Glide the URL via JS bridge
-                  delegate.evaluateJs(
-                          "try{window.Android.setWebViewDormant(true);}catch(e){}" +
-                          "try{window.Android.showNativeImage(" +
-                          JSONObject.quote(slide.url) +
-                          ",0,0,window.innerWidth,window.innerHeight," +
-                          JSONObject.quote(slide.scaleType) + ");}catch(e){}");
-                  break;
-              case WEBVIEW_DELEGATED:
-                  // Wake WebView for JS-rendered content
-                  delegate.evaluateJs(
-                          "try{window.Android.setWebViewDormant(false);}catch(e){}");
-                  break;
-          }
+        private void showCurrentSlide() {
+            if (!running || slides.isEmpty()) return;
+            if (currentIndex >= slides.size()) currentIndex = 0;
+            final NativeSlide slide = slides.get(currentIndex);
+            final int capturedIndex = currentIndex;
+            final SlideType capturedType = slide.type;
+            android.util.Log.d("NativePlaylist",
+                    "[loop] slide " + capturedIndex + "/" + slides.size()
+                    + " type=" + slide.type + " dur=" + slide.durationSec + "s");
 
-          final long durationMs = Math.max(1_000L, slide.durationSec * 1000L);
-          final int nextIndex = (capturedIndex + 1) % slides.size();
-          advanceRunnable = () -> {
-              if (!running) return;
-              // Hide the outgoing native overlay before showing the next slide
-              if (capturedType == SlideType.VIDEO) {
-                  delegate.evaluateJs("try{window.Android.stopNativeVideo();}catch(e){}");
-              } else if (capturedType == SlideType.IMAGE) {
-                  delegate.evaluateJs("try{window.Android.hideNativeImage();}catch(e){}");
-              }
-              currentIndex = nextIndex;
-              showCurrentSlide();
-          };
-          handler.postDelayed(advanceRunnable, durationMs);
-      }
+            // Treat empty-URL VIDEO/IMAGE as WEBVIEW_DELEGATED so the screen
+            // never goes black when a URL fails to resolve.
+            final SlideType effectiveType =
+                    (slide.url == null || slide.url.isEmpty())
+                    && (slide.type == SlideType.VIDEO || slide.type == SlideType.IMAGE)
+                    ? SlideType.WEBVIEW_DELEGATED : slide.type;
 
-      private List<NativeSlide> parseSlides(String json) {
-          final List<NativeSlide> result = new ArrayList<>();
-          try {
-              final JSONArray arr = new JSONArray(json);
-              for (int i = 0; i < arr.length(); i++) {
-                  final JSONObject obj = arr.getJSONObject(i);
-                  final NativeSlide s = new NativeSlide();
-                  final String type = obj.optString("type", "WEBVIEW_DELEGATED");
-                  s.type = "VIDEO".equals(type) ? SlideType.VIDEO
-                         : "IMAGE".equals(type) ? SlideType.IMAGE
-                         : SlideType.WEBVIEW_DELEGATED;
-                  s.url         = obj.optString("url", "");
-                  s.durationSec = obj.optInt("duration", 10);
-                  s.contentId   = obj.optInt("contentId", 0);
-                  s.objectFit   = obj.optString("objectFit", "contain");
-                  s.loop        = obj.optBoolean("loop", true);
-                  s.volume      = (float) obj.optDouble("volume", 0.0);
-                  s.scaleType   = obj.optString("scaleType", "contain");
-                  result.add(s);
-              }
-              android.util.Log.i("NativePlaylist", "[loop] Parsed " + result.size() + " slides");
-          } catch (Exception e) {
-              android.util.Log.e("NativePlaylist", "[loop] Parse failed: " + e.getMessage());
-          }
-          return result;
-      }
-  }
+            switch (effectiveType) {
+                case VIDEO:
+                    delegate.evaluateJs(
+                            "try{window.Android.setWebViewDormant(true);}catch(e){}" +
+                            "try{window.Android.playNativeVideo(" +
+                            JSONObject.quote(slide.url) +
+                            ",0,0,window.innerWidth,window.innerHeight," +
+                            JSONObject.quote(slide.objectFit) + "," +
+                            slide.loop + "," + slide.volume + ");}catch(e){}");
+                    break;
+                case IMAGE:
+                    delegate.evaluateJs(
+                            "try{window.Android.setWebViewDormant(true);}catch(e){}" +
+                            "try{window.Android.showNativeImage(" +
+                            JSONObject.quote(slide.url) +
+                            ",0,0,window.innerWidth,window.innerHeight," +
+                            JSONObject.quote(slide.scaleType) + ");}catch(e){}");
+                    break;
+                default:
+                    delegate.evaluateJs(
+                            "try{window.Android.setWebViewDormant(false);}catch(e){}");
+                    break;
+            }
+
+            final long durationMs = Math.max(1_000L, slide.durationSec * 1000L);
+            final int nextIndex = (capturedIndex + 1) % slides.size();
+            advanceRunnable = () -> {
+                if (!running) return;
+                // Only explicitly stop the outgoing native overlay when the NEXT
+                // slide is WEBVIEW_DELEGATED. For native→native transitions the
+                // incoming playNativeVideo/showNativeImage replaces the overlay
+                // directly, avoiding a flash frame between stop and start.
+                final boolean nextIsNative = nextIndex < slides.size()
+                        && (slides.get(nextIndex).type == SlideType.VIDEO
+                            || slides.get(nextIndex).type == SlideType.IMAGE)
+                        && slides.get(nextIndex).url != null
+                        && !slides.get(nextIndex).url.isEmpty();
+                if (!nextIsNative) {
+                    if (capturedType == SlideType.VIDEO) {
+                        delegate.evaluateJs("try{window.Android.stopNativeVideo();}catch(e){}");
+                    } else if (capturedType == SlideType.IMAGE) {
+                        delegate.evaluateJs("try{window.Android.hideNativeImage();}catch(e){}");
+                    }
+                }
+                currentIndex = nextIndex;
+                showCurrentSlide();
+            };
+            handler.postDelayed(advanceRunnable, durationMs);
+        }
+
+        private List<NativeSlide> parseSlides(String json) {
+            final List<NativeSlide> result = new ArrayList<>();
+            try {
+                final JSONArray arr = new JSONArray(json);
+                for (int i = 0; i < arr.length(); i++) {
+                    final JSONObject obj = arr.getJSONObject(i);
+                    final NativeSlide s = new NativeSlide();
+                    final String type = obj.optString("type", "WEBVIEW_DELEGATED");
+                    s.type = "VIDEO".equals(type) ? SlideType.VIDEO
+                           : "IMAGE".equals(type) ? SlideType.IMAGE
+                           : SlideType.WEBVIEW_DELEGATED;
+                    s.url         = obj.optString("url", "");
+                    s.durationSec = obj.optInt("duration", 10);
+                    s.contentId   = obj.optInt("contentId", 0);
+                    s.objectFit   = obj.optString("objectFit", "contain");
+                    s.loop        = obj.optBoolean("loop", true);
+                    s.volume      = (float) obj.optDouble("volume", 0.0);
+                    s.scaleType   = obj.optString("scaleType", "contain");
+                    result.add(s);
+                }
+                android.util.Log.i("NativePlaylist", "[loop] Parsed " + result.size() + " slides");
+            } catch (Exception e) {
+                android.util.Log.e("NativePlaylist", "[loop] Parse failed: " + e.getMessage());
+            }
+            return result;
+        }
+    }
   
