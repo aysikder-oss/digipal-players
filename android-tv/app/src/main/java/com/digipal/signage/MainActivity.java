@@ -986,12 +986,8 @@ import android.os.Looper;
                             activeImgView.setLayoutParams(lp);
                             activeImgView.setScaleType(st);
                             activeImgView.setVisibility(View.INVISIBLE);
-                            com.bumptech.glide.request.RequestOptions _imgOpts = new com.bumptech.glide.request.RequestOptions();
-                            if (nativeFirstRendering) {
-                                _imgOpts = _imgOpts.format(com.bumptech.glide.load.DecodeFormat.PREFER_ARGB_8888_HARDWARE);
-                            }
                             com.bumptech.glide.Glide.with(MainActivity.this)
-                                .load(url).apply(_imgOpts)
+                                .load(url)
                                 .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
                                     @Override
                                     public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e,
@@ -1098,12 +1094,8 @@ import android.os.Looper;
                           preloadImgView.setLayoutParams(new FrameLayout.LayoutParams(
                               FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
                           preloadedImageUrl = url;
-                          com.bumptech.glide.request.RequestOptions _preOpts = new com.bumptech.glide.request.RequestOptions();
-                          if (nativeFirstRendering) {
-                              _preOpts = _preOpts.format(com.bumptech.glide.load.DecodeFormat.PREFER_ARGB_8888_HARDWARE);
-                          }
                           com.bumptech.glide.Glide.with(MainActivity.this)
-                              .load(url).apply(_preOpts)
+                              .load(url)
                               .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
                                   @Override
                                   public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e,
