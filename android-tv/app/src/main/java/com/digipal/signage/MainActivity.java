@@ -88,6 +88,8 @@ import android.os.Looper;
     private androidx.media3.exoplayer.ExoPlayer pendingOldPlayer;
     // Native-first rendering mode (OptiSigns-style OOM elimination on low-mem Fire TV)
     private boolean nativeFirstRendering = false;
+    // Native content loop — drives video/image slides via NativePlaylistManager without WebView
+    private NativePlaylistManager nativePlaylistManager;
     // Player URL tracked so WebView can be recreated with the same page between slides
     private String currentPlayerUrl = null;
 
@@ -1238,6 +1240,26 @@ import android.os.Looper;
                 }
   
       }
+
+                @android.webkit.JavascriptInterface
+                public void setNativePlaylist(String json) {
+                    if (json == null || json.isEmpty()) return;
+                    if (nativePlaylistManager == null) {
+                        nativePlaylistManager = new NativePlaylistManager(js -> runOnUiThread(() -> {
+                            try {
+                                if (webView != null) webView.evaluateJavascript(js, null);
+                            } catch (Throwable ignored) {}
+                        }));
+                    }
+                    nativePlaylistManager.setPlaylist(json);
+                    android.util.Log.i("DigipalNative", "[nativeLoop] setNativePlaylist: loaded slides");
+                }
+
+                @android.webkit.JavascriptInterface
+                public void reloadNativePlaylist() {
+                    // JS will call setNativePlaylist again with refreshed slide data
+                    android.util.Log.i("DigipalNative", "[nativeLoop] reloadNativePlaylist signal received");
+                }
 
       private void scheduleAppRelaunch(long delayMs) {
         try {
