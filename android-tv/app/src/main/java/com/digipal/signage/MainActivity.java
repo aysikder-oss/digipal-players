@@ -86,6 +86,10 @@ import android.os.Looper;
     private boolean activeImageViewIsA = true;
     // Old player held alive during swap-wait so activeView stays visible; released after new frame confirmed
     private androidx.media3.exoplayer.ExoPlayer pendingOldPlayer;
+    // Native-first rendering mode (OptiSigns-style OOM elimination on low-mem Fire TV)
+    private boolean nativeFirstRendering = false;
+    // Player URL tracked so WebView can be recreated with the same page between slides
+    private String currentPlayerUrl = null;
 
     // Room-based offline playlist cache â survives boot, no blank screen on restart
     private CacheDatabase.AppDatabase cacheDb;
@@ -982,8 +986,12 @@ import android.os.Looper;
                             activeImgView.setLayoutParams(lp);
                             activeImgView.setScaleType(st);
                             activeImgView.setVisibility(View.INVISIBLE);
+                            com.bumptech.glide.request.RequestOptions _imgOpts = new com.bumptech.glide.request.RequestOptions();
+                            if (nativeFirstRendering) {
+                                _imgOpts = _imgOpts.format(com.bumptech.glide.load.DecodeFormat.PREFER_HARDWARE);
+                            }
                             com.bumptech.glide.Glide.with(MainActivity.this)
-                                .load(url)
+                                .load(url).apply(_imgOpts)
                                 .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
                                     @Override
                                     public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e,
@@ -1090,8 +1098,12 @@ import android.os.Looper;
                           preloadImgView.setLayoutParams(new FrameLayout.LayoutParams(
                               FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
                           preloadedImageUrl = url;
+                          com.bumptech.glide.request.RequestOptions _preOpts = new com.bumptech.glide.request.RequestOptions();
+                          if (nativeFirstRendering) {
+                              _preOpts = _preOpts.format(com.bumptech.glide.load.DecodeFormat.PREFER_HARDWARE);
+                          }
                           com.bumptech.glide.Glide.with(MainActivity.this)
-                              .load(url)
+                              .load(url).apply(_preOpts)
                               .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
                                   @Override
                                   public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e,
@@ -1161,6 +1173,58 @@ import android.os.Looper;
                         }
                     } catch (Throwable ignored) {}
                 }
+
+              @android.webkit.JavascriptInterface
+              public void setNativeFirstMode(boolean enabled) {
+                  nativeFirstRendering = enabled;
+                  android.util.Log.i("DigipalNative", "[nativeFirst] nativeFirstRendering=" + enabled);
+              }
+
+              @android.webkit.JavascriptInterface
+              public void setWebViewDormant(boolean dormant) {
+                  runOnUiThread(() -> {
+                      try {
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                              if (dormant) {
+                                  webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_BOUND, false);
+                              } else {
+                                  webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true);
+                              }
+                          }
+                          android.util.Log.d("DigipalNative", "[nativeFirst] setWebViewDormant=" + dormant);
+                          if (nativeFirstRendering && dormant && currentPlayerUrl != null) {
+                              // Per-slide WebView recreation: destroy V8 heap + GPU compositor while native
+                              // overlay covers the screen, then reload fresh for the next web slide.
+                              // (OptiSigns technique — eliminates cumulative memory leak between slides.)
+                              new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                                  try {
+                                      final android.webkit.WebView oldWv = webView;
+                                      if (rootLayout != null) rootLayout.removeView(oldWv);
+                                      webView = new android.webkit.WebView(MainActivity.this);
+                                      setupWebView();
+                                      webView.setFocusableInTouchMode(true);
+                                      webView.requestFocus();
+                                      if (rootLayout != null) {
+                                          rootLayout.addView(webView, 0, new FrameLayout.LayoutParams(
+                                              FrameLayout.LayoutParams.MATCH_PARENT,
+                                              FrameLayout.LayoutParams.MATCH_PARENT
+                                          ));
+                                      }
+                                      webView.loadUrl(currentPlayerUrl);
+                                      if (mediaDownloadManager != null) mediaDownloadManager.setWebView(webView);
+                                      try { oldWv.stopLoading(); oldWv.destroy(); } catch (Throwable ignored2) {}
+                                      android.util.Log.i("DigipalNative", "[nativeFirst] WebView recreated — V8/GPU heap cleared");
+                                  } catch (Throwable e) {
+                                      android.util.Log.e("DigipalNative", "[nativeFirst] WebView recreate failed", e);
+                                  }
+                              }, 400);
+                          }
+                      } catch (Throwable e) {
+                          android.util.Log.e("DigipalNative", "setWebViewDormant error", e);
+                      }
+                  });
+              }
+  
       }
 
       private void scheduleAppRelaunch(long delayMs) {
@@ -1236,6 +1300,7 @@ import android.os.Looper;
             playerUrl += "/";
         }
         playerUrl += "player?platform=android_tv";
+        currentPlayerUrl = playerUrl;
         webView.loadUrl(playerUrl);
     }
 
