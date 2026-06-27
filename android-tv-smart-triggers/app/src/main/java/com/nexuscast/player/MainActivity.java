@@ -863,11 +863,7 @@ import android.os.Looper;
                             // Trim Glide bitmap cache before cold load to release previous image's
                             // decoded buffer before allocating the new one (Fire TV OOM fix).
                             try { com.bumptech.glide.Glide.get(MainActivity.this).trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE); } catch (Throwable ignored) {}
-                            com.bumptech.glide.request.RequestOptions _imgOpts = new com.bumptech.glide.request.RequestOptions();
-                            if (nativeFirstRendering) {
-                                _imgOpts = _imgOpts.format(com.bumptech.glide.load.DecodeFormat.PREFER_ARGB_8888_HARDWARE);
-                            }
-                            com.bumptech.glide.Glide.with(MainActivity.this).load(url).apply(_imgOpts)
+                            com.bumptech.glide.Glide.with(MainActivity.this).load(url)
                                 .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
                                     @Override public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e, Object model, com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target, boolean isFirstResource) {
                                         webView.evaluateJavascript("if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady()", null); return false; }
@@ -951,11 +947,7 @@ import android.os.Looper;
                           preloadImgView.setVisibility(View.INVISIBLE);
                           preloadImgView.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
                           preloadedImageUrl = url;
-                          com.bumptech.glide.request.RequestOptions _preOpts = new com.bumptech.glide.request.RequestOptions();
-                          if (nativeFirstRendering) {
-                              _preOpts = _preOpts.format(com.bumptech.glide.load.DecodeFormat.PREFER_ARGB_8888_HARDWARE);
-                          }
-                          com.bumptech.glide.Glide.with(MainActivity.this).load(url).apply(_preOpts)
+                          com.bumptech.glide.Glide.with(MainActivity.this).load(url)
                               .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
                                   @Override public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e, Object model, com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target, boolean isFirstResource) {
                                       if (url.equals(preloadedImageUrl)) preloadImageReady = false; return false; }
