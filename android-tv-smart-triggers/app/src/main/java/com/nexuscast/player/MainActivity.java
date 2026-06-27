@@ -865,7 +865,7 @@ import android.os.Looper;
                             try { com.bumptech.glide.Glide.get(MainActivity.this).trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE); } catch (Throwable ignored) {}
                             com.bumptech.glide.request.RequestOptions _imgOpts = new com.bumptech.glide.request.RequestOptions();
                             if (nativeFirstRendering) {
-                                _imgOpts = _imgOpts.format(com.bumptech.glide.load.DecodeFormat.PREFER_HARDWARE);
+                                _imgOpts = _imgOpts.format(com.bumptech.glide.load.DecodeFormat.PREFER_ARGB_8888_HARDWARE);
                             }
                             com.bumptech.glide.Glide.with(MainActivity.this).load(url).apply(_imgOpts)
                                 .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
@@ -953,7 +953,7 @@ import android.os.Looper;
                           preloadedImageUrl = url;
                           com.bumptech.glide.request.RequestOptions _preOpts = new com.bumptech.glide.request.RequestOptions();
                           if (nativeFirstRendering) {
-                              _preOpts = _preOpts.format(com.bumptech.glide.load.DecodeFormat.PREFER_HARDWARE);
+                              _preOpts = _preOpts.format(com.bumptech.glide.load.DecodeFormat.PREFER_ARGB_8888_HARDWARE);
                           }
                           com.bumptech.glide.Glide.with(MainActivity.this).load(url).apply(_preOpts)
                               .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
