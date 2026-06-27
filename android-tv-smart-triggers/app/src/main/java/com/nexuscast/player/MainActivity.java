@@ -1144,8 +1144,17 @@ import android.os.Looper;
                   .setCache(videoCache)
                   .setUpstreamDataSourceFactory(upstreamFactory)
                   .setFlags(androidx.media3.datasource.cache.CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR);
+          androidx.media3.exoplayer.DefaultLoadControl loadControl =
+              new androidx.media3.exoplayer.DefaultLoadControl.Builder()
+                  .setBufferDurationsMs(
+                      1500,
+                      5000,
+                      500,
+                      1000)
+                  .build();
           return new androidx.media3.exoplayer.ExoPlayer.Builder(this)
               .setMediaSourceFactory(new androidx.media3.exoplayer.source.DefaultMediaSourceFactory(cacheFactory))
+              .setLoadControl(loadControl)
               .build();
       }
 
