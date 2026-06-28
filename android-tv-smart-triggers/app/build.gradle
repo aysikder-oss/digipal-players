@@ -19,8 +19,8 @@ plugins {
           applicationId "com.nexuscast.player"
           minSdk 21
           targetSdk 35
-          versionCode 16
-          versionName "3.5.7"
+          versionCode 17
+          versionName "3.6.7"
 
           buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
       }
