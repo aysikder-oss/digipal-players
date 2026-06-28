@@ -144,7 +144,7 @@ public class HealthMonitor {
     private Mode computeMode() {
         long now = System.currentTimeMillis();
 
-        if (schedulerState == PlaylistScheduler.State.ERROR_RECOVERY) {
+        if (schedulerState == PlaylistScheduler.State.RECOVERING_RENDERER) {
             playingStartMs = 0;
             return Mode.ERROR_RECOVERY;
         }
