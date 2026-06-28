@@ -10,7 +10,6 @@ import android.content.res.Configuration;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.PowerManager;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.Window;
@@ -44,9 +43,9 @@ import android.os.Looper;
     public static volatile boolean activityAlive = false;
 
     private WebView webView;
+    private long lastGcMs = 0;
     private FrameLayout rootLayout;
     private FrameLayout errorContainer;
-    private PowerManager.WakeLock wakeLock;
     private MediaDownloadManager mediaDownloadManager;
     private static final String PREFS_NAME = "DigipalPrefs";
     private static final String KEY_SERVER_URL = "server_url";
@@ -225,11 +224,6 @@ import android.os.Looper;
 
         setContentView(root);
 
-        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-        wakeLock = pm.newWakeLock(
-            PowerManager.SCREEN_BRIGHT_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP,
-            "digipal:wakelock"
-        );
 
         mediaDownloadManager = new MediaDownloadManager(this);
         mediaDownloadManager.setWebView(webView);
@@ -1263,6 +1257,12 @@ import android.os.Looper;
                 @JavascriptInterface
                 public void requestNativeGC() {
                     try {
+                        long now = System.currentTimeMillis();
+                        if (now - lastGcMs < 5 * 60 * 1000L) {
+                            android.util.Log.d("DigipalNative", "[gc_skipped] requestNativeGC: within 5-min cooldown");
+                            return;
+                        }
+                        lastGcMs = now;
                         // Trim Glide in-memory cache so decoded bitmaps from the
                         // outgoing slide are released before ExoPlayer allocates for
                         // the incoming one.  On low-RAM devices (e.g. BHV5AW) this
@@ -1647,6 +1647,14 @@ import android.os.Looper;
                               telemetryManager.setCurrentSlide(
                                   String.valueOf(playlistScheduler.getActiveRevisionId()),
                                   slideId, state.name());
+                          }
+                          if (assetCacheManager != null) {
+                              if (state == PlaylistScheduler.State.PLAYING) {
+                                  assetCacheManager.setMaxConcurrency(1);
+                              } else if (state == PlaylistScheduler.State.IDLE
+                                      || state == PlaylistScheduler.State.ERROR_RECOVERY) {
+                                  assetCacheManager.setMaxConcurrency(3);
+                              }
                           }
                       }
                   },
@@ -2125,9 +2133,6 @@ import android.os.Looper;
     protected void onResume() {
         super.onResume();
         activityVisible = true;
-        if (wakeLock != null && !wakeLock.isHeld()) {
-            wakeLock.acquire(24 * 60 * 60 * 1000L);
-        }
         hideSystemUI();
         webView.onResume();
         // Resume PlaylistScheduler slide timer with remaining duration.
@@ -2137,9 +2142,6 @@ import android.os.Looper;
     @Override
     protected void onPause() {
         super.onPause();
-        if (wakeLock != null && wakeLock.isHeld()) {
-            wakeLock.release();
-        }
         // Pause PlaylistScheduler so advance() does not fire while backgrounded.
         if (playlistScheduler != null) playlistScheduler.pause();
         webView.onPause();
