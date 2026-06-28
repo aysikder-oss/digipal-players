@@ -1561,6 +1561,7 @@ import android.os.Looper;
                                                       com.bumptech.glide.load.DataSource dataSource, boolean isFirstResource) {
                                                   activeImgView.setVisibility(View.VISIBLE);
                                                   if (playlistScheduler != null) playlistScheduler.onRendererReady(_sid);
+                                                  try { com.bumptech.glide.Glide.get(MainActivity.this).trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE); } catch (Throwable ignored) {}
                                                   return false;
                                               }
                                           })
@@ -1630,12 +1631,15 @@ import android.os.Looper;
                           if (healthMonitor != null) healthMonitor.setRendererTypeWeb();
                           runOnUiThread(() -> {
                               try {
+                                  if (webView != null) webView.resumeTimers();
                                   applyWebViewProfile(s.type);
                               } catch (Throwable ignored) {}
                           });
                       }
                       @Override public void schedulerDeactivateWebView() {
                           // WebView dormant enforced in schedulerPlayVideo/schedulerShowImage via setWebViewDormant(true)
+                          // Pause V8/Blink timer loop to release JS heap pressure during native playback
+                          runOnUiThread(() -> { try { if (webView != null) webView.pauseTimers(); } catch (Throwable ignored) {} });
                       }
                       @Override public void schedulerStopVideo() {
                           runOnUiThread(() -> {
@@ -1684,6 +1688,10 @@ import android.os.Looper;
                                       || state == PlaylistScheduler.State.RECOVERING_RENDERER) {
                                   assetCacheManager.setMaxConcurrency(3);
                               }
+                          }
+                          // Trim Glide bitmap cache on each slide advance — releases off-screen decoded bitmaps
+                          if (state == PlaylistScheduler.State.PLAYING) {
+                              try { com.bumptech.glide.Glide.get(MainActivity.this).trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN); } catch (Throwable ignored) {}
                           }
                           if (healthMonitor != null) healthMonitor.onSchedulerStateChanged(state);
                       }
