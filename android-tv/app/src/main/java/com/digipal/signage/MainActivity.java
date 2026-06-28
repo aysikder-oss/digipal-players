@@ -1602,10 +1602,7 @@ import android.os.Looper;
                           if (healthMonitor != null) healthMonitor.setRendererTypeWeb();
                           runOnUiThread(() -> {
                               try {
-                                  // Restore WebView priority directly — no evaluateJavascript round-trip
-                                  if (webView != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                                      webView.setRendererPriorityPolicy(android.webkit.WebView.RENDERER_PRIORITY_IMPORTANT, true);
-                                  }
+                                  applyWebViewProfile(s.type);
                               } catch (Throwable ignored) {}
                           });
                       }
@@ -1708,6 +1705,43 @@ import android.os.Looper;
               android.util.Log.e("DigipalNative", "initNativeComponents error: " + e.getMessage());
           }
       }
+
+
+    /**
+     * Apply WebView security/performance settings appropriate for the slide type.
+     * Must be called on the UI thread.
+     *
+     * DESIGN_KIOSK: full settings — file access, universal access, ALWAYS_ALLOW mixed content,
+     *               renderer priority IMPORTANT (keeps renderer alive under memory pressure).
+     * SIMPLE_URL  : restricted — no file access, no universal access,
+     *               COMPATIBILITY_MODE (blocks active mixed content), renderer priority NORMAL.
+     */
+    private void applyWebViewProfile(PlaylistScheduler.SlideType slideType) {
+        if (webView == null) return;
+        android.webkit.WebSettings settings = webView.getSettings();
+        boolean isDesignKiosk = slideType == PlaylistScheduler.SlideType.WEBVIEW_DESIGN
+                || slideType == PlaylistScheduler.SlideType.WEBVIEW_KIOSK;
+        if (isDesignKiosk) {
+            settings.setAllowFileAccess(true);
+            settings.setAllowFileAccessFromFileURLs(true);
+            settings.setAllowUniversalAccessFromFileURLs(true);
+            settings.setDatabaseEnabled(true);
+            settings.setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true);
+            }
+        } else {
+            // SIMPLE_URL: restrict file access, block active mixed content
+            settings.setAllowFileAccess(false);
+            settings.setAllowFileAccessFromFileURLs(false);
+            settings.setAllowUniversalAccessFromFileURLs(false);
+            settings.setDatabaseEnabled(false);
+            settings.setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_NORMAL, true);
+            }
+        }
+    }
 
       private void scheduleAppRelaunch(long delayMs) {
         try {
