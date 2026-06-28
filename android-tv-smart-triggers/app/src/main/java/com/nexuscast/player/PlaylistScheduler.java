@@ -345,6 +345,17 @@ public class PlaylistScheduler {
             delegate.schedulerHideImage();
         }
 
+        // Cross-native-type cleanup: stop ExoPlayer before showing image;
+        // hide image view before starting video.  Without this, the outgoing
+        // renderer stays on screen and covers the incoming one.
+        if (curIsNative && nextIsNative && cur != null && next != null) {
+            if (cur.type == SlideType.VIDEO && next.type == SlideType.IMAGE) {
+                delegate.schedulerStopVideo();
+            } else if (cur.type == SlideType.IMAGE && next.type == SlideType.VIDEO) {
+                delegate.schedulerHideImage();
+            }
+        }
+
         consecutiveFailures = 0;
         toState(State.TRANSITIONING, next != null ? next.slideId : "");
         currentIndex = nextIdx;
