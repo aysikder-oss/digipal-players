@@ -96,6 +96,7 @@ import android.os.Looper;
     private AssetCacheManager       assetCacheManager;
     private PdfPrerenderer          pdfPrerenderer;
     private ReliabilitySupervisor   reliabilitySupervisor;
+    private HealthMonitor           healthMonitor;
     // Player URL tracked so WebView can be recreated with the same page between slides
     private String currentPlayerUrl = null;
 
@@ -242,7 +243,6 @@ import android.os.Looper;
         loadPlayerUrl(serverUrl);
 
         startAnrWatchdog();
-        startHeartbeatWatchdog();
         initNativeComponents();
           } catch (Throwable _onCreate_err) {
               try {
@@ -497,6 +497,7 @@ import android.os.Looper;
         public void heartbeat() {
             lastHeartbeatMs = System.currentTimeMillis();
             heartbeatReceived = true;
+            if (healthMonitor != null) healthMonitor.onHeartbeatReceived();
         }
 
         @JavascriptInterface
@@ -1472,6 +1473,7 @@ import android.os.Looper;
                           final String _url = s.url; final String _fit = s.objectFit;
                           final boolean _loop = s.loop; final float _vol = s.volume;
                           final String _sid = s.slideId;
+                          if (healthMonitor != null) healthMonitor.setRendererTypeNative();
                           runOnUiThread(() -> {
                               try {
                                   // Set WebView dormant directly — no evaluateJavascript round-trip
@@ -1486,6 +1488,7 @@ import android.os.Looper;
                       @Override public void schedulerShowImage(PlaylistScheduler.SlidePlan s) {
                           final String _url = s.url; final String _sc = s.scaleType;
                           final String _sid = s.slideId;
+                          if (healthMonitor != null) healthMonitor.setRendererTypeNative();
                           runOnUiThread(() -> {
                               try {
                                   // Set WebView dormant directly — no evaluateJavascript round-trip
@@ -1596,6 +1599,7 @@ import android.os.Looper;
                           });
                       }
                       @Override public void schedulerActivateWebView(PlaylistScheduler.SlidePlan s) {
+                          if (healthMonitor != null) healthMonitor.setRendererTypeWeb();
                           runOnUiThread(() -> {
                               try {
                                   // Restore WebView priority directly — no evaluateJavascript round-trip
@@ -1656,6 +1660,7 @@ import android.os.Looper;
                                   assetCacheManager.setMaxConcurrency(3);
                               }
                           }
+                          if (healthMonitor != null) healthMonitor.onSchedulerStateChanged(state);
                       }
                   },
                   playlistRepository, telemetryManager,
@@ -1685,7 +1690,16 @@ import android.os.Looper;
                   telemetryManager
               );
               supRef[0] = reliabilitySupervisor;
-              reliabilitySupervisor.start();
+              reliabilitySupervisor.startExternallyClocked();
+
+              // Hand heartbeat stale check to HealthMonitor; it drives reliability checks too.
+              stopHeartbeatWatchdog();
+              healthMonitor = new HealthMonitor(
+                  telemetryManager, reliabilitySupervisor,
+                  () -> isNetworkConnectedForWatchdog(),
+                  () -> runOnUiThread(() -> { try { forcePlayerReload(); } catch (Throwable ignored) {} })
+              );
+              healthMonitor.start();
 
               // Boot restore — play last ACTIVE revision from Room without network
               playlistScheduler.boot();
@@ -1965,7 +1979,7 @@ import android.os.Looper;
                 final java.util.concurrent.atomic.AtomicBoolean ticked =
                     new java.util.concurrent.atomic.AtomicBoolean(false);
                 try { anrMainHandler.post(() -> ticked.set(true)); } catch (Throwable ignored) {}
-                try { Thread.sleep(5000); } catch (InterruptedException e) { break; }
+                try { Thread.sleep(10000); } catch (InterruptedException e) { break; }
                 if (ticked.get()) {
                     missed = 0;
                 } else {
@@ -2211,6 +2225,7 @@ import android.os.Looper;
     protected void onDestroy() {
         stopAnrWatchdog();
         stopHeartbeatWatchdog();
+        if (healthMonitor != null) { healthMonitor.stop(); healthMonitor = null; }
         if (isAutoRelaunchEnabled() && !isUserClosing) {
             scheduleAppRelaunch(3000);
         }
