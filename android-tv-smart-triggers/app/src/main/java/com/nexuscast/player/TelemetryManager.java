@@ -20,6 +20,7 @@ public class TelemetryManager {
 
     private static final String TAG = "TelemetryManager";
     private static final long HEARTBEAT_INTERVAL_MS = 30_000;
+    private volatile long currentHeartbeatIntervalMs = HEARTBEAT_INTERVAL_MS;
     private static final int MAX_BATCH = 50;
 
     private final Context ctx;
@@ -52,11 +53,27 @@ public class TelemetryManager {
     }
 
     public void start() {
+        scheduleHeartbeatTimer(currentHeartbeatIntervalMs);
+        Log.i(TAG, "started");
+    }
+
+    private synchronized void scheduleHeartbeatTimer(long intervalMs) {
+        if (heartbeatTimer != null) { heartbeatTimer.cancel(); heartbeatTimer = null; }
         heartbeatTimer = new java.util.Timer("DigipalHeartbeat", true);
         heartbeatTimer.scheduleAtFixedRate(new java.util.TimerTask() {
             @Override public void run() { sendHeartbeat(); syncEvents(); }
-        }, HEARTBEAT_INTERVAL_MS, HEARTBEAT_INTERVAL_MS);
-        Log.i(TAG, "started");
+        }, intervalMs, intervalMs);
+    }
+
+    /**
+     * Adjust heartbeat frequency. Called by HealthMonitor when playback mode changes.
+     * Changes take effect on the next timer cycle.
+     */
+    public void setHeartbeatInterval(long intervalMs) {
+        if (intervalMs == currentHeartbeatIntervalMs) return;
+        currentHeartbeatIntervalMs = intervalMs;
+        scheduleHeartbeatTimer(intervalMs);
+        Log.i(TAG, "[heartbeat_interval] set to " + intervalMs + "ms");
     }
 
     public void stop() {
@@ -150,6 +167,7 @@ public class TelemetryManager {
         o.put("memoryPressure", memPressure);
         o.put("lastError", lastError);
         o.put("transitionGapMs", transitionGapMs.get());
+        o.put("heartbeatIntervalMs", currentHeartbeatIntervalMs);
         return o;
     }
 
