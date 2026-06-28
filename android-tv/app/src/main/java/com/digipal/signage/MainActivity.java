@@ -67,7 +67,7 @@ import android.os.Looper;
     private androidx.media3.exoplayer.ExoPlayer exoPlayer;
       // ExoPlayer on-disk video cache (OptiSigns-style LRU, 2 GB max)
       private static androidx.media3.datasource.cache.SimpleCache videoCache;
-      private static final long VIDEO_CACHE_SIZE = 2L * 1024 * 1024 * 1024; // 2 GB
+      private static final long VIDEO_CACHE_SIZE = 200L * 1024 * 1024; // 200 MB (streaming buffer only; full copies live in AssetCacheManager/Room)
     // Handler/Runnable for first-frame video ready callback (or 8s safety timeout)
     private android.os.Handler videoReadyHandler;
     private Runnable videoReadyRunnable;
@@ -94,6 +94,9 @@ import android.os.Looper;
     private TelemetryManager        telemetryManager;
     private PlaylistScheduler       playlistScheduler;
     private AssetCacheManager       assetCacheManager;
+    /** url → absolute local file path for READY assets; populated from Room at boot + on every successful download. */
+    private final java.util.concurrent.ConcurrentHashMap<String, String> localPathCache =
+            new java.util.concurrent.ConcurrentHashMap<>();
     private PdfPrerenderer          pdfPrerenderer;
     private ReliabilitySupervisor   reliabilitySupervisor;
     private HealthMonitor           healthMonitor;
@@ -1665,6 +1668,38 @@ import android.os.Looper;
               );
 
               assetCacheManager = new AssetCacheManager(this, playlistRepository);
+
+              // ── Local-first asset delivery ─────────────────────────────────────────
+              // Populate localPathCache on every successful download so PlaylistScheduler
+              // can serve file:// URIs instead of expiring GCS signed URLs.
+              assetCacheManager.setOnAssetReadyListener((url, localPath) ->
+                  localPathCache.put(url, localPath));
+
+              // Wire AssetResolver to PlaylistScheduler — ConcurrentHashMap lookup is
+              // safe to call on the main thread from showCurrent().
+              playlistScheduler.setAssetResolver(url -> localPathCache.get(url));
+
+              // Pre-populate from Room: assets downloaded in previous sessions are
+              // immediately available for local-first playback after a reboot.
+              final PlaylistRepository _repo = playlistRepository;
+              new Thread(() -> {
+                  try {
+                      java.util.List<PlaylistDatabase.AssetEntity> ready =
+                          _repo.getDb().assetDao().findAllReady();
+                      for (PlaylistDatabase.AssetEntity a : ready) {
+                          if (a.url != null && !a.url.isEmpty()
+                                  && a.localPath != null && !a.localPath.isEmpty()) {
+                              localPathCache.put(a.url, a.localPath);
+                          }
+                      }
+                      android.util.Log.d("DigipalAsset",
+                          "[local_first] pre-loaded " + ready.size() + " READY assets");
+                  } catch (Exception e) {
+                      android.util.Log.w("DigipalAsset",
+                          "localPathCache warm-up failed: " + e.getMessage());
+                  }
+              }, "LocalPathCacheWarmup").start();
+
               pdfPrerenderer    = new PdfPrerenderer(this, playlistRepository);
 
               reliabilitySupervisor = new ReliabilitySupervisor(
