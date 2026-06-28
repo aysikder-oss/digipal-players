@@ -27,7 +27,8 @@ public class AssetCacheManager {
     private final Context ctx;
     private final PlaylistRepository repo;
     private final OkHttpClient http;
-    private final Semaphore sem = new Semaphore(MAX_CONCURRENT);
+    private volatile int configuredMax = MAX_CONCURRENT;
+    private final Semaphore sem = new Semaphore(MAX_CONCURRENT, true);
     private final ExecutorService exec = Executors.newFixedThreadPool(MAX_CONCURRENT + 1);
 
     public AssetCacheManager(Context ctx, PlaylistRepository repo) {
@@ -196,6 +197,25 @@ public class AssetCacheManager {
         StringBuilder sb = new StringBuilder(bytes.length * 2);
         for (byte b : bytes) sb.append(String.format("%02x", b));
         return sb.toString();
+    }
+
+    /**
+     * Adjust download concurrency at runtime.
+     * Call with 1 during PLAYING state to avoid I/O contention with ExoPlayer;
+     * call with MAX_CONCURRENT when IDLE or ERROR_RECOVERY.
+     */
+    public synchronized void setMaxConcurrency(int max) {
+        if (max < 1) max = 1;
+        if (max > MAX_CONCURRENT) max = MAX_CONCURRENT;
+        if (max == configuredMax) return;
+        if (max > configuredMax) {
+            sem.release(max - configuredMax);
+        } else {
+            sem.drainPermits();
+            sem.release(max);
+        }
+        configuredMax = max;
+        Log.d(TAG, "[concurrency] Download concurrency set to " + max);
     }
 
     public void shutdown() { exec.shutdown(); http.dispatcher().executorService().shutdown(); }
