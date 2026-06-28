@@ -1898,6 +1898,8 @@ import android.os.Looper;
         }
         hideSystemUI();
         webView.onResume();
+        // Resume PlaylistScheduler slide timer with remaining duration.
+        if (playlistScheduler != null) playlistScheduler.resume();
     }
 
     @Override
@@ -1906,6 +1908,8 @@ import android.os.Looper;
         if (wakeLock != null && wakeLock.isHeld()) {
             wakeLock.release();
         }
+        // Pause PlaylistScheduler so advance() does not fire while backgrounded.
+        if (playlistScheduler != null) playlistScheduler.pause();
         webView.onPause();
     }
 
