@@ -125,8 +125,10 @@ public class HealthMonitor {
             try { reliability.tick(); } catch (Throwable ignored) {}
         }
 
-        // 3. Heartbeat stale check (replaces MainActivity heartbeatWatchdogRunnable)
-        if (heartbeatReceived) {
+        // 3. Heartbeat stale check — only fires when the active renderer is WebView.
+        // During native video/image playback WebView is deliberately dormant, so JS
+        // heartbeats stop naturally; triggering a reload there would interrupt playback.
+        if (heartbeatReceived && "web".equals(rendererType)) {
             long now = System.currentTimeMillis();
             if (now - lastHeartbeatMs > HEARTBEAT_STALE_MS
                     && networkCheck != null && networkCheck.isNetworkConnected()
@@ -134,6 +136,8 @@ public class HealthMonitor {
                 lastWatchdogReloadMs = now;
                 lastHeartbeatMs = now; // avoid immediate re-fire
                 Log.w(TAG, "[heartbeat_stale] Player heartbeat stale with network up - reloading WebView");
+                if (telemetry != null) telemetry.logEvent("recovery", "heartbeat_stale",
+                        "{\"reason\":\"heartbeat_stale_webview\",\"renderer\":\"web\"}");
                 if (reloadAction != null) {
                     try { reloadAction.forcePlayerReload(); } catch (Throwable ignored) {}
                 }
