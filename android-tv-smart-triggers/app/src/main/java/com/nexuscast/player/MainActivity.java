@@ -524,7 +524,7 @@ import android.os.Looper;
             SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
             prefs.edit().putInt(KEY_CHECK_SEC, clamped).apply();
             // Restart WatchdogService to pick up the new interval immediately.
-            if (prefs.getBoolean(KEY_AUTO_RELAUNCH, true)) {
+            if (prefs.getBoolean(KEY_AUTO_RELAUNCH, false)) {
                 Intent ws = new Intent(MainActivity.this, WatchdogService.class);
                 stopService(ws);
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(ws);
@@ -1129,8 +1129,7 @@ import android.os.Looper;
                         android.util.Log.e("DigipalNative", "requestNativeGC error", e);
                     }
                 }
-  
-      }
+
 
                 @android.webkit.JavascriptInterface
                 public void setNativePlaylist(String json) {
@@ -1163,6 +1162,8 @@ import android.os.Looper;
                         .remove("pending_crash_ready")
                         .apply();
                 }
+
+      }
 
       private void scheduleAppRelaunch(long delayMs) {
         try {
@@ -1627,6 +1628,7 @@ import android.os.Looper;
             videoReadyHandler = null; videoReadyRunnable = null;
         }
         if (exoPlayer != null) { exoPlayer.release(); exoPlayer = null; }
+        if (videoCache != null) { try { videoCache.release(); } catch (Throwable ignored) {} videoCache = null; }
         super.onDestroy();
     }
 
