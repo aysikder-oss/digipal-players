@@ -129,12 +129,6 @@ public class PlaylistScheduler {
     private static final int MAX_ASSET_GRACE_RETRIES = 30; // 30 × 1 s = 30 s max wait
 
     // ── Renderer-ready gate ─────────────────────────────────────────────────────────────
-    private long pendingAdvanceDurationMs = -1L;
-    private int rendererReadyTimeoutGen = -1;
-    private Runnable rendererReadyTimeout;
-    private static final long RENDERER_READY_TIMEOUT_MS = 3_000L;
-
-    // ── Renderer-ready gate ─────────────────────────────────────────────────────────────
     /** Slide advance duration captured while waiting for renderer first-frame confirmation. */
     private long pendingAdvanceDurationMs = -1L;
     /** Generation at time the renderer-ready timeout was posted; -1 when not waiting. */
@@ -232,12 +226,15 @@ public class PlaylistScheduler {
         pausedAt = -1;
         remainingMs = -1;
         generation++;
-        if (rendererReadyTimeout != null) { handler.removeCallbacks(rendererReadyTimeout); rendererReadyTimeout = null; }
-        rendererReadyTimeoutGen = -1;
         if (advanceRunnable != null) {
             handler.removeCallbacks(advanceRunnable);
             advanceRunnable = null;
         }
+        if (rendererReadyTimeout != null) {
+            handler.removeCallbacks(rendererReadyTimeout);
+            rendererReadyTimeout = null;
+        }
+        rendererReadyTimeoutGen = -1;
         toState(State.IDLE, "");
     }
 
@@ -278,20 +275,6 @@ public class PlaylistScheduler {
 
     /** Called when a renderer signals it is ready (first frame decoded). */
     public void onRendererReady(String slideId) {
-        long readyMs = System.currentTimeMillis() - slideStartMs;
-        Log.d(TAG, "[ready] " + slideId + " in " + readyMs + "ms");
-        if (telemetry != null) telemetry.logEvent("slide_ready", slideId,
-                "{\"readyMs\":" + readyMs + "}");
-        if (state == State.PREPARING_CURRENT && rendererReadyTimeoutGen == generation) {
-            if (rendererReadyTimeout != null) {
-                handler.removeCallbacks(rendererReadyTimeout);
-                rendererReadyTimeout = null;
-            }
-            rendererReadyTimeoutGen = -1;
-            toState(State.PLAYING, slideId);
-            startAdvanceTimer(generation, pendingAdvanceDurationMs);
-        }
-    }
         long readyMs = System.currentTimeMillis() - slideStartMs;
         Log.d(TAG, "[ready] " + slideId + " in " + readyMs + "ms");
         if (telemetry != null) telemetry.logEvent("slide_ready", slideId,
