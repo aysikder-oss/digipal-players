@@ -108,6 +108,8 @@ public class PlaylistDatabase {
         @Query("UPDATE assets SET last_used_at=:ts WHERE asset_id=:id") void touch(String id, long ts);
         @Query("UPDATE assets SET prerendered_pages=:pages WHERE asset_id=:id") void setPrerenderedPages(String id, String pages);
         @Query("SELECT * FROM assets WHERE download_state NOT IN ('READY','PINNED_FOR_ROLLBACK') AND last_used_at<:before AND pinned_until<:now") List<AssetEntity> findPrunable(long before, long now);
+        @Query("SELECT * FROM assets WHERE url=:url AND download_state IN ('READY','PINNED_FOR_ROLLBACK') ORDER BY id DESC LIMIT 1") AssetEntity findReadyByUrl(String url);
+        @Query("SELECT * FROM assets WHERE download_state IN ('READY','PINNED_FOR_ROLLBACK')") List<AssetEntity> findAllReady();
     }
 
     @Dao public interface PlaybackEventDao {
