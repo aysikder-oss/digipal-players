@@ -74,6 +74,13 @@ public class AssetCacheManager {
         void onFailure(String assetId, String error);
     }
 
+    public interface OnAssetReadyListener {
+        /** Called on a background thread after a successful download + atomic rename. */
+        void onAssetReady(String url, String localPath);
+    }
+    private volatile OnAssetReadyListener onAssetReadyListener;
+    public void setOnAssetReadyListener(OnAssetReadyListener l) { this.onAssetReadyListener = l; }
+
     private void download(String assetId, String url, String expectedSha256, DownloadCallback cb) {
         File mediaDir = getMediaDir();
         if (mediaDir == null) { cb.onFailure(assetId, "storage_unavailable"); return; }
@@ -158,6 +165,7 @@ public class AssetCacheManager {
             repo.markAssetReady(assetId, finalFile.getAbsolutePath(), actualSha, etag, lm, finalFile.length());
             Log.i(TAG, "[done] " + assetId + " sha=" + actualSha.substring(0, 8) + "…");
             cb.onSuccess(assetId, finalFile.getAbsolutePath());
+            if (onAssetReadyListener != null) onAssetReadyListener.onAssetReady(url, finalFile.getAbsolutePath());
 
         } catch (Exception e) {
             Log.e(TAG, "[error] " + assetId + ": " + e.getMessage());
