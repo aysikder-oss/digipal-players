@@ -15,22 +15,32 @@ import java.util.concurrent.Executors;
  *
  * Unlike NativePlaylistManager (JS-driven), this class:
  *   - Restores last known-good playlist from Room on boot (no network needed)
- *   - Manages WebView dormant state to reclaim 50–100 MB on Fire TV 4K Plus
+ *   - Manages WebView dormant state to reclaim 50-100 MB on Fire TV 4K Plus
  *   - Implements soft recovery: extend current slide on renderer failure
  *   - Reports all state transitions to TelemetryManager
  *
+ * Reliability improvements (v3.12.0):
+ *   - Generation counter: stale advance() callbacks from superseded setPlaylist()
+ *     calls are silently dropped, preventing wrong-slide advancement.
+ *   - Per-slide retry: onRendererError() retries the same slide up to 3x before
+ *     skipping to the next one (prevents flash-bang on transient decode errors).
+ *   - Empty playlist stop: setPlaylist("[]") now calls stop() + clears the active
+ *     Room revision so boot() won't restore stale content after a commanded reload.
+ *   - Pause/resume: pause() records remaining slide time; resume() reschedules
+ *     the advance callback for exactly the remaining duration.
+ *
  * State machine:
- *   IDLE → BOOTING → RESTORING_LAST_GOOD → PREPARING_CURRENT
- *   → PLAYING → PREPARING_NEXT → TRANSITIONING → PLAYING (loop)
- *   Any state → DEGRADED_PLAYBACK → RECOVERING_RENDERER → PLAYING
+ *   IDLE -> BOOTING -> RESTORING_LAST_GOOD -> PREPARING_CURRENT
+ *   -> PLAYING -> PREPARING_NEXT -> TRANSITIONING -> PLAYING (loop)
+ *   Any state -> DEGRADED_PLAYBACK -> RECOVERING_RENDERER -> PLAYING
  */
 public class PlaylistScheduler {
 
     private static final String TAG = "PlaylistScheduler";
     private static final int MAX_FAILURES = 3;
+    private static final int MAX_SLIDE_RETRIES = 3;
     private static final long FALLBACK_EXTEND_MS = 5_000L;
 
-    // ── State machine ─────────────────────────────────────────────────────────
     public enum State {
         IDLE, BOOTING, RESTORING_LAST_GOOD,
         PREPARING_CURRENT, PLAYING,
@@ -53,7 +63,6 @@ public class PlaylistScheduler {
         public String fallbackUrl = "";
     }
 
-    /** Implemented by MainActivity — all callbacks on main thread. */
     public interface Delegate {
         void schedulerPlayVideo(SlidePlan slide);
         void schedulerShowImage(SlidePlan slide);
@@ -66,7 +75,6 @@ public class PlaylistScheduler {
         void schedulerOnStateChanged(State state, String slideId);
     }
 
-    // ── Fields ────────────────────────────────────────────────────────────────
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Delegate delegate;
     private final PlaylistRepository repository;
@@ -82,16 +90,25 @@ public class PlaylistScheduler {
     private long slideStartMs;
     private Runnable advanceRunnable;
 
-    // ── Constructor ───────────────────────────────────────────────────────────
+    /** Incremented on every stop()/setPlaylist() to invalidate stale advance callbacks. */
+    private int generation = 0;
+
+    /** Per-slide retry counter; reset in showCurrent(), incremented in onRendererError(). */
+    private int slideRetryCount = 0;
+
+    /** Wall-clock time when pause() was called; -1 when not paused. */
+    private long pausedAt = -1;
+
+    /** Remaining slide time captured at pause(); -1 when not paused. */
+    private long remainingMs = -1;
+
     public PlaylistScheduler(Delegate delegate, PlaylistRepository repository, TelemetryManager telemetry) {
         this.delegate = delegate;
         this.repository = repository;
         this.telemetry = telemetry;
     }
 
-    // ── Public API ────────────────────────────────────────────────────────────
-
-    /** Called from MainActivity.onCreate() — restores last playlist from Room if available. */
+    /** Called from MainActivity.onCreate() -- restores last playlist from Room if available. */
     public void boot() {
         toState(State.BOOTING, "");
         dbExec.execute(() -> {
@@ -120,17 +137,21 @@ public class PlaylistScheduler {
 
     /**
      * Called from setNativePlaylist JS bridge.
-     * Parses JSON, persists to Room (READY status), activates revision, starts playing.
-     * If the slide structure is unchanged (same contentIds + types), only refreshes
-     * URLs in-place without restarting from slide 0.
+     * Passing "[]" stops playback and clears the active Room revision so boot()
+     * does not restore stale content after a commanded page reload.
      */
     public synchronized void setPlaylist(String json) {
         List<SlidePlan> newSlides = parseSlides(json);
-        if (newSlides.isEmpty()) return;
+        if (newSlides.isEmpty()) {
+            stop();
+            dbExec.execute(() -> repository.clearActiveRevision());
+            Log.i(TAG, "[setPlaylist] empty -- stopped and cleared active revision");
+            return;
+        }
 
         if (isSameStructure(newSlides)) {
             slides = newSlides;
-            Log.d(TAG, "[setPlaylist] URL refresh — keeping index=" + currentIndex);
+            Log.d(TAG, "[setPlaylist] URL refresh -- keeping index=" + currentIndex);
             return;
         }
 
@@ -139,7 +160,6 @@ public class PlaylistScheduler {
         currentIndex = 0;
         consecutiveFailures = 0;
 
-        // Persist revision to Room (background)
         final String finalJson = json;
         dbExec.execute(() -> {
             long revId = repository.saveRevision("default", String.valueOf(System.currentTimeMillis()), finalJson);
@@ -155,6 +175,9 @@ public class PlaylistScheduler {
     /** Stop playback and cancel pending timer. */
     public synchronized void stop() {
         running = false;
+        pausedAt = -1;
+        remainingMs = -1;
+        generation++;
         if (advanceRunnable != null) {
             handler.removeCallbacks(advanceRunnable);
             advanceRunnable = null;
@@ -162,7 +185,42 @@ public class PlaylistScheduler {
         toState(State.IDLE, "");
     }
 
-    /** Called when a video/image renderer signals it's ready (first frame). */
+    /**
+     * Pause slide timing. Records remaining duration so resume() can restart
+     * the advance timer for exactly the time that was left.
+     * Called from MainActivity.onPause().
+     */
+    public synchronized void pause() {
+        if (!running || pausedAt >= 0) return;
+        pausedAt = System.currentTimeMillis();
+        long elapsed = pausedAt - slideStartMs;
+        SlidePlan cur = (currentIndex < slides.size()) ? slides.get(currentIndex) : null;
+        long dur = (cur != null) ? Math.max(1_000L, cur.durationMs) : 10_000L;
+        remainingMs = Math.max(1_000L, dur - elapsed);
+        if (advanceRunnable != null) handler.removeCallbacks(advanceRunnable);
+        Log.d(TAG, "[pause] remainingMs=" + remainingMs);
+    }
+
+    /**
+     * Resume slide timing. Reschedules the advance callback for the remaining
+     * duration captured at pause() time.
+     * Called from MainActivity.onResume().
+     */
+    public synchronized void resume() {
+        if (!running || pausedAt < 0) return;
+        long delay = (remainingMs > 0) ? remainingMs : 1_000L;
+        pausedAt = -1;
+        remainingMs = -1;
+        final int myGen = generation;
+        advanceRunnable = () -> {
+            if (generation != myGen) return;
+            advance();
+        };
+        handler.postDelayed(advanceRunnable, delay);
+        Log.d(TAG, "[resume] rescheduled advance in " + delay + "ms");
+    }
+
+    /** Called when a renderer signals it is ready (first frame decoded). */
     public void onRendererReady(String slideId) {
         long readyMs = System.currentTimeMillis() - slideStartMs;
         Log.d(TAG, "[ready] " + slideId + " in " + readyMs + "ms");
@@ -170,32 +228,53 @@ public class PlaylistScheduler {
                 "{\"readyMs\":" + readyMs + "}");
     }
 
-    /** Called when a renderer encounters an unrecoverable error. */
+    /**
+     * Called when a renderer encounters an unrecoverable error.
+     * Retries the same slide up to MAX_SLIDE_RETRIES times before advancing.
+     * Goes DEGRADED only after MAX_FAILURES consecutive failures.
+     */
     public void onRendererError(String slideId, String error) {
-        Log.w(TAG, "[error] " + slideId + ": " + error);
+        Log.w(TAG, "[error] " + slideId + ": " + error + " (slideRetry=" + slideRetryCount + ")");
+        slideRetryCount++;
         consecutiveFailures++;
         if (telemetry != null) telemetry.logEvent("slide_failed", slideId,
-                "{\"error\":" + JSONObject.quote(error) + "}");
+                "{\"error\":" + JSONObject.quote(error)
+                + ",\"slideRetry\":" + slideRetryCount + "}");
+
         if (consecutiveFailures >= MAX_FAILURES) {
             degraded(slideId);
+            return;
+        }
+
+        if (advanceRunnable != null) handler.removeCallbacks(advanceRunnable);
+
+        if (slideRetryCount < MAX_SLIDE_RETRIES) {
+            Log.d(TAG, "[error] retrying slide " + slideId + " in 500ms (attempt " + slideRetryCount + ")");
+            final int myGen = generation;
+            handler.postDelayed(() -> {
+                if (generation != myGen || !running) return;
+                showCurrent();
+            }, 500);
         } else {
-            // Soft recovery: advance to next slide quickly
-            if (advanceRunnable != null) handler.removeCallbacks(advanceRunnable);
-            handler.postDelayed(this::advance, 300);
+            Log.w(TAG, "[error] max retries for " + slideId + " -- skipping");
+            slideRetryCount = 0;
+            final int myGen = generation;
+            handler.postDelayed(() -> {
+                if (generation != myGen || !running) return;
+                advance();
+            }, 300);
         }
     }
-
-    // ── Private state machine ─────────────────────────────────────────────────
 
     private void showCurrent() {
         if (!running || slides.isEmpty()) return;
         if (currentIndex >= slides.size()) currentIndex = 0;
 
+        slideRetryCount = 0;
         final SlidePlan slide = slides.get(currentIndex);
         slideStartMs = System.currentTimeMillis();
         toState(State.PREPARING_CURRENT, slide.slideId);
 
-        // Effective type: empty URL video/image falls back to WebView
         SlideType eff = slide.type;
         if ((eff == SlideType.VIDEO || eff == SlideType.IMAGE)
                 && (slide.url == null || slide.url.isEmpty())) {
@@ -220,12 +299,17 @@ public class PlaylistScheduler {
         if (telemetry != null) telemetry.logEvent("slide_shown", slide.slideId,
                 "{\"type\":\"" + eff + "\",\"index\":" + currentIndex + "}");
 
-        // Preload next
         schedulePreload(eff);
 
-        // Schedule advance
         final long dur = Math.max(1_000L, slide.durationMs);
-        advanceRunnable = this::advance;
+        final int myGen = generation;
+        advanceRunnable = () -> {
+            if (generation != myGen) {
+                Log.d(TAG, "[advance] dropped stale callback (gen mismatch)");
+                return;
+            }
+            advance();
+        };
         handler.postDelayed(advanceRunnable, dur);
     }
 
@@ -270,10 +354,13 @@ public class PlaylistScheduler {
     private void degraded(String slideId) {
         toState(State.DEGRADED_PLAYBACK, slideId);
         if (telemetry != null) telemetry.logEvent("fallback_used", slideId, "{}");
-        Log.w(TAG, "[degraded] " + consecutiveFailures + " failures — extending current slide " + FALLBACK_EXTEND_MS + "ms");
+        Log.w(TAG, "[degraded] " + consecutiveFailures + " failures -- extending " + FALLBACK_EXTEND_MS + "ms");
         if (advanceRunnable != null) handler.removeCallbacks(advanceRunnable);
+        final int myGen = generation;
         advanceRunnable = () -> {
+            if (generation != myGen) return;
             consecutiveFailures = 0;
+            slideRetryCount = 0;
             toState(State.RECOVERING_RENDERER, slideId);
             advance();
         };
@@ -282,13 +369,11 @@ public class PlaylistScheduler {
 
     private void toState(State s, String slideId) {
         if (state != s) {
-            Log.d(TAG, "[state] " + state + " → " + s + " slide=" + slideId);
+            Log.d(TAG, "[state] " + state + " -> " + s + " slide=" + slideId);
             state = s;
             delegate.schedulerOnStateChanged(s, slideId);
         }
     }
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
 
     public State getState() { return state; }
     public int getCurrentIndex() { return currentIndex; }
