@@ -1258,6 +1258,7 @@ import android.os.Looper;
                       activeVideoViewIsA = !activeVideoViewIsA; preloadVideoReady = false;
                       pendingOldPlayer = null;
                       if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
+                      if (playlistScheduler != null) playlistScheduler.onRendererReady(slideId);
                   } else {
                       final boolean[] done = {false};
                       nativeVideoListener = new androidx.media3.common.Player.Listener() {
@@ -1270,6 +1271,7 @@ import android.os.Looper;
                                   activeVideoViewIsA = !activeVideoViewIsA; preloadVideoReady = false;
                                   pendingOldPlayer = null;
                                   if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
+                                  if (playlistScheduler != null) playlistScheduler.onRendererReady(slideId);
                               });
                           }
                           @Override public void onPlayerError(androidx.media3.common.PlaybackException error) {
@@ -1329,6 +1331,7 @@ import android.os.Looper;
                               activeVideoViewIsA = !activeVideoViewIsA;
                               pendingOldPlayer = null;
                               if (oldPlayer != null) { try { oldPlayer.stop(); oldPlayer.release(); } catch (Throwable ignored) {} }
+                              if (playlistScheduler != null) playlistScheduler.onRendererReady(slideId);
                           });
                       }
                       @Override public void onPlayerError(androidx.media3.common.PlaybackException error) {
@@ -1399,6 +1402,7 @@ import android.os.Looper;
                                       com.bumptech.glide.Glide.with(MainActivity.this).clear(activeImgView);
                                       activeImageViewIsA = !activeImageViewIsA;
                                       preloadedImageUrl = null; preloadImageReady = false;
+                                      if (playlistScheduler != null) playlistScheduler.onRendererReady(_sid);
                                   } else {
                                       activeImgView.setLayoutParams(_lp);
                                       activeImgView.setScaleType(st);
@@ -1416,6 +1420,7 @@ import android.os.Looper;
                                                       com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
                                                       com.bumptech.glide.load.DataSource dataSource, boolean isFirstResource) {
                                                   activeImgView.setVisibility(View.VISIBLE);
+                                                  if (playlistScheduler != null) playlistScheduler.onRendererReady(_sid);
                                                   return false;
                                               }
                                           })
