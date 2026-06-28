@@ -93,6 +93,23 @@ public class ReliabilitySupervisor {
         }
     }
 
+    /**
+     * External tick — called by HealthMonitor on each of its adaptive cycles instead of
+     * running ReliabilitySupervisor's own internal Handler loop.
+     */
+    public void tick() {
+        if (running) check();
+    }
+
+    /**
+     * Start in externally-clocked mode: marks running=true but does NOT schedule the
+     * internal Handler loop. HealthMonitor will drive checks via tick().
+     */
+    public void startExternallyClocked() {
+        running = true;
+        Log.i(TAG, "started (externally clocked by HealthMonitor)");
+    }
+
     private void scheduleCheck() {
         if (!running) return;
         checkRunnable = () -> {
