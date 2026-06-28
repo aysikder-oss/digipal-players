@@ -119,6 +119,23 @@ import android.os.Looper;
           final Thread.UncaughtExceptionHandler _prevCrashHandler = Thread.getDefaultUncaughtExceptionHandler();
           Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
               try { AppRecoverManager.scheduleRecovery(getApplicationContext()); } catch (Throwable ignored) {}
+              try {
+                  CrashCounter.recordCrash(getApplicationContext());
+                  android.app.ActivityManager am = (android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE);
+                  android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+                  if (am != null) am.getMemoryInfo(mi);
+                  String stack = android.util.Log.getStackTraceString(throwable);
+                  if (stack.length() > 4000) stack = stack.substring(0, 4000);
+                  long now = System.currentTimeMillis();
+                  getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                      .putString("pending_crash_type", throwable.getClass().getSimpleName())
+                      .putString("pending_crash_stack", stack)
+                      .putLong("pending_crash_at", now)
+                      .putInt("pending_crash_free_mb", (int)(mi.availMem / 1048576L))
+                      .putInt("pending_crash_total_mb", (int)(mi.totalMem / 1048576L))
+                      .putBoolean("pending_crash_ready", true)
+                      .commit();
+              } catch (Throwable ignored) {}
               if (_prevCrashHandler != null) _prevCrashHandler.uncaughtException(thread, throwable);
               else android.os.Process.killProcess(android.os.Process.myPid());
           });
@@ -380,6 +397,36 @@ import android.os.Looper;
                           }
                       }).start();
                   }
+                  // Inject APK crash stats and any pending crash report for web-player pickup
+                  try {
+                      android.content.SharedPreferences _cp = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+                      int _cc = _cp.getInt(CrashCounter.KEY_CRASH_COUNT, 0);
+                      boolean _mx = _cp.getBoolean(CrashCounter.KEY_MAX_EXCEEDED, false);
+                      boolean _hasCrash = _cp.getBoolean("pending_crash_ready", false);
+                      StringBuilder _js = new StringBuilder();
+                      _js.append("window.__digipalCrashStats={crashCount:").append(_cc)
+                         .append(",isMaxExceeded:").append(_mx).append("};\n");
+                      if (_hasCrash) {
+                          String _type = _cp.getString("pending_crash_type", "UnknownError");
+                          String _stack = _cp.getString("pending_crash_stack", "");
+                          long _at = _cp.getLong("pending_crash_at", 0L);
+                          int _free = _cp.getInt("pending_crash_free_mb", 0);
+                          int _total = _cp.getInt("pending_crash_total_mb", 0);
+                          _js.append("window.__digipalNativeCrash={");
+                          _js.append("\"occurredAt\":").append(_at).append(",");
+                          _js.append("\"errorType\":\"").append(_type.replace("\"", "")).append("\",");
+                          _js.append("\"freeMemoryMb\":").append(_free).append(",");
+                          _js.append("\"totalMemoryMb\":").append(_total).append(",");
+                          String _safeStack = _stack.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "");
+                          _js.append("\"stackTrace\":\"").append(_safeStack).append("\"");
+                          _js.append("}");
+                      } else {
+                          _js.append("window.__digipalNativeCrash=null;");
+                      }
+                      final String _finalJs = _js.toString();
+                      final android.webkit.WebView _wv2 = webView;
+                      runOnUiThread(() -> { if (_wv2 != null) _wv2.evaluateJavascript(_finalJs, null); });
+                  } catch (Throwable ignored) {}
             }
 
             @Override
@@ -1103,6 +1150,18 @@ import android.os.Looper;
                 public void reloadNativePlaylist() {
                     // JS will call setNativePlaylist again with refreshed slide data
                     android.util.Log.i("DigipalNative", "[nativeLoop] reloadNativePlaylist signal received");
+                }
+
+                @android.webkit.JavascriptInterface
+                public void clearPendingCrash() {
+                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                        .remove("pending_crash_type")
+                        .remove("pending_crash_stack")
+                        .remove("pending_crash_at")
+                        .remove("pending_crash_free_mb")
+                        .remove("pending_crash_total_mb")
+                        .remove("pending_crash_ready")
+                        .apply();
                 }
 
       private void scheduleAppRelaunch(long delayMs) {
