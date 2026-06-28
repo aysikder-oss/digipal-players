@@ -55,6 +55,17 @@ public class PlaylistRepository {
         return list.isEmpty() ? null : list.get(0);
     }
 
+    /**
+     * Mark the current ACTIVE revision as SUPERSEDED without replacing it with
+     * a new one. Called when setPlaylist("[]") is received so that boot() on the
+     * next page load finds no active revision and stays IDLE rather than restoring
+     * stale content.
+     */
+    public void clearActiveRevision() {
+        db.revisionDao().supersedePrevious();
+        Log.i(TAG, "clearActiveRevision: active revision cleared");
+    }
+
     /** Save slides for a revision (replaces existing). */
     public void saveSlides(long revisionId, List<PlaylistDatabase.SlideEntity> slides) {
         db.slideDao().deleteForRevision(revisionId);
