@@ -1332,6 +1332,132 @@ import android.os.Looper;
 
       }
 
+
+      // ─── Scheduler-direct video dispatch ────────────────────────────────────────
+      // Called by schedulerPlayVideo delegate instead of going through evaluateJavascript.
+      // Full-screen layout; ExoPlayer errors notify scheduler directly.
+      private void playNativeVideoForScheduler(String url, String objectFit, boolean loop, float volume, String slideId) {
+          // Must be called on UI thread (called from runOnUiThread inside delegate).
+          try {
+              boolean fromPreload = url.equals(preloadedVideoUrl) && preloadPlayer != null;
+              if (videoReadyHandler != null && videoReadyRunnable != null) {
+                  videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null;
+              }
+              if (nativeVideoListener != null) {
+                  if (exoPlayer != null) exoPlayer.removeListener(nativeVideoListener); nativeVideoListener = null;
+              }
+              // Full-screen physical-pixel dimensions (no window.innerWidth JS needed)
+              android.util.DisplayMetrics _dm = getResources().getDisplayMetrics();
+              FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(_dm.widthPixels, _dm.heightPixels);
+              int resizeMode = "cover".equals(objectFit) ? androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM :
+                               "fill".equals(objectFit)  ? androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL :
+                               androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT;
+              final androidx.media3.ui.PlayerView activeView  = activeVideoViewIsA ? nativeVideoView : nativeVideoViewB;
+              final androidx.media3.ui.PlayerView preloadView = activeVideoViewIsA ? nativeVideoViewB : nativeVideoView;
+              if (pendingOldPlayer != null) { try { pendingOldPlayer.stop(); pendingOldPlayer.release(); } catch (Throwable ignored) {} pendingOldPlayer = null; }
+              if (fromPreload) {
+                  final androidx.media3.exoplayer.ExoPlayer oldPlayer = exoPlayer;
+                  pendingOldPlayer = oldPlayer;
+                  exoPlayer = preloadPlayer; preloadPlayer = null; preloadedVideoUrl = null;
+                  exoPlayer.setRepeatMode(loop ? androidx.media3.common.Player.REPEAT_MODE_ONE : androidx.media3.common.Player.REPEAT_MODE_OFF);
+                  exoPlayer.setVolume(volume); exoPlayer.play();
+                  preloadView.setResizeMode(resizeMode); preloadView.setLayoutParams(lp);
+                  if (preloadVideoReady) {
+                      preloadView.setVisibility(View.VISIBLE); activeView.setVisibility(View.INVISIBLE);
+                      activeVideoViewIsA = !activeVideoViewIsA; preloadVideoReady = false;
+                      pendingOldPlayer = null;
+                      if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
+                  } else {
+                      final boolean[] done = {false};
+                      nativeVideoListener = new androidx.media3.common.Player.Listener() {
+                          @Override public void onRenderedFirstFrame() {
+                              if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
+                              if (done[0]) return; done[0] = true;
+                              runOnUiThread(() -> {
+                                  if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
+                                  preloadView.setVisibility(View.VISIBLE); activeView.setVisibility(View.INVISIBLE);
+                                  activeVideoViewIsA = !activeVideoViewIsA; preloadVideoReady = false;
+                                  pendingOldPlayer = null;
+                                  if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
+                              });
+                          }
+                          @Override public void onPlayerError(androidx.media3.common.PlaybackException error) {
+                              android.util.Log.w("DigipalMetrics", "[sched preload onPlayerError] slide=" + slideId + " " + error.getMessage());
+                              if (error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException) return; // silence + let 2.5s fallback handle
+                              if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
+                              if (done[0]) return; done[0] = true;
+                              if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
+                              pendingOldPlayer = null;
+                              if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
+                              // Notify scheduler — it will retry or skip; no WebView hop needed
+                              if (playlistScheduler != null) playlistScheduler.onRendererError(slideId, "exoplayer_preload_fatal");
+                          }
+                      };
+                      exoPlayer.addListener(nativeVideoListener);
+                      final android.os.Handler rh = new android.os.Handler(android.os.Looper.getMainLooper());
+                      final Runnable rc = new Runnable() {
+                          @Override public void run() {
+                              videoReadyHandler = null; videoReadyRunnable = null; nativeVideoListener = null;
+                              if (done[0]) return; done[0] = true;
+                              preloadView.setVisibility(View.VISIBLE); activeView.setVisibility(View.INVISIBLE);
+                              activeVideoViewIsA = !activeVideoViewIsA; preloadVideoReady = false;
+                              pendingOldPlayer = null;
+                              if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
+                          }
+                      };
+                      videoReadyHandler = rh; videoReadyRunnable = rc; rh.postDelayed(rc, 2500);
+                  }
+              } else {
+                  // Cold load
+                  if (preloadPlayer != null) { try { preloadPlayer.release(); } catch (Throwable ignored) {} preloadPlayer = null; preloadedVideoUrl = null; preloadVideoReady = false; preloadView.setPlayer(null); }
+                  final androidx.media3.exoplayer.ExoPlayer coldPlayer = buildCachedExoPlayer();
+                  preloadView.setPlayer(coldPlayer); preloadView.setResizeMode(resizeMode); preloadView.setLayoutParams(lp);
+                  coldPlayer.setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.parse(url)));
+                  coldPlayer.setRepeatMode(loop ? androidx.media3.common.Player.REPEAT_MODE_ONE : androidx.media3.common.Player.REPEAT_MODE_OFF);
+                  coldPlayer.setVolume(volume); coldPlayer.prepare(); coldPlayer.play();
+                  final androidx.media3.exoplayer.ExoPlayer oldPlayer = exoPlayer;
+                  exoPlayer = coldPlayer; pendingOldPlayer = oldPlayer;
+                  final android.os.Handler rh = new android.os.Handler(android.os.Looper.getMainLooper());
+                  final Runnable rc = new Runnable() {
+                      @Override public void run() {
+                          videoReadyHandler = null; videoReadyRunnable = null; nativeVideoListener = null;
+                          android.util.Log.w("DigipalMetrics", "[sched 8s fallback] cold-load slide=" + slideId);
+                          preloadView.setVisibility(View.VISIBLE); activeView.setVisibility(View.INVISIBLE);
+                          activeVideoViewIsA = !activeVideoViewIsA;
+                          pendingOldPlayer = null;
+                          if (oldPlayer != null) { try { oldPlayer.stop(); oldPlayer.release(); } catch (Throwable ignored) {} }
+                      }
+                  };
+                  videoReadyHandler = rh; videoReadyRunnable = rc; rh.postDelayed(rc, 8000);
+                  nativeVideoListener = new androidx.media3.common.Player.Listener() {
+                      @Override public void onRenderedFirstFrame() {
+                          if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
+                          if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
+                          runOnUiThread(() -> {
+                              preloadView.setVisibility(View.VISIBLE); activeView.setVisibility(View.INVISIBLE);
+                              activeVideoViewIsA = !activeVideoViewIsA;
+                              pendingOldPlayer = null;
+                              if (oldPlayer != null) { try { oldPlayer.stop(); oldPlayer.release(); } catch (Throwable ignored) {} }
+                          });
+                      }
+                      @Override public void onPlayerError(androidx.media3.common.PlaybackException error) {
+                          android.util.Log.w("DigipalMetrics", "[sched cold onPlayerError] slide=" + slideId + " " + error.getMessage());
+                          if (error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException) return; // silence + let 8s fallback handle
+                          if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
+                          if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
+                          preloadView.setVisibility(View.VISIBLE); activeView.setVisibility(View.INVISIBLE);
+                          activeVideoViewIsA = !activeVideoViewIsA;
+                          pendingOldPlayer = null;
+                          if (oldPlayer != null) { try { oldPlayer.stop(); oldPlayer.release(); } catch (Throwable ignored) {} }
+                          // Notify scheduler — it will retry or skip; no WebView hop needed
+                          if (playlistScheduler != null) playlistScheduler.onRendererError(slideId, "exoplayer_cold_fatal");
+                      }
+                  };
+                  exoPlayer.addListener(nativeVideoListener);
+              }
+          } catch (Exception e) { android.util.Log.e("DigipalNative", "playNativeVideoForScheduler error", e); }
+      }
+
       private void initNativeComponents() {
           try {
               playlistRepository = new PlaylistRepository(this);
@@ -1343,53 +1469,139 @@ import android.os.Looper;
               playlistScheduler = new PlaylistScheduler(
                   new PlaylistScheduler.Delegate() {
                       @Override public void schedulerPlayVideo(PlaylistScheduler.SlidePlan s) {
+                          final String _url = s.url; final String _fit = s.objectFit;
+                          final boolean _loop = s.loop; final float _vol = s.volume;
+                          final String _sid = s.slideId;
                           runOnUiThread(() -> {
                               try {
-                                  String js = "try{Android.setWebViewDormant(true);}catch(e){}" +
-                                      "try{Android.playNativeVideo(" +
-                                      org.json.JSONObject.quote(s.url) +
-                                      ",0,0,window.innerWidth,window.innerHeight," +
-                                      org.json.JSONObject.quote(s.objectFit) + "," +
-                                      s.loop + "," + s.volume + ");}catch(e){}";
-                                  if (webView != null) webView.evaluateJavascript(js, null);
+                                  // Set WebView dormant directly — no evaluateJavascript round-trip
+                                  if (webView != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                                      try { webView.setRendererPriorityPolicy(android.webkit.WebView.RENDERER_PRIORITY_BOUND, false); } catch (Throwable ignored) {}
+                                  }
+                                  playNativeVideoForScheduler(_url, _fit, _loop, _vol, _sid);
                               } catch (Throwable ignored) {}
                               if (supRef[0] != null) supRef[0].reportSchedulerAdvance();
                           });
                       }
                       @Override public void schedulerShowImage(PlaylistScheduler.SlidePlan s) {
+                          final String _url = s.url; final String _sc = s.scaleType;
+                          final String _sid = s.slideId;
                           runOnUiThread(() -> {
                               try {
-                                  String js = "try{Android.setWebViewDormant(true);}catch(e){}" +
-                                      "try{Android.showNativeImage(" +
-                                      org.json.JSONObject.quote(s.url) +
-                                      ",0,0,window.innerWidth,window.innerHeight," +
-                                      org.json.JSONObject.quote(s.scaleType) + ");}catch(e){}";
-                                  if (webView != null) webView.evaluateJavascript(js, null);
-                              } catch (Throwable ignored) {}
+                                  // Set WebView dormant directly — no evaluateJavascript round-trip
+                                  if (webView != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                                      try { webView.setRendererPriorityPolicy(android.webkit.WebView.RENDERER_PRIORITY_BOUND, false); } catch (Throwable ignored) {}
+                                  }
+                                  android.widget.ImageView.ScaleType st =
+                                      "cover".equals(_sc) ? android.widget.ImageView.ScaleType.CENTER_CROP :
+                                      "fill".equals(_sc)  ? android.widget.ImageView.ScaleType.FIT_XY :
+                                      android.widget.ImageView.ScaleType.FIT_CENTER;
+                                  // Full-screen layout (physical pixels) — no window.innerWidth JS needed
+                                  android.util.DisplayMetrics _dm = getResources().getDisplayMetrics();
+                                  FrameLayout.LayoutParams _lp = new FrameLayout.LayoutParams(_dm.widthPixels, _dm.heightPixels);
+                                  final android.widget.ImageView activeImgView  = activeImageViewIsA ? nativeImageView : nativeImageViewB;
+                                  final android.widget.ImageView preloadImgView = activeImageViewIsA ? nativeImageViewB : nativeImageView;
+                                  if (_url.equals(preloadedImageUrl) && preloadImageReady) {
+                                      // Instant swap — preloaded image already decoded
+                                      preloadImgView.setScaleType(st);
+                                      preloadImgView.setLayoutParams(_lp);
+                                      preloadImgView.setVisibility(View.VISIBLE);
+                                      activeImgView.setVisibility(View.INVISIBLE);
+                                      try { com.bumptech.glide.Glide.get(MainActivity.this).trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE); } catch (Throwable ignored) {}
+                                      com.bumptech.glide.Glide.with(MainActivity.this).clear(activeImgView);
+                                      activeImageViewIsA = !activeImageViewIsA;
+                                      preloadedImageUrl = null; preloadImageReady = false;
+                                  } else {
+                                      // Cold load — load directly; keep view INVISIBLE until Glide succeeds
+                                      activeImgView.setLayoutParams(_lp);
+                                      activeImgView.setScaleType(st);
+                                      activeImgView.setVisibility(View.INVISIBLE);
+                                      com.bumptech.glide.Glide.with(MainActivity.this)
+                                          .load(_url)
+                                          .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
+                                              @Override public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e,
+                                                      Object model, com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target, boolean isFirstResource) {
+                                                  android.util.Log.w("DigipalNative", "[schedulerShowImage] Glide failed slide=" + _sid + ": " + (e != null ? e.getMessage() : "null"));
+                                                  // Notify scheduler directly — it will retry/skip; no brown square lingers
+                                                  if (playlistScheduler != null) playlistScheduler.onRendererError(_sid, "glide_load_failed");
+                                                  return false;
+                                              }
+                                              @Override public boolean onResourceReady(android.graphics.drawable.Drawable resource, Object model,
+                                                      com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
+                                                      com.bumptech.glide.load.DataSource dataSource, boolean isFirstResource) {
+                                                  activeImgView.setVisibility(View.VISIBLE);
+                                                  return false;
+                                              }
+                                          })
+                                          .into(activeImgView);
+                                  }
+                              } catch (Throwable e) { android.util.Log.e("DigipalNative", "schedulerShowImage error", e); }
                               if (supRef[0] != null) supRef[0].reportSchedulerAdvance();
                           });
                       }
                       @Override public void schedulerPreloadVideo(PlaylistScheduler.SlidePlan s) {
+                          final String _url = s.url;
                           runOnUiThread(() -> {
                               try {
-                                  if (webView != null) webView.evaluateJavascript(
-                                      "try{Android.preloadNativeVideo(" + org.json.JSONObject.quote(s.url) + ");}catch(e){}", null);
+                                  // Preload video directly in Java — no WebView hop
+                                  if (_url == null || _url.isEmpty() || _url.equals(preloadedVideoUrl)) return;
+                                  if (preloadPlayer != null) { try { preloadPlayer.release(); } catch (Throwable ignored) {} preloadPlayer = null; }
+                                  final androidx.media3.ui.PlayerView preloadView = activeVideoViewIsA ? nativeVideoViewB : nativeVideoView;
+                                  preloadView.setPlayer(null);
+                                  preloadedVideoUrl = null; preloadVideoReady = false;
+                                  android.app.ActivityManager _am = (android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE);
+                                  android.app.ActivityManager.MemoryInfo _mi = new android.app.ActivityManager.MemoryInfo();
+                                  _am.getMemoryInfo(_mi); if (_mi.lowMemory) return;
+                                  preloadView.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+                                  preloadPlayer = buildCachedExoPlayer();
+                                  preloadView.setPlayer(preloadPlayer);
+                                  preloadPlayer.setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.parse(_url)));
+                                  preloadPlayer.setVolume(0f); preloadPlayer.setPlayWhenReady(false); preloadPlayer.prepare();
+                                  preloadedVideoUrl = _url;
+                                  final androidx.media3.exoplayer.ExoPlayer cap = preloadPlayer;
+                                  cap.addListener(new androidx.media3.common.Player.Listener() {
+                                      @Override public void onRenderedFirstFrame() { if (cap == preloadPlayer) preloadVideoReady = true; cap.removeListener(this); }
+                                  });
                               } catch (Throwable ignored) {}
                           });
                       }
                       @Override public void schedulerPreloadImage(PlaylistScheduler.SlidePlan s) {
+                          final String _url = s.url;
                           runOnUiThread(() -> {
                               try {
-                                  if (webView != null) webView.evaluateJavascript(
-                                      "try{Android.preloadNativeImage(" + org.json.JSONObject.quote(s.url) + ");}catch(e){}", null);
+                                  // Preload image directly in Java — no WebView hop
+                                  if (_url == null || _url.isEmpty() || (_url.equals(preloadedImageUrl) && preloadImageReady)) return;
+                                  android.app.ActivityManager _am2 = (android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE);
+                                  android.app.ActivityManager.MemoryInfo _mi2 = new android.app.ActivityManager.MemoryInfo();
+                                  _am2.getMemoryInfo(_mi2); if (_mi2.lowMemory) return;
+                                  final android.widget.ImageView preloadImgView = activeImageViewIsA ? nativeImageViewB : nativeImageView;
+                                  com.bumptech.glide.Glide.with(MainActivity.this).clear(preloadImgView);
+                                  preloadedImageUrl = null; preloadImageReady = false;
+                                  preloadImgView.setVisibility(View.INVISIBLE);
+                                  preloadImgView.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+                                  preloadedImageUrl = _url;
+                                  com.bumptech.glide.Glide.with(MainActivity.this).load(_url)
+                                      .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
+                                          @Override public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e, Object m,
+                                                  com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> t, boolean f) {
+                                              if (_url.equals(preloadedImageUrl)) preloadImageReady = false; return false;
+                                          }
+                                          @Override public boolean onResourceReady(android.graphics.drawable.Drawable r, Object m,
+                                                  com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> t,
+                                                  com.bumptech.glide.load.DataSource ds, boolean f) {
+                                              if (_url.equals(preloadedImageUrl)) preloadImageReady = true; return false;
+                                          }
+                                      }).into(preloadImgView);
                               } catch (Throwable ignored) {}
                           });
                       }
                       @Override public void schedulerActivateWebView(PlaylistScheduler.SlidePlan s) {
                           runOnUiThread(() -> {
                               try {
-                                  if (webView != null) webView.evaluateJavascript(
-                                      "try{Android.setWebViewDormant(false);}catch(e){}", null);
+                                  // Restore WebView priority directly — no evaluateJavascript round-trip
+                                  if (webView != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                                      webView.setRendererPriorityPolicy(android.webkit.WebView.RENDERER_PRIORITY_IMPORTANT, true);
+                                  }
                               } catch (Throwable ignored) {}
                           });
                       }
@@ -1399,16 +1611,33 @@ import android.os.Looper;
                       @Override public void schedulerStopVideo() {
                           runOnUiThread(() -> {
                               try {
-                                  if (webView != null) webView.evaluateJavascript(
-                                      "try{Android.stopNativeVideo();}catch(e){}", null);
+                                  // Stop video directly — no WebView hop
+                                  if (videoReadyHandler != null && videoReadyRunnable != null) {
+                                      videoReadyHandler.removeCallbacks(videoReadyRunnable);
+                                      videoReadyHandler = null; videoReadyRunnable = null;
+                                  }
+                                  if (nativeVideoListener != null) {
+                                      if (exoPlayer != null) exoPlayer.removeListener(nativeVideoListener);
+                                      nativeVideoListener = null;
+                                  }
+                                  if (exoPlayer != null) { try { exoPlayer.stop(); exoPlayer.clearMediaItems(); } catch (Throwable ignored) {} }
+                                  if (pendingOldPlayer != null) { try { pendingOldPlayer.stop(); pendingOldPlayer.release(); } catch (Throwable ignored) {} pendingOldPlayer = null; }
+                                  final androidx.media3.ui.PlayerView activeView = activeVideoViewIsA ? nativeVideoView : nativeVideoViewB;
+                                  final androidx.media3.ui.PlayerView inactiveView = activeVideoViewIsA ? nativeVideoViewB : nativeVideoView;
+                                  activeView.setVisibility(View.INVISIBLE);
+                                  inactiveView.setVisibility(View.INVISIBLE);
                               } catch (Throwable ignored) {}
                           });
                       }
                       @Override public void schedulerHideImage() {
                           runOnUiThread(() -> {
                               try {
-                                  if (webView != null) webView.evaluateJavascript(
-                                      "try{Android.hideNativeImage();}catch(e){}", null);
+                                  // Hide image views directly — no WebView hop
+                                  com.bumptech.glide.Glide.with(MainActivity.this).clear(nativeImageView);
+                                  com.bumptech.glide.Glide.with(MainActivity.this).clear(nativeImageViewB);
+                                  nativeImageView.setVisibility(View.INVISIBLE);
+                                  nativeImageViewB.setVisibility(View.INVISIBLE);
+                                  preloadedImageUrl = null; preloadImageReady = false;
                               } catch (Throwable ignored) {}
                           });
                       }
