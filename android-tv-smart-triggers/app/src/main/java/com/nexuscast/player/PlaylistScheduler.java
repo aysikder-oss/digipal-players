@@ -167,7 +167,7 @@ public class PlaylistScheduler {
         long readyMs = System.currentTimeMillis() - slideStartMs;
         Log.d(TAG, "[ready] " + slideId + " in " + readyMs + "ms");
         if (telemetry != null) telemetry.logEvent("slide_ready", slideId,
-                "{"readyMs":" + readyMs + "}");
+                "{\"readyMs\":" + readyMs + "}");
     }
 
     /** Called when a renderer encounters an unrecoverable error. */
@@ -175,7 +175,7 @@ public class PlaylistScheduler {
         Log.w(TAG, "[error] " + slideId + ": " + error);
         consecutiveFailures++;
         if (telemetry != null) telemetry.logEvent("slide_failed", slideId,
-                "{"error":" + JSONObject.quote(error) + "}");
+                "{\"error\":" + JSONObject.quote(error) + "}");
         if (consecutiveFailures >= MAX_FAILURES) {
             degraded(slideId);
         } else {
@@ -218,7 +218,7 @@ public class PlaylistScheduler {
 
         toState(State.PLAYING, slide.slideId);
         if (telemetry != null) telemetry.logEvent("slide_shown", slide.slideId,
-                "{"type":"" + eff + "","index":" + currentIndex + "}");
+                "{\"type\":\"" + eff + "\",\"index\":" + currentIndex + "}");
 
         // Preload next
         schedulePreload(eff);
