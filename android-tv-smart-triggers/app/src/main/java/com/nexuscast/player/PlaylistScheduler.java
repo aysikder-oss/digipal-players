@@ -502,18 +502,6 @@ public class PlaylistScheduler {
         handler.postDelayed(advanceRunnable, dur);
     }
 
-    private void startAdvanceTimer(int myGen, long dur) {
-        final int capturedGen = myGen;
-        advanceRunnable = () -> {
-            if (generation != capturedGen) {
-                Log.d(TAG, "[advance] dropped stale callback (gen mismatch)");
-                return;
-            }
-            advance();
-        };
-        handler.postDelayed(advanceRunnable, dur);
-    }
-
     private void advance() {
         if (!running) return;
         final SlidePlan cur = currentIndex < slides.size() ? slides.get(currentIndex) : null;
