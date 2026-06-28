@@ -102,10 +102,28 @@ public class PlaylistScheduler {
     /** Remaining slide time captured at pause(); -1 when not paused. */
     private long remainingMs = -1;
 
-    public PlaylistScheduler(Delegate delegate, PlaylistRepository repository, TelemetryManager telemetry) {
+    // ── Wall-clock playlist timing ──────────────────────────────────────────
+    /** SharedPreferences for persisting playlist epoch across process death. */
+    private android.content.SharedPreferences prefs;
+    private static final String KEY_PLAYLIST_EPOCH = "playlist_epoch_ms";
+    /**
+     * When > 0: use this as the advance-timer duration for the first slide only (wall-clock resume).
+     * Reset to -1 immediately after first use in showCurrent().
+     */
+    private long firstSlideRemainingMs = -1L;
+
+    // ── Asset readiness grace period ────────────────────────────────────────
+    /** Retry count for empty-URL grace period; resets whenever a slide has a usable URL. */
+    private int assetGraceRetries = 0;
+    /** Max 1-second retries before giving up and advancing past an unresolvable slide. */
+    private static final int MAX_ASSET_GRACE_RETRIES = 5;
+
+    public PlaylistScheduler(Delegate delegate, PlaylistRepository repository, TelemetryManager telemetry,
+                             android.content.SharedPreferences prefs) {
         this.delegate = delegate;
         this.repository = repository;
         this.telemetry = telemetry;
+        this.prefs = prefs;
     }
 
     /** Called from MainActivity.onCreate() -- restores last playlist from Room if available. */
@@ -122,7 +140,12 @@ public class PlaylistScheduler {
                         toState(State.RESTORING_LAST_GOOD, "");
                         slides = plans;
                         activeRevisionId = rev.id;
-                        currentIndex = 0;
+                        // ── Wall-clock resume: jump to the slide that should be playing now ──
+                        int[] wc = computeWallClockIndex(prefs);
+                        currentIndex = wc[0];
+                        firstSlideRemainingMs = wc[1];
+                        Log.i(TAG, "[boot] wall-clock index=" + currentIndex
+                                + " remainingMs=" + firstSlideRemainingMs);
                         running = true;
                         showCurrent();
                     } else {
@@ -168,6 +191,11 @@ public class PlaylistScheduler {
             activeRevisionId = revId;
         });
 
+        // Record wall-clock epoch so boot() can resume at the right slide after crash/restart
+        if (prefs != null) {
+            prefs.edit().putLong(KEY_PLAYLIST_EPOCH, System.currentTimeMillis()).apply();
+        }
+        firstSlideRemainingMs = -1L; // fresh start — no wall-clock offset
         running = true;
         showCurrent();
     }
@@ -270,8 +298,36 @@ public class PlaylistScheduler {
         if (!running || slides.isEmpty()) return;
         if (currentIndex >= slides.size()) currentIndex = 0;
 
-        slideRetryCount = 0;
         final SlidePlan slide = slides.get(currentIndex);
+
+        // ── Asset readiness gate ─────────────────────────────────────────────
+        // If a native slide's URL hasn't arrived yet (empty), wait up to 5 s before
+        // falling back to the WebView renderer or skipping to the next slide.
+        if ((slide.type == SlideType.VIDEO || slide.type == SlideType.IMAGE)
+                && (slide.url == null || slide.url.isEmpty())) {
+            if (assetGraceRetries < MAX_ASSET_GRACE_RETRIES) {
+                assetGraceRetries++;
+                Log.w(TAG, "[asset_gate] URL not ready for slide=" + slide.slideId
+                        + " (retry " + assetGraceRetries + "/"+MAX_ASSET_GRACE_RETRIES+"), waiting 1s");
+                if (telemetry != null) telemetry.logEvent("asset_grace", slide.slideId,
+                        "{"retry":" + assetGraceRetries + "}");
+                final int myGen = generation;
+                handler.postDelayed(() -> {
+                    if (generation != myGen || !running) return;
+                    showCurrent();
+                }, 1_000L);
+                return;
+            } else {
+                Log.w(TAG, "[asset_gate] grace period exhausted for slide=" + slide.slideId + " -- advancing");
+                if (telemetry != null) telemetry.logEvent("asset_grace_exhausted", slide.slideId, "{}");
+                assetGraceRetries = 0;
+                advance();
+                return;
+            }
+        }
+        assetGraceRetries = 0; // URL present — reset grace counter
+
+        slideRetryCount = 0;
         slideStartMs = System.currentTimeMillis();
         toState(State.PREPARING_CURRENT, slide.slideId);
 
@@ -301,7 +357,16 @@ public class PlaylistScheduler {
 
         schedulePreload(eff);
 
-        final long dur = Math.max(1_000L, slide.durationMs);
+        // Use wall-clock remaining time for the first slide after a boot-resume;
+        // subsequent slides always use the full slide duration.
+        final long dur;
+        if (firstSlideRemainingMs > 0) {
+            dur = firstSlideRemainingMs;
+            firstSlideRemainingMs = -1L; // consumed — only applies to the first slide
+            Log.d(TAG, "[showCurrent] wall-clock resume: advance in " + dur + "ms (slide " + currentIndex + ")");
+        } else {
+            dur = Math.max(1_000L, slide.durationMs);
+        }
         final int myGen = generation;
         advanceRunnable = () -> {
             if (generation != myGen) {
@@ -448,4 +513,32 @@ public class PlaylistScheduler {
         }
         return plans;
     }
+
+    /**
+     * Computes which slide should be showing right now based on the persisted playlist epoch.
+     * Returns int[]{index, remainingMs} where remainingMs is how long the active slide
+     * still has to play. If no epoch is stored, returns {0, -1} (start from beginning).
+     */
+    private int[] computeWallClockIndex(android.content.SharedPreferences p) {
+        if (p == null) return new int[]{0, -1};
+        long epochMs = p.getLong(KEY_PLAYLIST_EPOCH, 0L);
+        if (epochMs <= 0 || slides.isEmpty()) return new int[]{0, -1};
+        long totalDuration = 0;
+        for (SlidePlan s : slides) totalDuration += Math.max(1_000L, s.durationMs);
+        if (totalDuration <= 0) return new int[]{0, -1};
+        long elapsed = (System.currentTimeMillis() - epochMs) % totalDuration;
+        if (elapsed < 0) elapsed = 0;
+        long acc = 0;
+        for (int i = 0; i < slides.size(); i++) {
+            long dur = Math.max(1_000L, slides.get(i).durationMs);
+            if (elapsed < acc + dur) {
+                long remaining = Math.max(1_000L, (acc + dur) - elapsed);
+                return new int[]{i, (int) remaining};
+            }
+            acc += dur;
+        }
+        return new int[]{0, (int) Math.max(1_000L, slides.get(0).durationMs)};
+    }
+
+
 }
