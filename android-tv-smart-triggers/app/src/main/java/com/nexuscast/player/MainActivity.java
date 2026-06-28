@@ -299,6 +299,7 @@ import android.os.Looper;
 
         startAnrWatchdog();
         startHeartbeatWatchdog();
+        initNativeComponents();
           } catch (Throwable _onCreate_err) {
               try {
                   android.widget.LinearLayout errRoot = new android.widget.LinearLayout(this);
@@ -1134,15 +1135,32 @@ import android.os.Looper;
                 @android.webkit.JavascriptInterface
                 public void setNativePlaylist(String json) {
                     if (json == null || json.isEmpty()) return;
-                    if (nativePlaylistManager == null) {
-                        nativePlaylistManager = new NativePlaylistManager(js -> runOnUiThread(() -> {
-                            try {
-                                if (webView != null) webView.evaluateJavascript(js, null);
-                            } catch (Throwable ignored) {}
-                        }));
+                    if (playlistScheduler != null) {
+                        playlistScheduler.setPlaylist(json);
+                        android.util.Log.i("DigipalNative", "[nativeLoop] setNativePlaylist → PlaylistScheduler");
+                    } else {
+                        // Fallback: bare NativePlaylistManager (pre-v3.11 compat)
+                        if (nativePlaylistManager == null) {
+                            nativePlaylistManager = new NativePlaylistManager(js -> runOnUiThread(() -> {
+                                try {
+                                    if (webView != null) webView.evaluateJavascript(js, null);
+                                } catch (Throwable ignored) {}
+                            }));
+                        }
+                        nativePlaylistManager.setPlaylist(json);
+                        android.util.Log.i("DigipalNative", "[nativeLoop] setNativePlaylist: loaded slides (fallback)");
                     }
-                    nativePlaylistManager.setPlaylist(json);
-                    android.util.Log.i("DigipalNative", "[nativeLoop] setNativePlaylist: loaded slides");
+                }
+
+                @android.webkit.JavascriptInterface
+                public void onNativeRendererReady(String slideId) {
+                    if (playlistScheduler != null) playlistScheduler.onRendererReady(slideId);
+                }
+
+                @android.webkit.JavascriptInterface
+                public void onNativeRendererError(String slideId, String error) {
+                    if (playlistScheduler != null) playlistScheduler.onRendererError(slideId, error);
+                    if (reliabilitySupervisor != null) reliabilitySupervisor.reportError("renderer", error);
                 }
 
                 @android.webkit.JavascriptInterface
@@ -1163,6 +1181,129 @@ import android.os.Looper;
                         .apply();
                 }
 
+      }
+
+      private void initNativeComponents() {
+          try {
+              playlistRepository = new PlaylistRepository(this);
+              telemetryManager   = new TelemetryManager(this, playlistRepository, getServerUrl());
+              telemetryManager.start();
+
+              final ReliabilitySupervisor[] supRef = new ReliabilitySupervisor[1];
+
+              playlistScheduler = new PlaylistScheduler(
+                  new PlaylistScheduler.Delegate() {
+                      @Override public void schedulerPlayVideo(PlaylistScheduler.SlidePlan s) {
+                          runOnUiThread(() -> {
+                              try {
+                                  String js = "try{Android.setWebViewDormant(true);}catch(e){}" +
+                                      "try{Android.playNativeVideo(" +
+                                      org.json.JSONObject.quote(s.url) +
+                                      ",0,0,window.innerWidth,window.innerHeight," +
+                                      org.json.JSONObject.quote(s.objectFit) + "," +
+                                      s.loop + "," + s.volume + ");}catch(e){}";
+                                  if (webView != null) webView.evaluateJavascript(js, null);
+                              } catch (Throwable ignored) {}
+                              if (supRef[0] != null) supRef[0].reportSchedulerAdvance();
+                          });
+                      }
+                      @Override public void schedulerShowImage(PlaylistScheduler.SlidePlan s) {
+                          runOnUiThread(() -> {
+                              try {
+                                  String js = "try{Android.setWebViewDormant(true);}catch(e){}" +
+                                      "try{Android.showNativeImage(" +
+                                      org.json.JSONObject.quote(s.url) +
+                                      ",0,0,window.innerWidth,window.innerHeight," +
+                                      org.json.JSONObject.quote(s.scaleType) + ");}catch(e){}";
+                                  if (webView != null) webView.evaluateJavascript(js, null);
+                              } catch (Throwable ignored) {}
+                              if (supRef[0] != null) supRef[0].reportSchedulerAdvance();
+                          });
+                      }
+                      @Override public void schedulerPreloadVideo(PlaylistScheduler.SlidePlan s) {
+                          runOnUiThread(() -> {
+                              try {
+                                  if (webView != null) webView.evaluateJavascript(
+                                      "try{Android.preloadNativeVideo(" + org.json.JSONObject.quote(s.url) + ");}catch(e){}", null);
+                              } catch (Throwable ignored) {}
+                          });
+                      }
+                      @Override public void schedulerPreloadImage(PlaylistScheduler.SlidePlan s) {
+                          runOnUiThread(() -> {
+                              try {
+                                  if (webView != null) webView.evaluateJavascript(
+                                      "try{Android.preloadNativeImage(" + org.json.JSONObject.quote(s.url) + ");}catch(e){}", null);
+                              } catch (Throwable ignored) {}
+                          });
+                      }
+                      @Override public void schedulerActivateWebView(PlaylistScheduler.SlidePlan s) {
+                          runOnUiThread(() -> {
+                              try {
+                                  if (webView != null) webView.evaluateJavascript(
+                                      "try{Android.setWebViewDormant(false);}catch(e){}", null);
+                              } catch (Throwable ignored) {}
+                          });
+                      }
+                      @Override public void schedulerDeactivateWebView() {
+                          // WebView dormant enforced in schedulerPlayVideo/schedulerShowImage via setWebViewDormant(true)
+                      }
+                      @Override public void schedulerStopVideo() {
+                          runOnUiThread(() -> {
+                              try {
+                                  if (webView != null) webView.evaluateJavascript(
+                                      "try{Android.stopNativeVideo();}catch(e){}", null);
+                              } catch (Throwable ignored) {}
+                          });
+                      }
+                      @Override public void schedulerHideImage() {
+                          runOnUiThread(() -> {
+                              try {
+                                  if (webView != null) webView.evaluateJavascript(
+                                      "try{Android.hideNativeImage();}catch(e){}", null);
+                              } catch (Throwable ignored) {}
+                          });
+                      }
+                      @Override public void schedulerOnStateChanged(PlaylistScheduler.State state, String slideId) {
+                          android.util.Log.d("DigipalScheduler", "[state] " + state + " slide=" + slideId);
+                          if (telemetryManager != null) {
+                              telemetryManager.setCurrentSlide(
+                                  String.valueOf(playlistScheduler.getActiveRevisionId()),
+                                  slideId, state.name());
+                          }
+                      }
+                  },
+                  playlistRepository, telemetryManager
+              );
+
+              assetCacheManager = new AssetCacheManager(this, playlistRepository);
+              pdfPrerenderer    = new PdfPrerenderer(this, playlistRepository);
+
+              reliabilitySupervisor = new ReliabilitySupervisor(
+                  this,
+                  new ReliabilitySupervisor.RecoveryDelegate() {
+                      @Override public void softRecover(String reason) {
+                          android.util.Log.i("DigipalReliability", "[soft] " + reason);
+                      }
+                      @Override public void mediumRecover(String reason) {
+                          android.util.Log.w("DigipalReliability", "[medium] " + reason);
+                          if (playlistScheduler != null) playlistScheduler.boot();
+                      }
+                      @Override public void hardRecover(String reason) {
+                          android.util.Log.e("DigipalReliability", "[hard] " + reason);
+                          AppRecoverManager.scheduleRecovery(getApplicationContext());
+                      }
+                  },
+                  telemetryManager
+              );
+              supRef[0] = reliabilitySupervisor;
+              reliabilitySupervisor.start();
+
+              // Boot restore — play last ACTIVE revision from Room without network
+              playlistScheduler.boot();
+              android.util.Log.i("DigipalNative", "[v3.11.0] initNativeComponents complete");
+          } catch (Throwable e) {
+              android.util.Log.e("DigipalNative", "initNativeComponents error: " + e.getMessage());
+          }
       }
 
       private void scheduleAppRelaunch(long delayMs) {
