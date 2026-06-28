@@ -320,7 +320,7 @@ public class PlaylistScheduler {
                 Log.w(TAG, "[asset_gate] URL not ready for slide=" + slide.slideId
                         + " (retry " + assetGraceRetries + "/"+MAX_ASSET_GRACE_RETRIES+"), waiting 1s");
                 if (telemetry != null) telemetry.logEvent("asset_grace", slide.slideId,
-                        "{"retry":" + assetGraceRetries + "}");
+                        "{\"retry\":" + assetGraceRetries + "}");
                 final int myGen = generation;
                 handler.postDelayed(() -> {
                     if (generation != myGen || !running) return;
