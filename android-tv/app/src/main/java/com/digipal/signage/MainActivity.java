@@ -90,6 +90,13 @@ import android.os.Looper;
     private boolean nativeFirstRendering = false;
     // Native content loop — drives video/image slides via NativePlaylistManager without WebView
     private NativePlaylistManager nativePlaylistManager;
+    // Native-first playlist engine (v3.11.0) — PlaylistScheduler replaces JS timer
+    private PlaylistRepository      playlistRepository;
+    private TelemetryManager        telemetryManager;
+    private PlaylistScheduler       playlistScheduler;
+    private AssetCacheManager       assetCacheManager;
+    private PdfPrerenderer          pdfPrerenderer;
+    private ReliabilitySupervisor   reliabilitySupervisor;
     // Player URL tracked so WebView can be recreated with the same page between slides
     private String currentPlayerUrl = null;
 
