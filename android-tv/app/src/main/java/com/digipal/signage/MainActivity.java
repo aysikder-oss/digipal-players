@@ -345,6 +345,37 @@ import android.os.Looper;
                           }
                       }).start();
                   }
+                  // Inject APK crash stats and any pending crash report for web-player pickup
+                  try {
+                      android.content.SharedPreferences _cp = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+                      int _cc = _cp.getInt(CrashCounter.KEY_CRASH_COUNT, 0);
+                      boolean _mx = _cp.getBoolean(CrashCounter.KEY_MAX_EXCEEDED, false);
+                      boolean _hasCrash = _cp.getBoolean("pending_crash_ready", false);
+                      StringBuilder _js = new StringBuilder();
+                      _js.append("window.__digipalCrashStats={crashCount:").append(_cc)
+                         .append(",isMaxExceeded:").append(_mx).append("};
+");
+                      if (_hasCrash) {
+                          String _type = _cp.getString("pending_crash_type", "UnknownError");
+                          String _stack = _cp.getString("pending_crash_stack", "");
+                          long _at = _cp.getLong("pending_crash_at", 0L);
+                          int _free = _cp.getInt("pending_crash_free_mb", 0);
+                          int _total = _cp.getInt("pending_crash_total_mb", 0);
+                          _js.append("window.__digipalNativeCrash={");
+                          _js.append(""occurredAt":").append(_at).append(",");
+                          _js.append(""errorType":"").append(_type.replace(""", "")).append("",");
+                          _js.append(""freeMemoryMb":").append(_free).append(",");
+                          _js.append(""totalMemoryMb":").append(_total).append(",");
+                          String _safeStack = _stack.replace("\\", "\\\\").replace(""", "\"").replace("\n", "\\n").replace("\r", "");
+                          _js.append(""stackTrace":"").append(_safeStack).append(""");
+                          _js.append("}");
+                      } else {
+                          _js.append("window.__digipalNativeCrash=null;");
+                      }
+                      final String _finalJs = _js.toString();
+                      final android.webkit.WebView _wv2 = webView;
+                      runOnUiThread(() -> { if (_wv2 != null) _wv2.evaluateJavascript(_finalJs, null); });
+                  } catch (Throwable ignored) {}
                 }
             }
 
@@ -1264,6 +1295,18 @@ import android.os.Looper;
                 public void reloadNativePlaylist() {
                     // JS will call setNativePlaylist again with refreshed slide data
                     android.util.Log.i("DigipalNative", "[nativeLoop] reloadNativePlaylist signal received");
+                }
+
+                @android.webkit.JavascriptInterface
+                public void clearPendingCrash() {
+                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                        .remove("pending_crash_type")
+                        .remove("pending_crash_stack")
+                        .remove("pending_crash_at")
+                        .remove("pending_crash_free_mb")
+                        .remove("pending_crash_total_mb")
+                        .remove("pending_crash_ready")
+                        .apply();
                 }
 
       private void scheduleAppRelaunch(long delayMs) {
