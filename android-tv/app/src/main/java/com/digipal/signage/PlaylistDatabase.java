@@ -140,7 +140,7 @@ public class PlaylistDatabase {
             synchronized (PlaylistDatabase.class) {
                 if (INSTANCE == null) {
                     INSTANCE = Room.databaseBuilder(ctx.getApplicationContext(), AppDatabase.class, "playlist_native.db")
-                        .fallbackToDestructiveMigration().build();
+                        .build();
                 }
             }
         }
