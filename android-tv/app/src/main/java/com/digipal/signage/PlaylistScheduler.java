@@ -63,6 +63,12 @@ public class PlaylistScheduler {
         public String fallbackUrl = "";
     }
 
+    public interface AssetResolver {
+        /** Returns an absolute local file path if a READY local copy exists; null otherwise.
+         *  Must be safe to call on the main thread (e.g. a ConcurrentHashMap lookup). */
+        String resolveLocalPath(String url);
+    }
+
     public interface Delegate {
         void schedulerPlayVideo(SlidePlan slide);
         void schedulerShowImage(SlidePlan slide);
@@ -93,6 +99,10 @@ public class PlaylistScheduler {
     /** Incremented on every stop()/setPlaylist() to invalidate stale advance callbacks. */
     private int generation = 0;
 
+    /** Optional resolver for local-first media delivery. Set by MainActivity after init. */
+    private AssetResolver assetResolver;
+    public void setAssetResolver(AssetResolver r) { this.assetResolver = r; }
+
     /** Per-slide retry counter; reset in showCurrent(), incremented in onRendererError(). */
     private int slideRetryCount = 0;
 
@@ -116,7 +126,7 @@ public class PlaylistScheduler {
     /** Retry count for empty-URL grace period; resets whenever a slide has a usable URL. */
     private int assetGraceRetries = 0;
     /** Max 1-second retries before giving up and advancing past an unresolvable slide. */
-    private static final int MAX_ASSET_GRACE_RETRIES = 5;
+    private static final int MAX_ASSET_GRACE_RETRIES = 30; // 30 × 1 s = 30 s max wait
 
     public PlaylistScheduler(Delegate delegate, PlaylistRepository repository, TelemetryManager telemetry,
                              android.content.SharedPreferences prefs) {
@@ -337,14 +347,38 @@ public class PlaylistScheduler {
             eff = SlideType.WEBVIEW_URL;
         }
 
+        // Local-first URL resolution: substitute file:// URI if a READY local copy exists.
+        // assetResolver must be safe to call on the main thread (ConcurrentHashMap lookup).
+        final SlidePlan dispatch;
+        if (assetResolver != null
+                && (eff == SlideType.VIDEO || eff == SlideType.IMAGE)
+                && slide.url != null && !slide.url.isEmpty()) {
+            String lp = assetResolver.resolveLocalPath(slide.url);
+            if (lp != null && !lp.isEmpty()) {
+                SlidePlan copy = new SlidePlan();
+                copy.slideId = slide.slideId; copy.type = slide.type;
+                copy.url = "file://" + lp;
+                copy.durationMs = slide.durationMs; copy.contentId = slide.contentId;
+                copy.objectFit = slide.objectFit; copy.loop = slide.loop;
+                copy.volume = slide.volume; copy.scaleType = slide.scaleType;
+                copy.fallbackUrl = slide.url; // original remote URL preserved as fallback
+                dispatch = copy;
+                Log.d(TAG, "[local_first] " + slide.slideId + " → " + lp);
+            } else {
+                dispatch = slide;
+            }
+        } else {
+            dispatch = slide;
+        }
+
         switch (eff) {
             case VIDEO:
                 delegate.schedulerDeactivateWebView();
-                delegate.schedulerPlayVideo(slide);
+                delegate.schedulerPlayVideo(dispatch);
                 break;
             case IMAGE:
                 delegate.schedulerDeactivateWebView();
-                delegate.schedulerShowImage(slide);
+                delegate.schedulerShowImage(dispatch);
                 break;
             default:
                 delegate.schedulerActivateWebView(slide);
