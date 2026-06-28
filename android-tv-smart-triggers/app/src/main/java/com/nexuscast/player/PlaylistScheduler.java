@@ -128,6 +128,16 @@ public class PlaylistScheduler {
     /** Max 1-second retries before giving up and advancing past an unresolvable slide. */
     private static final int MAX_ASSET_GRACE_RETRIES = 30; // 30 × 1 s = 30 s max wait
 
+    // ── Renderer-ready gate ─────────────────────────────────────────────────────────────
+    /** Slide advance duration captured while waiting for renderer first-frame confirmation. */
+    private long pendingAdvanceDurationMs = -1L;
+    /** Generation at time the renderer-ready timeout was posted; -1 when not waiting. */
+    private int rendererReadyTimeoutGen = -1;
+    /** Safety runnable: starts advance timer if renderer never calls onRendererReady(). */
+    private Runnable rendererReadyTimeout;
+    /** Max time to wait for first-frame signal before starting the slide timer anyway. */
+    private static final long RENDERER_READY_TIMEOUT_MS = 3_000L;
+
     public PlaylistScheduler(Delegate delegate, PlaylistRepository repository, TelemetryManager telemetry,
                              android.content.SharedPreferences prefs) {
         this.delegate = delegate;
@@ -216,6 +226,8 @@ public class PlaylistScheduler {
         pausedAt = -1;
         remainingMs = -1;
         generation++;
+        if (rendererReadyTimeout != null) { handler.removeCallbacks(rendererReadyTimeout); rendererReadyTimeout = null; }
+        rendererReadyTimeoutGen = -1;
         if (advanceRunnable != null) {
             handler.removeCallbacks(advanceRunnable);
             advanceRunnable = null;
@@ -264,6 +276,17 @@ public class PlaylistScheduler {
         Log.d(TAG, "[ready] " + slideId + " in " + readyMs + "ms");
         if (telemetry != null) telemetry.logEvent("slide_ready", slideId,
                 "{\"readyMs\":" + readyMs + "}");
+        // Cancel the safety timeout and start the advance timer — renderer confirmed
+        // first-frame so the full configured slide duration is preserved.
+        if (state == State.PREPARING_CURRENT && rendererReadyTimeoutGen == generation) {
+            if (rendererReadyTimeout != null) {
+                handler.removeCallbacks(rendererReadyTimeout);
+                rendererReadyTimeout = null;
+            }
+            rendererReadyTimeoutGen = -1;
+            toState(State.PLAYING, slideId);
+            startAdvanceTimer(generation, pendingAdvanceDurationMs);
+        }
     }
 
     /**
@@ -385,31 +408,50 @@ public class PlaylistScheduler {
                 break;
         }
 
-        toState(State.PLAYING, slide.slideId);
         if (telemetry != null) telemetry.logEvent("slide_shown", slide.slideId,
                 "{\"type\":\"" + eff + "\",\"index\":" + currentIndex + "}");
 
         schedulePreload(eff);
 
-        // Use wall-clock remaining time for the first slide after a boot-resume;
-        // subsequent slides always use the full slide duration.
+        // Compute slide duration: wall-clock resume for boot-restore, full otherwise.
         final long dur;
         if (firstSlideRemainingMs > 0) {
             dur = firstSlideRemainingMs;
-            firstSlideRemainingMs = -1L; // consumed — only applies to the first slide
-            Log.d(TAG, "[showCurrent] wall-clock resume: advance in " + dur + "ms (slide " + currentIndex + ")");
+            firstSlideRemainingMs = -1L;
+            Log.d(TAG, "[showCurrent] wall-clock resume: advance in " + dur
+                    + "ms (slide " + currentIndex + ")");
         } else {
             dur = Math.max(1_000L, slide.durationMs);
         }
-        final int myGen = generation;
-        advanceRunnable = () -> {
-            if (generation != myGen) {
-                Log.d(TAG, "[advance] dropped stale callback (gen mismatch)");
-                return;
-            }
-            advance();
-        };
-        handler.postDelayed(advanceRunnable, dur);
+        slideStartMs = System.currentTimeMillis();
+
+        // Web slides: advance timer starts immediately (WebView has no first-frame callback).
+        // Native slides: enter PREPARING_CURRENT and wait for onRendererReady() so the full
+        // configured duration is preserved even on slow-decode devices.
+        // A safety timeout starts the clock after RENDERER_READY_TIMEOUT_MS if no signal.
+        if (eff == SlideType.WEBVIEW_DESIGN || eff == SlideType.WEBVIEW_KIOSK
+                || eff == SlideType.WEBVIEW_URL) {
+            toState(State.PLAYING, slide.slideId);
+            startAdvanceTimer(generation, dur);
+        } else {
+            toState(State.PREPARING_CURRENT, slide.slideId);
+            pendingAdvanceDurationMs = dur;
+            rendererReadyTimeoutGen = generation;
+            final int myGen = generation;
+            final String mySlideId = slide.slideId;
+            if (rendererReadyTimeout != null) handler.removeCallbacks(rendererReadyTimeout);
+            rendererReadyTimeout = () -> {
+                if (generation != myGen) return;
+                Log.w(TAG, "[renderer_ready_timeout] no first-frame for slide " + mySlideId
+                        + " after " + RENDERER_READY_TIMEOUT_MS + "ms — starting timer anyway");
+                if (telemetry != null) telemetry.logEvent("renderer_timeout", mySlideId,
+                        "{\"pendingMs\":" + pendingAdvanceDurationMs + "}");
+                rendererReadyTimeout = null; rendererReadyTimeoutGen = -1;
+                toState(State.PLAYING, mySlideId);
+                startAdvanceTimer(myGen, pendingAdvanceDurationMs);
+            };
+            handler.postDelayed(rendererReadyTimeout, RENDERER_READY_TIMEOUT_MS);
+        }
     }
 
     private void schedulePreload(SlideType currentEff) {
@@ -425,6 +467,19 @@ public class PlaylistScheduler {
         } else if (nextEff == SlideType.IMAGE && next.url != null && !next.url.isEmpty()) {
             delegate.schedulerPreloadImage(next);
         }
+    }
+
+    /** Start the slide advance timer for the given generation and duration. */
+    private void startAdvanceTimer(int myGen, long dur) {
+        final int capturedGen = myGen;
+        advanceRunnable = () -> {
+            if (generation != capturedGen) {
+                Log.d(TAG, "[advance] dropped stale callback (gen mismatch)");
+                return;
+            }
+            advance();
+        };
+        handler.postDelayed(advanceRunnable, dur);
     }
 
     private void advance() {
