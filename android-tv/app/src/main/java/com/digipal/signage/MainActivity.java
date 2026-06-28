@@ -353,22 +353,19 @@ import android.os.Looper;
                       boolean _hasCrash = _cp.getBoolean("pending_crash_ready", false);
                       StringBuilder _js = new StringBuilder();
                       _js.append("window.__digipalCrashStats={crashCount:").append(_cc)
-                         .append(",isMaxExceeded:").append(_mx).append("};
-");
+                         .append(",isMaxExceeded:").append(_mx).append("};");
                       if (_hasCrash) {
-                          String _type = _cp.getString("pending_crash_type", "UnknownError");
-                          String _stack = _cp.getString("pending_crash_stack", "");
-                          long _at = _cp.getLong("pending_crash_at", 0L);
-                          int _free = _cp.getInt("pending_crash_free_mb", 0);
-                          int _total = _cp.getInt("pending_crash_total_mb", 0);
-                          _js.append("window.__digipalNativeCrash={");
-                          _js.append(""occurredAt":").append(_at).append(",");
-                          _js.append(""errorType":"").append(_type.replace(""", "")).append("",");
-                          _js.append(""freeMemoryMb":").append(_free).append(",");
-                          _js.append(""totalMemoryMb":").append(_total).append(",");
-                          String _safeStack = _stack.replace("\\", "\\\\").replace(""", "\"").replace("\n", "\\n").replace("\r", "");
-                          _js.append(""stackTrace":"").append(_safeStack).append(""");
-                          _js.append("}");
+                          try {
+                              org.json.JSONObject _crash = new org.json.JSONObject();
+                              _crash.put("occurredAt", _cp.getLong("pending_crash_at", 0L));
+                              _crash.put("errorType", _cp.getString("pending_crash_type", "UnknownError"));
+                              _crash.put("freeMemoryMb", _cp.getInt("pending_crash_free_mb", 0));
+                              _crash.put("totalMemoryMb", _cp.getInt("pending_crash_total_mb", 0));
+                              _crash.put("stackTrace", _cp.getString("pending_crash_stack", ""));
+                              _js.append("window.__digipalNativeCrash=").append(_crash.toString()).append(";");
+                          } catch (org.json.JSONException _je) {
+                              _js.append("window.__digipalNativeCrash=null;");
+                          }
                       } else {
                           _js.append("window.__digipalNativeCrash=null;");
                       }
