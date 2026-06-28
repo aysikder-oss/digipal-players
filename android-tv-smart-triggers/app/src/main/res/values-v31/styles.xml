@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ splash screen — prevents white-flash on cold-start (#0a0e1a). -->
+<resources>
+    <style name="Theme.DigipalPlayer" parent="Theme.DigipalPlayer">
+        <item name="android:windowSplashScreenBackground">#0a0e1a</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">#0a0e1a</item>
+    </style>
+</resources>
