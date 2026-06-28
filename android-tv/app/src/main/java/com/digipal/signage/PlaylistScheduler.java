@@ -426,7 +426,6 @@ public class PlaylistScheduler {
         } else {
             dur = Math.max(1_000L, slide.durationMs);
         }
-        slideStartMs = System.currentTimeMillis();
 
         // Web slides: advance timer starts immediately (WebView has no first-frame callback).
         // Native slides: enter PREPARING_CURRENT and wait for onRendererReady() so the full
