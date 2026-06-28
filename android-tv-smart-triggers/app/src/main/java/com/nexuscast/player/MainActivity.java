@@ -1496,7 +1496,7 @@ import android.os.Looper;
                               if (state == PlaylistScheduler.State.PLAYING) {
                                   assetCacheManager.setMaxConcurrency(1);
                               } else if (state == PlaylistScheduler.State.IDLE
-                                      || state == PlaylistScheduler.State.ERROR_RECOVERY) {
+                                      || state == PlaylistScheduler.State.RECOVERING_RENDERER) {
                                   assetCacheManager.setMaxConcurrency(3);
                               }
                           }
@@ -1606,7 +1606,7 @@ import android.os.Looper;
             settings.setDatabaseEnabled(false);
             settings.setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_NORMAL, true);
+                webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_BOUND, true);
             }
         }
     }
