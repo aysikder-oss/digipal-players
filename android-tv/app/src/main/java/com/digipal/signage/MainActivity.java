@@ -1650,7 +1650,8 @@ import android.os.Looper;
                           }
                       }
                   },
-                  playlistRepository, telemetryManager
+                  playlistRepository, telemetryManager,
+                  getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
               );
 
               assetCacheManager = new AssetCacheManager(this, playlistRepository);
@@ -1664,6 +1665,8 @@ import android.os.Looper;
                       }
                       @Override public void mediumRecover(String reason) {
                           android.util.Log.w("DigipalReliability", "[medium] " + reason);
+                          // Release all media renderers before re-booting — prevents ExoPlayer leaks on long sessions
+                          runOnUiThread(() -> releaseAllRenderers());
                           if (playlistScheduler != null) playlistScheduler.boot();
                       }
                       @Override public void hardRecover(String reason) {
@@ -2148,6 +2151,60 @@ import android.os.Looper;
         activityVisible = false;
     }
 
+
+      /**
+       * Releases all native media renderers (ExoPlayer instances + Glide requests).
+       * Call from onDestroy(), WebView crash recovery, and mediumRecover() to prevent
+       * ExoPlayer SurfaceView leaks that cause OOM on long Fire TV sessions.
+       */
+      private void releaseAllRenderers() {
+          try {
+              // Cancel pending first-frame ready timer
+              if (videoReadyHandler != null && videoReadyRunnable != null) {
+                  videoReadyHandler.removeCallbacks(videoReadyRunnable);
+                  videoReadyHandler = null; videoReadyRunnable = null;
+              }
+              // Remove stale ExoPlayer listener before releasing
+              if (nativeVideoListener != null) {
+                  if (exoPlayer != null) {
+                      try { exoPlayer.removeListener(nativeVideoListener); } catch (Throwable ignored) {}
+                  }
+                  nativeVideoListener = null;
+              }
+              // Release active ExoPlayer
+              if (exoPlayer != null) {
+                  try { exoPlayer.stop(); exoPlayer.release(); } catch (Throwable ignored) {}
+                  exoPlayer = null;
+              }
+              // Release preload ExoPlayer (was missing from onDestroy — OOM source on long sessions)
+              if (preloadPlayer != null) {
+                  try { preloadPlayer.stop(); preloadPlayer.release(); } catch (Throwable ignored) {}
+                  preloadPlayer = null; preloadedVideoUrl = null; preloadVideoReady = false;
+              }
+              // Release pending-old ExoPlayer (held during dual-buffer swap)
+              if (pendingOldPlayer != null) {
+                  try { pendingOldPlayer.stop(); pendingOldPlayer.release(); } catch (Throwable ignored) {}
+                  pendingOldPlayer = null;
+              }
+              // Detach players from video views to release SurfaceView GPU memory
+              if (nativeVideoView != null) { try { nativeVideoView.setPlayer(null); } catch (Throwable ignored) {} nativeVideoView.setVisibility(View.INVISIBLE); }
+              if (nativeVideoViewB != null) { try { nativeVideoViewB.setPlayer(null); } catch (Throwable ignored) {} nativeVideoViewB.setVisibility(View.INVISIBLE); }
+              // Cancel all pending Glide decodes (prevent callbacks on destroyed activity)
+              if (nativeImageView != null) {
+                  try { com.bumptech.glide.Glide.with(MainActivity.this).clear(nativeImageView); } catch (Throwable ignored) {}
+                  nativeImageView.setVisibility(View.INVISIBLE);
+              }
+              if (nativeImageViewB != null) {
+                  try { com.bumptech.glide.Glide.with(MainActivity.this).clear(nativeImageViewB); } catch (Throwable ignored) {}
+                  nativeImageViewB.setVisibility(View.INVISIBLE);
+              }
+              preloadedImageUrl = null; preloadImageReady = false;
+              android.util.Log.i("DigipalNative", "[releaseAllRenderers] complete");
+          } catch (Throwable e) {
+              android.util.Log.e("DigipalNative", "releaseAllRenderers error", e);
+          }
+      }
+
     @Override
     protected void onDestroy() {
         stopAnrWatchdog();
@@ -2162,11 +2219,7 @@ import android.os.Looper;
         if (webView != null) {
             webView.destroy();
         }
-        if (videoReadyHandler != null && videoReadyRunnable != null) {
-            videoReadyHandler.removeCallbacks(videoReadyRunnable);
-            videoReadyHandler = null; videoReadyRunnable = null;
-        }
-        if (exoPlayer != null) { exoPlayer.release(); exoPlayer = null; }
+        releaseAllRenderers(); // releases exoPlayer, preloadPlayer, pendingOldPlayer, Glide
         if (videoCache != null) { try { videoCache.release(); } catch (Throwable ignored) {} videoCache = null; }
         activityAlive = false;
         super.onDestroy();
