@@ -449,19 +449,30 @@ public class PlaylistScheduler {
             dispatch = slide;
         }
 
-        switch (eff) {
-            case VIDEO:
-                delegate.schedulerDeactivateWebView();
-                delegate.schedulerPlayVideo(dispatch);
-                break;
-            case IMAGE:
-                delegate.schedulerDeactivateWebView();
-                delegate.schedulerShowImage(dispatch);
-                break;
-            default:
-                delegate.schedulerActivateWebView(slide);
-                break;
-        }
+        // Renderer ownership contract:
+          //  VIDEO / IMAGE  → native renderers (ExoPlayer / Glide via Delegate).
+          //                   Scheduler enters PREPARING_CURRENT and waits for onRendererReady().
+          //  WEBVIEW_DESIGN / WEBVIEW_KIOSK / WEBVIEW_URL → React TV player (main WebView).
+          //                   Scheduler enters PLAYING immediately; advance timer drives the slide.
+          //                   Only one path is active at a time: deactivateWebView is called before
+          //                   any native render; activateWebView pauses native-loop playback.
+          //                   (WebDesignRenderer, WebKioskRenderer, WebSlideRenderer were dead code
+          //                    — never instantiated — and have been deleted.)
+          switch (eff) {
+              case VIDEO:
+                  delegate.schedulerDeactivateWebView();
+                  delegate.schedulerPlayVideo(dispatch);
+                  break;
+              case IMAGE:
+                  delegate.schedulerDeactivateWebView();
+                  delegate.schedulerShowImage(dispatch);
+                  break;
+              default:
+                  // WEBVIEW_DESIGN / WEBVIEW_KIOSK / WEBVIEW_URL: handed to the React TV player.
+                  android.util.Log.i("PlaylistScheduler", "[dispatch] webview type=" + eff + " slide=" + slide.slideId);
+                  delegate.schedulerActivateWebView(slide);
+                  break;
+          }
 
         if (telemetry != null) telemetry.logEvent("slide_shown", slide.slideId,
                 "{\"type\":\"" + eff + "\",\"index\":" + currentIndex + "}");
