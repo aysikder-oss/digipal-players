@@ -23,6 +23,7 @@ plugins {
           versionName "3.7.0"
 
           buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
+          buildConfigField "String", "SENTRY_DSN", "\"${System.getenv('SENTRY_DSN') ?: ''}\"
       }
 
       buildTypes {
@@ -74,4 +75,6 @@ plugins {
       implementation 'androidx.work:work-runtime:2.9.0'
       // OkHttp — asset downloader with SHA256 + ETag + Range resume
       implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+      // Sentry — crash & ANR reporting
+      implementation 'io.sentry:sentry-android:7.14.0'
   }
