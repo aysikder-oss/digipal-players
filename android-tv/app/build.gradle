@@ -2,6 +2,14 @@ plugins {
       id 'com.android.application'
   }
 
+  def gitSha = 'unknown'
+  try {
+      def proc = 'git rev-parse --short HEAD'.execute([], projectDir)
+      proc.waitForOrKill(1000)
+      gitSha = proc.text.trim()
+  } catch (Exception ignored) {}
+  
+
   android {
       namespace 'com.digipal.signage'
       compileSdk 35
@@ -19,11 +27,19 @@ plugins {
           applicationId "com.digipal.signage"
           minSdk 21
           targetSdk 35
-          versionCode 22
-          versionName "3.11.0"
+          versionCode 23
+          versionName "3.13.9"
 
           buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
           buildConfigField "String", "SENTRY_DSN", "\"${System.getenv('SENTRY_DSN') ?: ''}\""
+        buildConfigField "String", "GIT_SHA", "\"${gitSha}\""
+        buildConfigField "String", "BUILD_FLAVOR", "\"android-tv\""
+
+          javaCompileOptions {
+              annotationProcessorOptions {
+                  arguments += ["room.schemaLocation": "$projectDir/schemas"]
+              }
+          }
       }
 
       buildTypes {
