@@ -101,5 +101,12 @@
           <!-- Persistent watchdog: polls every 10s, restarts app within 1s of crash. -->
           <service android:name=".WatchdogService" android:enabled="true" android:exported="false" android:foregroundServiceType="mediaPlayback" />
 
+
+        <!-- Disable Sentry auto-init ContentProvider — we call SentryAndroid.init() manually
+             after a DSN null-check so the SDK is inert until SENTRY_DSN secret is configured. -->
+        <provider
+            android:name="io.sentry.android.core.SentryInitProvider"
+            android:authorities="${applicationId}.SentryInitProvider"
+            tools:node="remove" />
       </application>
   </manifest>
