@@ -928,12 +928,13 @@ import android.os.Looper;
                                   @Override public void run() {
                                       videoReadyHandler = null; videoReadyRunnable = null; nativeVideoListener = null;
                                       long diagFbMs = android.os.SystemClock.elapsedRealtime() - diagT0;
-                                      android.util.Log.w("DigipalMetrics", "[8s fallback fired] cold-load — onRenderedFirstFrame never arrived, latencyMs=" + diagFbMs);
-                                      preloadView.setVisibility(View.VISIBLE);
-                                      activeView.setVisibility(View.INVISIBLE);
-                                      activeVideoViewIsA = !activeVideoViewIsA;
+                                      android.util.Log.w("DigipalMetrics", "[8s fallback fired] cold-load — no first frame; keeping last visible, latencyMs=" + diagFbMs);
+                                      // FIX: do NOT swap views — keep old content visible, avoid brown GPU surface
+                                      final androidx.media3.exoplayer.ExoPlayer failedCold = exoPlayer;
+                                      exoPlayer = oldPlayer;
                                       pendingOldPlayer = null;
-                                      if (oldPlayer != null) { try { oldPlayer.stop(); oldPlayer.release(); } catch (Throwable ignored) {} }
+                                      if (failedCold != null) { try { failedCold.stop(); failedCold.release(); } catch (Throwable ignored) {} }
+                                      preloadView.setPlayer(null);
                                       webView.evaluateJavascript(
                                           "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
                                           if (contentId != null && !contentId.isEmpty()) { webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady_"+contentId+"==='function')window.__digipalNativeVideoReady_"+contentId+"()", null); }
@@ -973,12 +974,12 @@ import android.os.Looper;
                                       if (exoPlayer != null) exoPlayer.removeListener(this);
                                       nativeVideoListener = null;
                                       if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
-                                      // On error: swap to preloadView anyway so old content doesn't linger
-                                      preloadView.setVisibility(View.VISIBLE);
-                                      activeView.setVisibility(View.INVISIBLE);
-                                      activeVideoViewIsA = !activeVideoViewIsA;
+                                      // FIX: do NOT swap views — keep old content visible, avoid brown GPU surface
+                                      final androidx.media3.exoplayer.ExoPlayer failedErr = exoPlayer;
+                                      exoPlayer = oldPlayer;
                                       pendingOldPlayer = null;
-                                      if (oldPlayer != null) { try { oldPlayer.stop(); oldPlayer.release(); } catch (Throwable ignored) {} }
+                                      if (failedErr != null) { try { failedErr.stop(); failedErr.release(); } catch (Throwable ignored) {} }
+                                      preloadView.setPlayer(null);
                                       android.util.Log.w("DigipalMetrics", "[cold onPlayerError fatal] advancing playlist");
                                       webView.evaluateJavascript(
                                           "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
@@ -1078,8 +1079,7 @@ import android.os.Looper;
                               final android.widget.ImageView outgoing = activeImgView;
                               incoming.setLayoutParams(lp);
                               incoming.setScaleType(st);
-                              incoming.setAlpha(0f);
-                              incoming.setVisibility(View.VISIBLE);
+                              incoming.setVisibility(View.INVISIBLE);
                               // Trim Glide bitmap cache before cold load (Fire TV OOM fix).
                               try { com.bumptech.glide.Glide.get(MainActivity.this).trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE); } catch (Throwable ignored) {}
                               com.bumptech.glide.Glide.with(MainActivity.this)
@@ -1105,6 +1105,7 @@ import android.os.Looper;
                                               public boolean onPreDraw() {
                                                   android.view.ViewTreeObserver live = incoming.getViewTreeObserver();
                                                   if (live.isAlive()) live.removeOnPreDrawListener(this);
+                                                  incoming.setVisibility(View.VISIBLE);
                                                   incoming.setAlpha(1f);
                                                   outgoing.setVisibility(View.INVISIBLE);
                                                   activeImageViewIsA = !activeImageViewIsA;
@@ -1551,10 +1552,12 @@ import android.os.Looper;
                           if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
                           if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
                           preloadView.setVisibility(View.VISIBLE); activeView.setVisibility(View.INVISIBLE);
-                          activeVideoViewIsA = !activeVideoViewIsA;
+                          // FIX: do NOT swap views — keep old content visible, avoid brown GPU surface
+                          final androidx.media3.exoplayer.ExoPlayer _failedSched = exoPlayer;
+                          exoPlayer = oldPlayer;
                           pendingOldPlayer = null;
-                          if (oldPlayer != null) { try { oldPlayer.stop(); oldPlayer.release(); } catch (Throwable ignored) {} }
-                          // Notify scheduler — it will retry or skip; no WebView hop needed
+                          if (_failedSched != null) { try { _failedSched.stop(); _failedSched.release(); } catch (Throwable ignored) {} }
+                          preloadView.setPlayer(null);
                           if (playlistScheduler != null) playlistScheduler.onRendererError(slideId, "exoplayer_cold_fatal");
                       }
                   };
