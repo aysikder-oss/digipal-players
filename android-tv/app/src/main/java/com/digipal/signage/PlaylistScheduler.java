@@ -345,6 +345,22 @@ public class PlaylistScheduler {
     }
 
     /**
+     * Called when a looping video reaches its natural end and loops back to the start.
+     * Cancels the duration-based advance timer and moves to the next slide immediately,
+     * preventing the user from seeing 1-2 s of replayed video before the scheduler fires.
+     */
+    public void onSlideNaturalEnd(String slideId) {
+        handler.post(() -> {
+            if (state != State.PLAYING) return;
+            if (slides.isEmpty() || currentIndex >= slides.size()) return;
+            if (!slides.get(currentIndex).slideId.equals(slideId)) return;
+            Log.i(TAG, "[onSlideNaturalEnd] video looped naturally -- advancing now, slide=" + slideId);
+            if (advanceRunnable != null) { handler.removeCallbacks(advanceRunnable); advanceRunnable = null; }
+            advance();
+        });
+    }
+
+    /**
      * Called when a renderer encounters an unrecoverable error.
      * Retries the same slide up to MAX_SLIDE_RETRIES times before advancing.
      * Goes DEGRADED only after MAX_FAILURES consecutive failures.
