@@ -1435,7 +1435,7 @@ import android.os.Looper;
       // ─── Scheduler-direct video dispatch ────────────────────────────────────────
       // Called by schedulerPlayVideo delegate instead of going through evaluateJavascript.
       // Full-screen layout; ExoPlayer errors notify scheduler directly.
-      private void playNativeVideoForScheduler(String url, String objectFit, boolean loop, float volume, String slideId) {
+      private void playNativeVideoForScheduler(String url, String objectFit, boolean loop, float volume, String slideId, int contentId) {
           // Must be called on UI thread (called from runOnUiThread inside delegate).
           try {
               boolean fromPreload = url.equals(preloadedVideoUrl) && preloadPlayer != null;
@@ -1467,6 +1467,7 @@ import android.os.Looper;
                       pendingOldPlayer = null;
                       if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
                       if (playlistScheduler != null) playlistScheduler.onRendererReady(slideId);
+                      attachLoopAdvanceListener(exoPlayer, slideId);
                   } else {
                       final boolean[] done = {false};
                       nativeVideoListener = new androidx.media3.common.Player.Listener() {
@@ -1480,6 +1481,7 @@ import android.os.Looper;
                                   pendingOldPlayer = null;
                                   if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
                                   if (playlistScheduler != null) playlistScheduler.onRendererReady(slideId);
+                                  attachLoopAdvanceListener(exoPlayer, slideId);
                               });
                           }
                           @Override public void onPlayerError(androidx.media3.common.PlaybackException error) {
@@ -1508,6 +1510,7 @@ import android.os.Looper;
                                 // Notify scheduler so it can start the advance timer — without this the
                                 // scheduler stays in PREPARING_CURRENT forever after a forced preload swap.
                                 if (playlistScheduler != null) playlistScheduler.onRendererReady(slideId);
+                                attachLoopAdvanceListener(exoPlayer, slideId);
                             }
                       };
                       videoReadyHandler = rh; videoReadyRunnable = rc; rh.postDelayed(rc, 2500);
@@ -1530,9 +1533,11 @@ import android.os.Looper;
                           }
                           videoReadyHandler = null; videoReadyRunnable = null;
                           android.util.Log.w("DigipalMetrics",
-                              "[sched 8s timeout] cold-load slide=" + slideId + " — no first-frame; reporting error");
-                          if (playlistScheduler != null)
-                              playlistScheduler.onRendererError(slideId, "video_first_frame_timeout");
+                              "[sched 8s timeout] cold-load slide=" + slideId + " — no first-frame; falling back to WebView");
+                          if (webView != null) { try { webView.resumeTimers(); } catch (Throwable ignored) {} }
+                          if (webView != null) webView.evaluateJavascript(
+                              "try{window.__digipalGotoSlide&&window.__digipalGotoSlide(" + contentId + ");}catch(e){}", null);
+                          if (playlistScheduler != null) playlistScheduler.onRendererReady(slideId);
                       }
                   };
                   videoReadyHandler = rh; videoReadyRunnable = rc; rh.postDelayed(rc, 8000);
@@ -1546,6 +1551,7 @@ import android.os.Looper;
                               pendingOldPlayer = null;
                               if (oldPlayer != null) { try { oldPlayer.stop(); oldPlayer.release(); } catch (Throwable ignored) {} }
                               if (playlistScheduler != null) playlistScheduler.onRendererReady(slideId);
+                              attachLoopAdvanceListener(exoPlayer, slideId);
                           });
                       }
                       @Override public void onPlayerError(androidx.media3.common.PlaybackException error) {
@@ -1562,7 +1568,11 @@ import android.os.Looper;
                           pendingOldPlayer = null;
                           if (_failedSched != null) { try { _failedSched.stop(); _failedSched.release(); } catch (Throwable ignored) {} }
                           preloadView.setPlayer(null);
-                          if (playlistScheduler != null) playlistScheduler.onRendererError(slideId, "exoplayer_cold_fatal");
+                          // Fallback: play via WebView (React player) — avoids silently skipping videos
+                          if (webView != null) { try { webView.resumeTimers(); } catch (Throwable ignored) {} }
+                          if (webView != null) webView.evaluateJavascript(
+                              "try{window.__digipalGotoSlide&&window.__digipalGotoSlide(" + contentId + ");}catch(e){}", null);
+                          if (playlistScheduler != null) playlistScheduler.onRendererReady(slideId);
                       }
                   };
                   exoPlayer.addListener(nativeVideoListener);
@@ -1665,7 +1675,7 @@ import android.os.Looper;
                       @Override public void schedulerPlayVideo(PlaylistScheduler.SlidePlan s) {
                           final String _url = s.url; final String _fit = s.objectFit;
                           final boolean _loop = s.loop; final float _vol = s.volume;
-                          final String _sid = s.slideId;
+                          final String _sid = s.slideId; final int _contentId = s.contentId;
                           if (healthMonitor != null) healthMonitor.setRendererTypeNative();
                           runOnUiThread(() -> {
                               try {
@@ -1673,7 +1683,7 @@ import android.os.Looper;
                                   if (webView != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                                       try { webView.setRendererPriorityPolicy(android.webkit.WebView.RENDERER_PRIORITY_BOUND, false); } catch (Throwable ignored) {}
                                   }
-                                  playNativeVideoForScheduler(_url, _fit, _loop, _vol, _sid);
+                                  playNativeVideoForScheduler(_url, _fit, _loop, _vol, _sid, _contentId);
                               } catch (Throwable ignored) {}
                               if (supRef[0] != null) supRef[0].reportSchedulerAdvance();
                           });
@@ -2083,7 +2093,25 @@ import android.os.Looper;
         webView.loadUrl(playerUrl);
     }
 
-    private androidx.media3.exoplayer.ExoPlayer buildCachedExoPlayer() {
+    /** One-shot listener: when a looping video restarts naturally, advance the scheduler immediately. */
+      private void attachLoopAdvanceListener(androidx.media3.exoplayer.ExoPlayer player, String slideId) {
+          if (player == null) return;
+          player.addListener(new androidx.media3.common.Player.Listener() {
+              @Override
+              public void onPositionDiscontinuity(
+                      androidx.media3.common.Player.PositionInfo oldPos,
+                      androidx.media3.common.Player.PositionInfo newPos,
+                      @androidx.media3.common.Player.DiscontinuityReason int reason) {
+                  if (reason == androidx.media3.common.Player.DISCONTINUITY_REASON_AUTO_TRANSITION) {
+                      player.removeListener(this);
+                      if (exoPlayer == player && playlistScheduler != null)
+                          playlistScheduler.onSlideNaturalEnd(slideId);
+                  }
+              }
+          });
+      }
+
+      private androidx.media3.exoplayer.ExoPlayer buildCachedExoPlayer() {
           androidx.media3.datasource.DefaultHttpDataSource.Factory httpFactory =
               new androidx.media3.datasource.DefaultHttpDataSource.Factory();
           androidx.media3.datasource.DefaultDataSource.Factory upstreamFactory =
