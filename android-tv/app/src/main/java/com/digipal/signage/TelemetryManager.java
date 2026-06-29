@@ -3,6 +3,8 @@ package com.digipal.signage;
 import android.app.ActivityManager;
 import android.content.Context;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.StatFs;
 import android.util.Log;
 import org.json.*;
@@ -15,6 +17,10 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * TelemetryManager — logs playback events to Room and POSTs heartbeat + event batches to the server.
  * Tracks per-slide performance counters: transition gap, first frame, rebuffers, etc.
+ *
+ * Heartbeat scheduling uses a main-thread Handler instead of java.util.Timer so
+ * no extra OS thread is created. HealthMonitor drives the interval via
+ * setHeartbeatInterval(); the Handler self-reschedules using the latest interval.
  */
 public class TelemetryManager {
 
@@ -39,7 +45,9 @@ public class TelemetryManager {
     private final AtomicLong transitionGapMs = new AtomicLong(0);
     private long lastSlideHideMs = 0;
 
-    private java.util.Timer heartbeatTimer;
+    // Heartbeat scheduling — Handler on the main Looper (no extra OS thread).
+    private final Handler heartbeatHandler = new Handler(Looper.getMainLooper());
+    private Runnable heartbeatRunnable;
 
     public TelemetryManager(Context ctx, PlaylistRepository repo, String serverUrl) {
         this.ctx = ctx;
@@ -58,16 +66,19 @@ public class TelemetryManager {
     }
 
     private synchronized void scheduleHeartbeatTimer(long intervalMs) {
-        if (heartbeatTimer != null) { heartbeatTimer.cancel(); heartbeatTimer = null; }
-        heartbeatTimer = new java.util.Timer("DigipalHeartbeat", true);
-        heartbeatTimer.scheduleAtFixedRate(new java.util.TimerTask() {
-            @Override public void run() { sendHeartbeat(); syncEvents(); }
-        }, intervalMs, intervalMs);
+        if (heartbeatRunnable != null) heartbeatHandler.removeCallbacks(heartbeatRunnable);
+        heartbeatRunnable = new Runnable() {
+            @Override public void run() {
+                exec.execute(() -> { sendHeartbeat(); syncEvents(); });
+                heartbeatHandler.postDelayed(this, currentHeartbeatIntervalMs);
+            }
+        };
+        heartbeatHandler.postDelayed(heartbeatRunnable, intervalMs);
     }
 
     /**
      * Adjust heartbeat frequency. Called by HealthMonitor when playback mode changes.
-     * Changes take effect on the next timer cycle.
+     * Changes take effect on the next scheduled tick.
      */
     public void setHeartbeatInterval(long intervalMs) {
         if (intervalMs == currentHeartbeatIntervalMs) return;
@@ -77,7 +88,10 @@ public class TelemetryManager {
     }
 
     public void stop() {
-        if (heartbeatTimer != null) { heartbeatTimer.cancel(); heartbeatTimer = null; }
+        if (heartbeatRunnable != null) {
+            heartbeatHandler.removeCallbacks(heartbeatRunnable);
+            heartbeatRunnable = null;
+        }
         exec.shutdown();
     }
 
@@ -100,7 +114,6 @@ public class TelemetryManager {
         currentRevisionId = revId;
         currentSlideId    = slideId;
         currentRendererType = rendererType;
-        // Track transition gap
         if (lastSlideHideMs > 0) {
             transitionGapMs.set(System.currentTimeMillis() - lastSlideHideMs);
         }
