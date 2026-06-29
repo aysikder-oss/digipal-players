@@ -222,7 +222,7 @@ package com.digipal.signage;
       private void markRevisionFailed(long revId, String reason) {
           db.revisionDao().setStatus(revId, "FAILED");
           fireMetricsEvent("revisionFailed",
-                  "{"revisionDbId":" + revId + ","reason":"" + escapeJson(reason) + ""}");
+                "{\"revisionDbId\":" + revId + ",\"reason\":\"" + escapeJson(reason) + "\"}");
       }
 
       private void fireMetricsEvent(String type, String detailJson) {
