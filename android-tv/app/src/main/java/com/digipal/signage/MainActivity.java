@@ -1407,6 +1407,7 @@ import android.os.Looper;
                           }
                           @Override public void onPlayerError(androidx.media3.common.PlaybackException error) {
                               android.util.Log.w("DigipalMetrics", "[sched preload onPlayerError] slide=" + slideId + " " + error.getMessage());
+                              try { if (!(error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException)) { io.sentry.Sentry.captureException(error); } } catch (Throwable ignored) {}
                               if (error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException) return; // silence + let 2.5s fallback handle
                               if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
                               if (done[0]) return; done[0] = true;
@@ -1469,6 +1470,7 @@ import android.os.Looper;
                       }
                       @Override public void onPlayerError(androidx.media3.common.PlaybackException error) {
                           android.util.Log.w("DigipalMetrics", "[sched cold onPlayerError] slide=" + slideId + " " + error.getMessage());
+                          try { if (!(error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException)) { io.sentry.Sentry.captureException(error); } } catch (Throwable ignored) {}
                           if (error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException) return; // silence + let 8s fallback handle
                           if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
                           if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
@@ -1552,6 +1554,7 @@ import android.os.Looper;
                                               @Override public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e,
                                                       Object model, com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target, boolean isFirstResource) {
                                                   android.util.Log.w("DigipalNative", "[schedulerShowImage] Glide failed slide=" + _sid + ": " + (e != null ? e.getMessage() : "null"));
+                                                  try { io.sentry.Breadcrumb _bc = new io.sentry.Breadcrumb("Glide load failed slide=" + _sid + ": " + (e != null ? e.getMessage() : "null")); _bc.setLevel(io.sentry.SentryLevel.WARNING); _bc.setType("error"); io.sentry.Sentry.addBreadcrumb(_bc); } catch (Throwable ignored) {}
                                                   // Notify scheduler directly — it will retry/skip; no brown square lingers
                                                   if (playlistScheduler != null) playlistScheduler.onRendererError(_sid, "glide_load_failed");
                                                   return false;
@@ -1765,6 +1768,18 @@ import android.os.Looper;
                   () -> runOnUiThread(() -> { try { forcePlayerReload(); } catch (Throwable ignored) {} })
               );
               healthMonitor.start();
+
+              // ── Sentry crash & ANR reporting ─────────────────────────────────────────
+              if (!BuildConfig.SENTRY_DSN.isEmpty()) {
+                  try {
+                      io.sentry.android.core.SentryAndroid.init(this, options -> {
+                          options.setDsn(BuildConfig.SENTRY_DSN);
+                          options.setRelease(BuildConfig.VERSION_NAME);
+                          options.setEnvironment("production");
+                          options.setTracesSampleRate(0.0);
+                      });
+                  } catch (Throwable ignored) {}
+              }
 
               // Boot restore — play last ACTIVE revision from Room without network
               playlistScheduler.boot();
