@@ -630,6 +630,33 @@ import android.os.Looper;
             return "{\"usedBytes\":0,\"freeBytes\":0,\"totalSpace\":0,\"totalFiles\":0}";
         }
 
+
+          @JavascriptInterface
+          public String getDeviceInfo() {
+              try {
+                  org.json.JSONObject o = new org.json.JSONObject();
+                  o.put("model", android.os.Build.MODEL);
+                  o.put("manufacturer", android.os.Build.MANUFACTURER);
+                  o.put("androidVersion", android.os.Build.VERSION.RELEASE);
+                  o.put("appVersion", BuildConfig.VERSION_NAME);
+                  String androidId = android.provider.Settings.Secure.getString(
+                      getContentResolver(), android.provider.Settings.Secure.ANDROID_ID);
+                  if (androidId != null && !androidId.isEmpty()) {
+                      try {
+                          java.security.MessageDigest md =
+                              java.security.MessageDigest.getInstance("SHA-256");
+                          byte[] hash = md.digest(androidId.getBytes("UTF-8"));
+                          StringBuilder sb = new StringBuilder();
+                          for (byte b : hash) sb.append(String.format("%02x", b));
+                          o.put("deviceId", sb.toString().substring(0, 16));
+                      } catch (java.security.NoSuchAlgorithmException ignored) {}
+                  }
+                  return o.toString();
+              } catch (Throwable e) {
+                  return "{}";
+              }
+          }
+  
         /**
          * Device resource snapshot for the web player to throttle itself before a
          * crash. Method name must stay exactly "getResourceStats" â the player's
