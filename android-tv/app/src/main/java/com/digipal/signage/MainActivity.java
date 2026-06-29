@@ -67,7 +67,7 @@ import android.os.Looper;
     private androidx.media3.exoplayer.ExoPlayer exoPlayer;
       // ExoPlayer on-disk video cache (OptiSigns-style LRU, 2 GB max)
       private static androidx.media3.datasource.cache.SimpleCache videoCache;
-      private static final long VIDEO_CACHE_SIZE = 200L * 1024 * 1024; // 200 MB (streaming buffer only; full copies live in AssetCacheManager/Room)
+      private static final long VIDEO_CACHE_SIZE = 50L * 1024 * 1024;  // 50 MB streaming buffer (full copies live in AssetCacheManager/Room — local playback bypasses this cache)
     // Handler/Runnable for first-frame video ready callback (or 8s safety timeout)
     private android.os.Handler videoReadyHandler;
     private Runnable videoReadyRunnable;
