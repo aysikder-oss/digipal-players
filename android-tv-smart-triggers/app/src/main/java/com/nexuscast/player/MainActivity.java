@@ -1488,9 +1488,21 @@ import android.os.Looper;
                       }
                       @Override public void schedulerActivateWebView(PlaylistScheduler.SlidePlan s) {
                           if (healthMonitor != null) healthMonitor.setRendererTypeWeb();
+                          final int _contentId = s.contentId;
                           runOnUiThread(() -> {
                               try {
-                                  if (webView != null) webView.resumeTimers();
+                                  if (webView != null) {
+                                      webView.resumeTimers();
+                                      // Sync React playlist index to the WebView slide PlaylistScheduler intends.
+                                      // The JS advance timer is suspended when nativeSchedulerActive; this keeps
+                                      // WebView content in lock-step with the native state machine so two
+                                      // playlists cannot play simultaneously on mixed-content playlists.
+                                      webView.evaluateJavascript(
+                                          "try{window.__digipalGotoSlide&&window.__digipalGotoSlide("
+                                          + _contentId + ");}catch(e){}",
+                                          null
+                                      );
+                                  }
                                   applyWebViewProfile(s.type);
                               } catch (Throwable ignored) {}
                           });
