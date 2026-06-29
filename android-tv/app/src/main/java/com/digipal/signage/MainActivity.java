@@ -1503,9 +1503,12 @@ import android.os.Looper;
                               if (done[0]) return; done[0] = true;
                               preloadView.setVisibility(View.VISIBLE); activeView.setVisibility(View.INVISIBLE);
                               activeVideoViewIsA = !activeVideoViewIsA; preloadVideoReady = false;
-                              pendingOldPlayer = null;
-                              if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
-                          }
+                                pendingOldPlayer = null;
+                                if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
+                                // Notify scheduler so it can start the advance timer — without this the
+                                // scheduler stays in PREPARING_CURRENT forever after a forced preload swap.
+                                if (playlistScheduler != null) playlistScheduler.onRendererReady(slideId);
+                            }
                       };
                       videoReadyHandler = rh; videoReadyRunnable = rc; rh.postDelayed(rc, 2500);
                   }
@@ -1551,9 +1554,10 @@ import android.os.Looper;
                           if (error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException) return; // silence + let 8s fallback handle
                           if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
                           if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
-                          preloadView.setVisibility(View.VISIBLE); activeView.setVisibility(View.INVISIBLE);
-                          // FIX: do NOT swap views — keep old content visible, avoid brown GPU surface
-                          final androidx.media3.exoplayer.ExoPlayer _failedSched = exoPlayer;
+                          // Do NOT touch view visibility on error — keep old content visible.
+                            // preloadView is a SurfaceView-backed PlayerView; making it VISIBLE even briefly
+                            // creates a hardware punch-through layer that covers image views on Fire TV.
+                            final androidx.media3.exoplayer.ExoPlayer _failedSched = exoPlayer;
                           exoPlayer = oldPlayer;
                           pendingOldPlayer = null;
                           if (_failedSched != null) { try { _failedSched.stop(); _failedSched.release(); } catch (Throwable ignored) {} }
