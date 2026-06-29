@@ -44,6 +44,11 @@ public class TelemetryManager {
     private volatile int cacheReadyPercent = 100;
     private final AtomicLong transitionGapMs = new AtomicLong(0);
     private long lastSlideHideMs = 0;
+  
+      // Renderer state — updated by MainActivity via setters below
+      private volatile int     activeRendererCount = 0;
+      private volatile boolean webViewActive       = false;
+  
 
     // Heartbeat scheduling — Handler on the main Looper (no extra OS thread).
     private final Handler heartbeatHandler = new Handler(Looper.getMainLooper());
@@ -121,6 +126,8 @@ public class TelemetryManager {
 
     public void onSlideHidden() { lastSlideHideMs = System.currentTimeMillis(); }
     public void setLastError(String err) { lastError = err; }
+      public void setActiveRendererCount(int count) { activeRendererCount = count; }
+      public void setWebViewActive(boolean active) { webViewActive = active; }
     public void setCacheReadyPercent(int pct) { cacheReadyPercent = pct; }
 
     private void sendHeartbeat() {
