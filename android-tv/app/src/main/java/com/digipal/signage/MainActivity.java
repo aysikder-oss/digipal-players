@@ -771,7 +771,12 @@ import android.os.Looper;
           }
 
           @android.webkit.JavascriptInterface
-            public void playNativeVideo(String url, float x, float y, float w, float h, String objectFit, boolean loop, float volume) {
+              public void playNativeVideo(String url, float x, float y, float w, float h, String objectFit, boolean loop, float volume) {
+                  playNativeVideo(url, x, y, w, h, objectFit, loop, volume, "");
+              }
+
+              @android.webkit.JavascriptInterface
+              public void playNativeVideo(String url, float x, float y, float w, float h, String objectFit, boolean loop, float volume, String contentId) {
                 runOnUiThread(() -> {
                     try {
                         boolean fromPreload = url.equals(preloadedVideoUrl) && preloadPlayer != null;
@@ -826,6 +831,7 @@ import android.os.Looper;
                                   if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
                                   webView.evaluateJavascript(
                                       "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
+                                      if (contentId != null && !contentId.isEmpty()) { webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady_"+contentId+"==='function')window.__digipalNativeVideoReady_"+contentId+"()", null); }
                               } else {
                                   // Preload still buffering â old content stays visible on activeView until first frame
                                   final boolean[] done = {false};
@@ -844,6 +850,7 @@ import android.os.Looper;
                                               if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
                                               webView.evaluateJavascript(
                                                   "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
+                                                  if (contentId != null && !contentId.isEmpty()) { webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady_"+contentId+"==='function')window.__digipalNativeVideoReady_"+contentId+"()", null); }
                                           });
                                       }
                                       @Override public void onPlayerError(androidx.media3.common.PlaybackException error) {
@@ -864,6 +871,7 @@ import android.os.Looper;
                                           android.util.Log.w("DigipalMetrics", "[preload onPlayerError fatal] advancing playlist");
                                           webView.evaluateJavascript(
                                               "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
+                                              if (contentId != null && !contentId.isEmpty()) { webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady_"+contentId+"==='function')window.__digipalNativeVideoReady_"+contentId+"()", null); }
                                       }
                                   };
                                   exoPlayer.addListener(nativeVideoListener);
@@ -880,6 +888,7 @@ import android.os.Looper;
                                           if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
                                           webView.evaluateJavascript(
                                               "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
+                                              if (contentId != null && !contentId.isEmpty()) { webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady_"+contentId+"==='function')window.__digipalNativeVideoReady_"+contentId+"()", null); }
                                       }
                                   };
                                   videoReadyHandler = readyHandler; videoReadyRunnable = readyCb;
@@ -918,6 +927,7 @@ import android.os.Looper;
                                       if (oldPlayer != null) { try { oldPlayer.stop(); oldPlayer.release(); } catch (Throwable ignored) {} }
                                       webView.evaluateJavascript(
                                           "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
+                                          if (contentId != null && !contentId.isEmpty()) { webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady_"+contentId+"==='function')window.__digipalNativeVideoReady_"+contentId+"()", null); }
                                       webView.evaluateJavascript("if(window.__digipalNativeMetrics)window.__digipalNativeMetrics({type:'videoFallback',path:'cold-load',latencyMs:" + diagFbMs + "})", null);
                                   }
                               };
@@ -938,6 +948,7 @@ import android.os.Looper;
                                           if (oldPlayer != null) { try { oldPlayer.stop(); oldPlayer.release(); } catch (Throwable ignored) {} }
                                           webView.evaluateJavascript(
                                               "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
+                                              if (contentId != null && !contentId.isEmpty()) { webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady_"+contentId+"==='function')window.__digipalNativeVideoReady_"+contentId+"()", null); }
                                           webView.evaluateJavascript("if(window.__digipalNativeMetrics)window.__digipalNativeMetrics({type:'videoReady',path:'" + diagPath + "',latencyMs:" + diagLatencyMs + "})", null);
                                       });
                                   }
@@ -962,6 +973,7 @@ import android.os.Looper;
                                       android.util.Log.w("DigipalMetrics", "[cold onPlayerError fatal] advancing playlist");
                                       webView.evaluateJavascript(
                                           "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
+                                          if (contentId != null && !contentId.isEmpty()) { webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady_"+contentId+"==='function')window.__digipalNativeVideoReady_"+contentId+"()", null); }
                                   }
                               };
                               exoPlayer.addListener(nativeVideoListener);
@@ -1050,33 +1062,55 @@ import android.os.Looper;
                             webView.evaluateJavascript(
                                 "if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady()", null);
                         } else {
-                            // Fallback: load directly into active view
-                            activeImgView.setLayoutParams(lp);
-                            activeImgView.setScaleType(st);
-                            activeImgView.setVisibility(View.INVISIBLE);
-                            com.bumptech.glide.Glide.with(MainActivity.this)
-                                .load(url)
-                                .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
-                                    @Override
-                                    public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e,
-                                            Object model, com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
-                                            boolean isFirstResource) {
-                                        webView.evaluateJavascript(
-                                            "if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady()", null);
-                                        return false;
-                                    }
-                                    @Override
-                                    public boolean onResourceReady(android.graphics.drawable.Drawable resource, Object model,
-                                            com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
-                                            com.bumptech.glide.load.DataSource dataSource, boolean isFirstResource) {
-                                        activeImgView.setVisibility(View.VISIBLE);
-                                        webView.evaluateJavascript(
-                                            "if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady()", null);
-                                        return false;
-                                    }
-                                })
-                                .into(activeImgView);
-                        }
+                              // Cold fallback: load into inactive (preload) view — old content stays visible until first draw confirmed
+                              com.bumptech.glide.Glide.with(MainActivity.this).clear(preloadImgView);
+                              preloadedImageUrl = null; preloadImageReady = false;
+                              final android.widget.ImageView incoming = preloadImgView;
+                              final android.widget.ImageView outgoing = activeImgView;
+                              incoming.setLayoutParams(lp);
+                              incoming.setScaleType(st);
+                              incoming.setAlpha(0f);
+                              incoming.setVisibility(View.VISIBLE);
+                              // Trim Glide bitmap cache before cold load (Fire TV OOM fix).
+                              try { com.bumptech.glide.Glide.get(MainActivity.this).trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE); } catch (Throwable ignored) {}
+                              com.bumptech.glide.Glide.with(MainActivity.this)
+                                  .load(url)
+                                  .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
+                                      @Override
+                                      public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e,
+                                              Object model, com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
+                                              boolean isFirstResource) {
+                                          incoming.setVisibility(View.INVISIBLE);
+                                          webView.evaluateJavascript(
+                                              "if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady()", null);
+                                          return false;
+                                      }
+                                      @Override
+                                      public boolean onResourceReady(android.graphics.drawable.Drawable resource, Object model,
+                                              com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
+                                              com.bumptech.glide.load.DataSource dataSource, boolean isFirstResource) {
+                                          // Wait for first draw confirmation — prevents brown/golden square on rapid transitions
+                                          android.view.ViewTreeObserver vto = incoming.getViewTreeObserver();
+                                          vto.addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener() {
+                                              @Override
+                                              public boolean onPreDraw() {
+                                                  android.view.ViewTreeObserver live = incoming.getViewTreeObserver();
+                                                  if (live.isAlive()) live.removeOnPreDrawListener(this);
+                                                  incoming.setAlpha(1f);
+                                                  outgoing.setVisibility(View.INVISIBLE);
+                                                  activeImageViewIsA = !activeImageViewIsA;
+                                                  try { com.bumptech.glide.Glide.get(MainActivity.this).trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE); } catch (Throwable ignored) {}
+                                                  com.bumptech.glide.Glide.with(MainActivity.this).clear(outgoing);
+                                                  webView.evaluateJavascript(
+                                                      "if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady()", null);
+                                                  return true;
+                                              }
+                                          });
+                                          return false;
+                                      }
+                                  })
+                                  .into(incoming);
+                          }
                       } catch (Exception e) { android.util.Log.e("DigipalNative", "showNativeImage error", e); }
                   });
               }
@@ -1960,11 +1994,24 @@ import android.os.Looper;
                       500,
                       1000)
                   .build();
-          return new androidx.media3.exoplayer.ExoPlayer.Builder(this)
-              .setMediaSourceFactory(new androidx.media3.exoplayer.source.DefaultMediaSourceFactory(cacheFactory))
-              .setLoadControl(loadControl)
-              .build();
-      }
+          androidx.media3.exoplayer.DefaultRenderersFactory renderersFactory =
+                new androidx.media3.exoplayer.DefaultRenderersFactory(this)
+                    .setExtensionRendererMode(androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER);
+            androidx.media3.exoplayer.ExoPlayer player =
+                new androidx.media3.exoplayer.ExoPlayer.Builder(this, renderersFactory)
+                    .setMediaSourceFactory(new androidx.media3.exoplayer.source.DefaultMediaSourceFactory(cacheFactory))
+                    .setLoadControl(loadControl)
+                    .build();
+            // Cap decode resolution on low-memory devices (Fire TV Stick Lite/4K) to prevent OOM stalls on 4K content
+            int memClass = ((android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE)).getMemoryClass();
+            if (memClass < 256) {
+                player.setTrackSelectionParameters(
+                    player.getTrackSelectionParameters().buildUpon()
+                        .setMaxVideoSize(1920, 1080)
+                        .build());
+            }
+            return player;
+        }
 
       private void showError(String title, String message) {
         errorContainer.removeAllViews();
