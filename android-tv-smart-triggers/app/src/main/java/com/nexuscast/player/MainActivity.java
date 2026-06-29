@@ -1413,6 +1413,7 @@ import android.os.Looper;
                                               @Override public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e,
                                                       Object model, com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target, boolean isFirstResource) {
                                                   android.util.Log.w("DigipalNative", "[schedulerShowImage] Glide failed slide=" + _sid + ": " + (e != null ? e.getMessage() : "null"));
+                                                  try { io.sentry.Breadcrumb _bc = new io.sentry.Breadcrumb("Glide load failed slide=" + _sid + ": " + (e != null ? e.getMessage() : "null")); _bc.setLevel(io.sentry.SentryLevel.WARNING); _bc.setType("error"); io.sentry.Sentry.addBreadcrumb(_bc); } catch (Throwable ignored) {}
                                                   if (playlistScheduler != null) playlistScheduler.onRendererError(_sid, "glide_load_failed");
                                                   return false;
                                               }
