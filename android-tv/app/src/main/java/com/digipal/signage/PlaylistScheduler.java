@@ -129,6 +129,8 @@ public class PlaylistScheduler {
      * Reset to -1 immediately after first use in showCurrent().
      */
     private long firstSlideRemainingMs = -1L;
+    /** Last JSON passed to setPlaylist(); used to re-parse local manifest on onReady. */
+    private String lastSetJson = "";
 
     // ── Asset readiness grace period ────────────────────────────────────────
     /** Retry count for empty-URL grace period; resets whenever a slide has a usable URL. */
@@ -192,6 +194,7 @@ public class PlaylistScheduler {
      * does not restore stale content after a commanded page reload.
      */
     public synchronized void setPlaylist(String json) {
+        lastSetJson = json;
         List<SlidePlan> newSlides = parseSlides(json);
         if (newSlides.isEmpty()) {
             stop();
@@ -219,6 +222,22 @@ public class PlaylistScheduler {
                       repository.promoteRevisionToActive(revId);
                       activeRevisionId = revId;
                       Log.i(TAG, "[setPlaylist] revision activated revId=" + revId);
+                      // Swap slides to local-file-resolved paths — the ONLY place
+                      // raw /objects/ URLs are replaced with file:// URIs.
+                      if (localManifestJson != null && !localManifestJson.isEmpty()) {
+                          List<SlidePlan> local = parseSlides(localManifestJson);
+                          if (!local.isEmpty()) {
+                              handler.post(() -> {
+                                  synchronized (PlaylistScheduler.this) {
+                                      if (running && activeRevisionId == revId) {
+                                          slides = local;
+                                          Log.i(TAG, "[setPlaylist] slides updated from local manifest ("
+                                                  + local.size() + " items)");
+                                      }
+                                  }
+                              });
+                          }
+                      }
                   }
                   @Override
                   public void onFailed(long revId, String reason) {
@@ -236,8 +255,25 @@ public class PlaylistScheduler {
         showCurrent();
     }
 
-    /** Stop playback and cancel pending timer. */
-    public synchronized void stop() {
+    /** Force-advance to the next slide immediately (RecoveryCoordinator: SLIDE_SKIP). */
+      public synchronized void skipCurrentSlide() {
+          if (!running) return;
+          slideRetryCount = 0;
+          if (advanceRunnable != null) { handler.removeCallbacks(advanceRunnable); advanceRunnable = null; }
+          final int myGen = generation;
+          handler.post(() -> { if (generation == myGen && running) advance(); });
+      }
+
+      /** Retry the current slide after 500 ms (RecoveryCoordinator: SLIDE_RETRY). */
+      public synchronized void retryCurrentSlide() {
+          if (!running) return;
+          if (advanceRunnable != null) { handler.removeCallbacks(advanceRunnable); advanceRunnable = null; }
+          final int myGen = generation;
+          handler.postDelayed(() -> { if (generation == myGen && running) showCurrent(); }, 500);
+      }
+
+      /** Stop playback and cancel pending timer. */
+      public synchronized void stop() {
         running = false;
         pausedAt = -1;
         remainingMs = -1;
@@ -564,7 +600,7 @@ public class PlaylistScheduler {
     public long getActiveRevisionId() { return activeRevisionId; }
 
     private boolean isSameStructure(List<SlidePlan> n) {
-        if (!running || n.size() != slides.size()) return false;
+        if (n.size() != slides.size()) return false;
         for (int i = 0; i < slides.size(); i++) {
             if (slides.get(i).contentId != n.get(i).contentId) return false;
             if (slides.get(i).type != n.get(i).type) return false;
