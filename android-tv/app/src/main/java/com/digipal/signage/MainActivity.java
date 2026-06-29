@@ -100,6 +100,8 @@ import android.os.Looper;
     private PdfPrerenderer          pdfPrerenderer;
     private ReliabilitySupervisor   reliabilitySupervisor;
     private HealthMonitor           healthMonitor;
+      private MemoryBudgetManager     memoryBudgetManager;
+      private RecoveryCoordinator     recoveryCoordinator;
     // Player URL tracked so WebView can be recreated with the same page between slides
     private String currentPlayerUrl = null;
 
@@ -1554,7 +1556,46 @@ import android.os.Looper;
               telemetryManager   = new TelemetryManager(this, playlistRepository, getServerUrl());
               telemetryManager.start();
 
-              final ReliabilitySupervisor[] supRef = new ReliabilitySupervisor[1];
+                // ---- MemoryBudgetManager: 5-second memory tier poller ----
+                memoryBudgetManager = new MemoryBudgetManager(
+                    getApplicationContext(),
+                    (oldTier, newTier) ->
+                        android.util.Log.i("DigipalMemory", "tier " + oldTier + " -> " + newTier),
+                    js -> runOnUiThread(() -> { if (webView != null) webView.evaluateJavascript(js, null); }));
+                memoryBudgetManager.start();
+
+                // ---- RecoveryCoordinator: ordered escalation router ----
+                recoveryCoordinator = new RecoveryCoordinator(getApplicationContext(),
+                    new RecoveryCoordinator.EscalationDelegate() {
+                        @Override public void onSlideRetry(String sid, String reason) {
+                            android.util.Log.i("DigipalRecovery", "[SLIDE_RETRY] " + sid + " " + reason);
+                        }
+                        @Override public void onSlideSkip(String sid, String reason) {
+                            android.util.Log.w("DigipalRecovery", "[SLIDE_SKIP] " + sid + " " + reason);
+                        }
+                        @Override public void onRendererRebuild(String reason) {
+                            android.util.Log.w("DigipalRecovery", "[RENDERER_REBUILD] " + reason);
+                            runOnUiThread(() -> releaseAllRenderers());
+                        }
+                        @Override public void onWebViewRebuild(String reason) {
+                            android.util.Log.w("DigipalRecovery", "[WEBVIEW_REBUILD] " + reason);
+                        }
+                        @Override public void onPlaylistRollback(String reason) {
+                            android.util.Log.w("DigipalRecovery", "[PLAYLIST_ROLLBACK] " + reason);
+                        }
+                        @Override public void onSoftRestart(String reason) {
+                            android.util.Log.e("DigipalRecovery", "[SOFT_RESTART] " + reason);
+                            AppRecoverManager.scheduleRecovery(getApplicationContext());
+                        }
+                        @Override public void onHardRestart(String reason) {
+                            android.util.Log.e("DigipalRecovery", "[HARD_RESTART] " + reason);
+                            AppRecoverManager.scheduleRecovery(getApplicationContext());
+                        }
+                    },
+                    js -> runOnUiThread(() -> { if (webView != null) webView.evaluateJavascript(js, null); }));
+                AppRecoverManager.setRecoveryCoordinator(recoveryCoordinator);
+
+                final ReliabilitySupervisor[] supRef = new ReliabilitySupervisor[1];
 
               playlistScheduler = new PlaylistScheduler(
                   new PlaylistScheduler.Delegate() {
@@ -1831,7 +1872,9 @@ import android.os.Looper;
                   telemetryManager
               );
               supRef[0] = reliabilitySupervisor;
-              reliabilitySupervisor.startExternallyClocked();
+                reliabilitySupervisor.setRecoveryCoordinator(recoveryCoordinator);
+                reliabilitySupervisor.setMemoryBudgetManager(memoryBudgetManager);
+                reliabilitySupervisor.startExternallyClocked();
 
               // Hand heartbeat stale check to HealthMonitor; it drives reliability checks too.
               stopHeartbeatWatchdog();
@@ -2436,7 +2479,8 @@ import android.os.Looper;
     protected void onDestroy() {
         stopAnrWatchdog();
         stopHeartbeatWatchdog();
-        if (healthMonitor != null) { healthMonitor.stop(); healthMonitor = null; }
+        if (memoryBudgetManager != null) { memoryBudgetManager.stop(); memoryBudgetManager = null; }
+          if (healthMonitor != null) { healthMonitor.stop(); healthMonitor = null; }
         if (isAutoRelaunchEnabled() && !isUserClosing) {
             scheduleAppRelaunch(3000);
         }
