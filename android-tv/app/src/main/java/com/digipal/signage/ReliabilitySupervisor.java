@@ -45,13 +45,27 @@ public class ReliabilitySupervisor {
     private final AtomicInteger mediumCount         = new AtomicInteger(0);
 
     private Runnable checkRunnable;
-    private boolean running = false;
+      private boolean running = false;
+
+      // Optional RecoveryCoordinator — set by MainActivity after construction.
+      // When set, hard() routes through it rather than calling AppRecoverManager directly.
+      private RecoveryCoordinator recoveryCoordinator;
+      // Optional MemoryBudgetManager — used to pass memory tier to coordinator.
+      private MemoryBudgetManager memoryBudgetManager;
 
     public ReliabilitySupervisor(Context ctx, RecoveryDelegate delegate, TelemetryManager telemetry) {
         this.ctx = ctx; this.delegate = delegate; this.telemetry = telemetry;
     }
 
-    public void start() {
+    public void setRecoveryCoordinator(RecoveryCoordinator coordinator) {
+          this.recoveryCoordinator = coordinator;
+      }
+
+      public void setMemoryBudgetManager(MemoryBudgetManager mbm) {
+          this.memoryBudgetManager = mbm;
+      }
+
+      public void start() {
         running = true;
         scheduleCheck();
         Log.i(TAG, "started");
