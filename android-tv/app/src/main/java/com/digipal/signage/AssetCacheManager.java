@@ -82,6 +82,23 @@ public class AssetCacheManager {
     public void setOnAssetReadyListener(OnAssetReadyListener l) { this.onAssetReadyListener = l; }
 
     private void download(String assetId, String url, String expectedSha256, DownloadCallback cb) {
+        // Upsert: ensure an asset row exists before downloading.
+        // markAssetReady() is update-only; insert() is required for brand-new assets.
+        try {
+            PlaylistDatabase.AssetEntity existing = repo.getDb().assetDao().findById(assetId);
+            if (existing == null) {
+                PlaylistDatabase.AssetEntity row = new PlaylistDatabase.AssetEntity();
+                row.assetId = assetId;
+                row.url = url;
+                row.downloadState = "DOWNLOADING";
+                row.sha256 = expectedSha256 != null ? expectedSha256 : "";
+                row.lastUsedAt = System.currentTimeMillis();
+                repo.getDb().assetDao().insert(row);
+                Log.d(TAG, "[upsert] inserted asset row for " + assetId);
+            }
+        } catch (Exception upsertEx) {
+            Log.w(TAG, "[upsert] failed to ensure asset row: " + upsertEx.getMessage());
+        }
         File mediaDir = getMediaDir();
         if (mediaDir == null) { cb.onFailure(assetId, "storage_unavailable"); return; }
         if (freeBytes() < MIN_FREE_BYTES) { cb.onFailure(assetId, "storage_full"); return; }
