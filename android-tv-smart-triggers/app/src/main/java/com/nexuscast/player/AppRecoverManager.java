@@ -18,6 +18,9 @@ package com.nexuscast.player;
    * onDestroy when the user did not explicitly close the app).
    */
   public class AppRecoverManager {
+        // Set once from MainActivity after RecoveryCoordinator is constructed.
+        private static volatile RecoveryCoordinator sRecoveryCoordinator;
+        public static void setRecoveryCoordinator(RecoveryCoordinator rc) { sRecoveryCoordinator = rc; }
       /** Recovery delay after a normal crash (30 seconds). */
       private static final long NORMAL_DELAY_SECONDS  = 30L;
       /** Recovery delay after max-exceeded crash loop (10 minutes). */
