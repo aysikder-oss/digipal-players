@@ -71,6 +71,10 @@ import android.os.Looper;
     // Handler/Runnable for first-frame video ready callback (or 8s safety timeout)
     private android.os.Handler videoReadyHandler;
     private Runnable videoReadyRunnable;
+    // Stable playback timer: resets crash counter only after 3 min of uninterrupted playback
+    private final android.os.Handler stablePlaybackHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable stablePlaybackRunnable;
+    private static final long STABLE_PLAYBACK_MS = 3 * 60_000L;
     private androidx.media3.common.Player.Listener nativeVideoListener;
     // Preload â background ExoPlayer/Glide to buffer the next playlist item before it plays
     private androidx.media3.exoplayer.ExoPlayer preloadPlayer;
@@ -122,8 +126,11 @@ import android.os.Looper;
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         activityAlive = true;
-          // WorkManager crash recovery: cancel pending recovery and reset crash counter on clean start
-          AppRecoverManager.onCleanStart(this);
+          // WorkManager crash recovery: start the periodic backup worker.
+          // Crash-counter reset (onCleanStart) is deferred to armStablePlaybackTimer() —
+          // it fires only after 3 minutes of consecutive clean playback, preventing the
+          // crash-loop counter from resetting on every cold start.
+          AppRecoverManager.scheduleBackupWorker(this);
           // Install uncaught exception handler to record crash + schedule WorkManager recovery
           final Thread.UncaughtExceptionHandler _prevCrashHandler = Thread.getDefaultUncaughtExceptionHandler();
           Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
@@ -1389,12 +1396,18 @@ import android.os.Looper;
                 @android.webkit.JavascriptInterface
                 public void onNativeRendererReady(String slideId) {
                     if (playlistScheduler != null) playlistScheduler.onRendererReady(slideId);
+                    armStablePlaybackTimer();
                 }
 
                 @android.webkit.JavascriptInterface
                 public void onNativeRendererError(String slideId, String error) {
                     if (playlistScheduler != null) playlistScheduler.onRendererError(slideId, error);
                     if (reliabilitySupervisor != null) reliabilitySupervisor.reportError("renderer", error);
+                    if (recoveryCoordinator != null) {
+                        recoveryCoordinator.reportSlideFailure(slideId, null, error, "webview",
+                                memoryBudgetManager != null ? memoryBudgetManager.getCurrentTier() : null);
+                    }
+                    cancelStablePlaybackTimer();
                 }
 
                 @android.webkit.JavascriptInterface
@@ -1559,8 +1572,37 @@ import android.os.Looper;
                 // ---- MemoryBudgetManager: 5-second memory tier poller ----
                 memoryBudgetManager = new MemoryBudgetManager(
                     getApplicationContext(),
-                    (oldTier, newTier) ->
-                        android.util.Log.i("DigipalMemory", "tier " + oldTier + " -> " + newTier),
+                    (oldTier, newTier) -> {
+                        android.util.Log.i("DigipalMemory", "tier " + oldTier + " -> " + newTier);
+                        runOnUiThread(() -> {
+                            try {
+                                if (newTier == MemoryBudgetManager.Tier.CRITICAL) {
+                                    // CRITICAL: cancel preloads, release inactive renderer, clear Glide
+                                    if (assetCacheManager != null) assetCacheManager.setMaxConcurrency(1);
+                                    if (preloadPlayer != null) {
+                                        try { preloadPlayer.release(); } catch (Throwable ignored) {}
+                                        preloadPlayer = null; preloadedVideoUrl = null; preloadVideoReady = false;
+                                    }
+                                    try { com.bumptech.glide.Glide.get(MainActivity.this).clearMemory();
+                                    } catch (Throwable ignored) {}
+                                    android.util.Log.w("DigipalMemory", "[CRITICAL] preloads cancelled, Glide cleared");
+                                } else if (newTier == MemoryBudgetManager.Tier.LOW) {
+                                    // LOW: reduce download concurrency, moderate Glide trim
+                                    if (assetCacheManager != null) assetCacheManager.setMaxConcurrency(1);
+                                    try { com.bumptech.glide.Glide.get(MainActivity.this).trimMemory(
+                                        android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE);
+                                    } catch (Throwable ignored) {}
+                                    android.util.Log.i("DigipalMemory", "[LOW] download concurrency reduced");
+                                } else {
+                                    // NORMAL / RECOVERED: restore full concurrency
+                                    if (assetCacheManager != null) assetCacheManager.setMaxConcurrency(3);
+                                    android.util.Log.i("DigipalMemory", "[NORMAL] concurrency restored");
+                                }
+                            } catch (Throwable e) {
+                                android.util.Log.e("DigipalMemory", "tier action failed", e);
+                            }
+                        });
+                    },
                     js -> runOnUiThread(() -> { if (webView != null) webView.evaluateJavascript(js, null); }));
                 memoryBudgetManager.start();
 
@@ -1569,9 +1611,11 @@ import android.os.Looper;
                     new RecoveryCoordinator.EscalationDelegate() {
                         @Override public void onSlideRetry(String sid, String reason) {
                             android.util.Log.i("DigipalRecovery", "[SLIDE_RETRY] " + sid + " " + reason);
+                            if (playlistScheduler != null) runOnUiThread(() -> playlistScheduler.retryCurrentSlide());
                         }
                         @Override public void onSlideSkip(String sid, String reason) {
                             android.util.Log.w("DigipalRecovery", "[SLIDE_SKIP] " + sid + " " + reason);
+                            if (playlistScheduler != null) runOnUiThread(() -> playlistScheduler.skipCurrentSlide());
                         }
                         @Override public void onRendererRebuild(String reason) {
                             android.util.Log.w("DigipalRecovery", "[RENDERER_REBUILD] " + reason);
@@ -1579,9 +1623,21 @@ import android.os.Looper;
                         }
                         @Override public void onWebViewRebuild(String reason) {
                             android.util.Log.w("DigipalRecovery", "[WEBVIEW_REBUILD] " + reason);
+                            // Debounced WebView rebuild — reuse the existing crash-recovery path
+                            runOnUiThread(() -> { if (webView != null) recoverFromRenderProcessGone(webView); });
                         }
                         @Override public void onPlaylistRollback(String reason) {
                             android.util.Log.w("DigipalRecovery", "[PLAYLIST_ROLLBACK] " + reason);
+                            // Roll back to last known-good revision via PlaylistRepository
+                            if (playlistRepository != null && playlistScheduler != null) {
+                                new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                                    PlaylistDatabase.PlaylistRevisionEntity last = playlistRepository.getLastKnownGood();
+                                    if (last != null && last.localManifest != null && !last.localManifest.isEmpty()) {
+                                        playlistScheduler.setPlaylist(last.localManifest);
+                                        android.util.Log.i("DigipalRecovery", "[ROLLBACK] reverted to revision " + last.revisionId);
+                                    }
+                                });
+                            }
                         }
                         @Override public void onSoftRestart(String reason) {
                             android.util.Log.e("DigipalRecovery", "[SOFT_RESTART] " + reason);
@@ -1874,6 +1930,7 @@ import android.os.Looper;
               supRef[0] = reliabilitySupervisor;
                 reliabilitySupervisor.setRecoveryCoordinator(recoveryCoordinator);
                 reliabilitySupervisor.setMemoryBudgetManager(memoryBudgetManager);
+                reliabilitySupervisor.setPlaylistRepository(playlistRepository);
                 reliabilitySupervisor.startExternallyClocked();
 
               // Hand heartbeat stale check to HealthMonitor; it drives reliability checks too.
@@ -2130,6 +2187,12 @@ import android.os.Looper;
      * full activity relaunch if the renderer keeps dying (crash loop).
      */
     private void recoverFromRenderProcessGone(WebView deadView) {
+        // Report WebView crash to RecoveryCoordinator for escalation tracking
+        if (recoveryCoordinator != null) {
+            recoveryCoordinator.reportWebViewCrash("render_process_gone",
+                    memoryBudgetManager != null ? memoryBudgetManager.getCurrentTier() : null);
+        }
+        cancelStablePlaybackTimer();
         long now = System.currentTimeMillis();
         renderGoneTimestamps[renderGoneIdx % renderGoneTimestamps.length] = now;
         renderGoneIdx++;
@@ -2334,7 +2397,25 @@ import android.os.Looper;
         }
     }
 
-    private void hideSystemUI() {
+    /** Arm the 3-minute stable playback timer. Resets on each successful renderer-ready event.
+       *  When it fires cleanly it calls AppRecoverManager.onCleanStart() to reset the crash counter. */
+      private void armStablePlaybackTimer() {
+          stablePlaybackHandler.removeCallbacks(stablePlaybackRunnable != null ? stablePlaybackRunnable : () -> {});
+          stablePlaybackRunnable = () -> {
+              android.util.Log.i("DigipalRecovery", "[stable] 3-min clean window — resetting crash counter");
+              AppRecoverManager.onCleanStart(getApplicationContext());
+          };
+          stablePlaybackHandler.postDelayed(stablePlaybackRunnable, STABLE_PLAYBACK_MS);
+      }
+
+      /** Cancel the stable playback timer (call on any renderer error). */
+      private void cancelStablePlaybackTimer() {
+          if (stablePlaybackRunnable != null) {
+              stablePlaybackHandler.removeCallbacks(stablePlaybackRunnable);
+          }
+      }
+
+      private void hideSystemUI() {
         View decorView = getWindow().getDecorView();
         decorView.setSystemUiVisibility(
             View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
