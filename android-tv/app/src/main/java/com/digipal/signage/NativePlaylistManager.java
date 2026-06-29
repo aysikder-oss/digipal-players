@@ -69,7 +69,6 @@ package com.digipal.signage;
 
         /** True when new slide list has same contentIds+types in the same order. */
         private boolean isSameStructure(List<NativeSlide> newSlides) {
-            if (!running) return false;
             if (newSlides.size() != slides.size()) return false;
             for (int i = 0; i < slides.size(); i++) {
                 if (slides.get(i).contentId != newSlides.get(i).contentId) return false;
