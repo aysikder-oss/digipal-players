@@ -52,6 +52,8 @@ public class ReliabilitySupervisor {
       private RecoveryCoordinator recoveryCoordinator;
       // Optional MemoryBudgetManager — used to pass memory tier to coordinator.
       private MemoryBudgetManager memoryBudgetManager;
+      // Optional PlaylistRepository — used to persist error entities to Room.
+      private PlaylistRepository playlistRepository;
 
     public ReliabilitySupervisor(Context ctx, RecoveryDelegate delegate, TelemetryManager telemetry) {
         this.ctx = ctx; this.delegate = delegate; this.telemetry = telemetry;
@@ -63,6 +65,10 @@ public class ReliabilitySupervisor {
 
       public void setMemoryBudgetManager(MemoryBudgetManager mbm) {
           this.memoryBudgetManager = mbm;
+      }
+
+      public void setPlaylistRepository(PlaylistRepository repo) {
+          this.playlistRepository = repo;
       }
 
       public void start() {
@@ -88,9 +94,18 @@ public class ReliabilitySupervisor {
     /** Call when any renderer encounters an error. */
     public void reportError(String component, String error) {
         Log.w(TAG, "[error] " + component + ": " + error);
-        if (telemetry != null) {
+        // Persist error to Room so telemetry sync can upload it
+        try {
             PlaylistDatabase.PlayerErrorEntity e = new PlaylistDatabase.PlayerErrorEntity();
-            e.timestamp = System.currentTimeMillis(); e.component = component; e.message = error;
+            e.timestamp = System.currentTimeMillis();
+            e.component = component;
+            e.message = error;
+            e.severity = "ERROR";
+            if (playlistRepository != null) {
+                playlistRepository.getDb().errorDao().insert(e);
+            }
+        } catch (Exception ex) {
+            Log.w(TAG, "[error] failed to persist error entity: " + ex.getMessage());
         }
         int sc = softCount.incrementAndGet();
         if (sc >= SOFT_BEFORE_MEDIUM) {
