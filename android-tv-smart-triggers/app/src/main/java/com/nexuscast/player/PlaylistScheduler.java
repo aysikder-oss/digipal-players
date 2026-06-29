@@ -3,6 +3,7 @@ package com.nexuscast.player;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.webkit.WebView;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.ArrayList;
@@ -103,6 +104,13 @@ public class PlaylistScheduler {
     private AssetResolver assetResolver;
     public void setAssetResolver(AssetResolver r) { this.assetResolver = r; }
 
+      /** Pass MediaDownloadManager to repository for the atomic revision pipeline. */
+      public void setMediaDownloadManager(MediaDownloadManager mdm) { repository.setMediaDownloadManager(mdm); }
+
+      /** Pass WebView to repository so the pipeline can fire failure metrics events. */
+      public void setWebView(android.webkit.WebView wv) { repository.setWebView(wv); }
+
+  
     /** Per-slide retry counter; reset in showCurrent(), incremented in onRendererError(). */
     private int slideRetryCount = 0;
 
@@ -205,11 +213,19 @@ public class PlaylistScheduler {
 
         final String finalJson = json;
         dbExec.execute(() -> {
-            long revId = repository.saveRevision("default", String.valueOf(System.currentTimeMillis()), finalJson);
-            repository.activateRevision(revId);
-            repository.saveSlidesFromJson(revId, finalJson);
-            activeRevisionId = revId;
-        });
+              repository.startRevisionPipeline("default", finalJson, new PlaylistRepository.OnRevisionReady() {
+                  @Override
+                  public void onReady(long revId, String localManifestJson) {
+                      repository.promoteRevisionToActive(revId);
+                      activeRevisionId = revId;
+                      Log.i(TAG, "[setPlaylist] revision activated revId=" + revId);
+                  }
+                  @Override
+                  public void onFailed(long revId, String reason) {
+                      Log.w(TAG, "[setPlaylist] pipeline failed revId=" + revId + " reason=" + reason);
+                  }
+              });
+          });
 
         // Record wall-clock epoch so boot() can resume at the right slide after crash/restart
         if (prefs != null) {
