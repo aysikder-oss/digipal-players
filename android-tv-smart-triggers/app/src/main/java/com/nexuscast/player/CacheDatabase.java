@@ -51,7 +51,7 @@ package com.nexuscast.player;
       }
 
       // ── Database ──────────────────────────────────────────────────────────────
-      @Database(entities = {CacheObject.class}, version = 1, exportSchema = false)
+      @Database(entities = {CacheObject.class}, version = 1, exportSchema = true)
       public abstract static class AppDatabase extends RoomDatabase {
           public abstract CacheDao cacheDao();
       }
@@ -66,7 +66,7 @@ package com.nexuscast.player;
                               context.getApplicationContext(),
                               AppDatabase.class,
                               "digipal_cache.db"
-                      ).fallbackToDestructiveMigration().build();
+                      ).build();
                   }
               }
           }
