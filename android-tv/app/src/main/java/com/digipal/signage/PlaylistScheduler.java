@@ -711,4 +711,10 @@ public class PlaylistScheduler {
     }
 
 
+    /** Release executor resources. Call from MainActivity.onDestroy(). */
+    public void shutdown() {
+        stop();
+        try { dbExec.shutdownNow(); } catch (Throwable ignored) {}
+    }
+
 }
