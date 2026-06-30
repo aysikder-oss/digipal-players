@@ -288,6 +288,11 @@ public class PlaylistScheduler {
         }
         rendererReadyTimeoutGen = -1;
         toState(State.IDLE, "");
+        // Clear lingering native renderers immediately so old content vanishes on playlist switch
+        if (delegate != null) {
+            delegate.schedulerStopVideo();
+            delegate.schedulerHideImage();
+        }
     }
 
     /**
@@ -486,6 +491,10 @@ public class PlaylistScheduler {
               default:
                   // WEBVIEW_DESIGN / WEBVIEW_KIOSK / WEBVIEW_URL: handed to the React TV player.
                   android.util.Log.i("PlaylistScheduler", "[dispatch] webview type=" + eff + " slide=" + slide.slideId);
+                  // Release native video/image before handing to WebView — prevents old content
+                  // shadowing the WebView and frees the hardware decoder (critical on Fire TV).
+                  delegate.schedulerStopVideo();
+                  delegate.schedulerHideImage();
                   delegate.schedulerActivateWebView(slide);
                   break;
           }
