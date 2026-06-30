@@ -44,6 +44,9 @@ public class ReliabilitySupervisor {
     private final AtomicInteger softCount           = new AtomicInteger(0);
     private final AtomicInteger mediumCount         = new AtomicInteger(0);
 
+    // Current scheduler state — used to skip stall checks when scheduler is not actively playing
+    private volatile PlaylistScheduler.State schedulerState = PlaylistScheduler.State.IDLE;
+
     private Runnable checkRunnable;
       private boolean running = false;
 
@@ -90,6 +93,17 @@ public class ReliabilitySupervisor {
 
     /** Call on WebView heartbeat bridge callback. */
     public void reportHeartbeat() { lastHeartbeatMs.set(System.currentTimeMillis()); }
+
+    /** Update the known scheduler state so stall detection can skip idle/booting states. */
+    public void setSchedulerState(PlaylistScheduler.State state) {
+        this.schedulerState = state;
+        // Reset stall clock whenever scheduler enters an active play state
+        if (state == PlaylistScheduler.State.PLAYING
+                || state == PlaylistScheduler.State.PREPARING_CURRENT
+                || state == PlaylistScheduler.State.TRANSITIONING) {
+            lastSchedulerAdvanceMs.set(System.currentTimeMillis());
+        }
+    }
 
     /** Call when any renderer encounters an error. */
     public void reportError(String component, String error) {
@@ -151,9 +165,18 @@ public class ReliabilitySupervisor {
     private void check() {
         long now = System.currentTimeMillis();
 
-        // Scheduler stall: no advance for MAX_IDLE_MS
-        if (now - lastSchedulerAdvanceMs.get() > MAX_IDLE_MS) {
-            Log.w(TAG, "[stall] scheduler hasn't advanced in " + (now - lastSchedulerAdvanceMs.get()) + "ms");
+        // Scheduler stall: only check if actively playing (skip IDLE/BOOTING/RESTORING states)
+        PlaylistScheduler.State curState = schedulerState;
+        boolean activelyPlaying = curState == PlaylistScheduler.State.PLAYING
+                || curState == PlaylistScheduler.State.PREPARING_CURRENT
+                || curState == PlaylistScheduler.State.TRANSITIONING
+                || curState == PlaylistScheduler.State.DEGRADED_PLAYBACK;
+        if (!activelyPlaying) {
+            // Scheduler is idle or initialising — reset the stall clock so it does not fire
+            // on the first advance after a long idle/boot period.
+            lastSchedulerAdvanceMs.set(System.currentTimeMillis());
+        } else if (now - lastSchedulerAdvanceMs.get() > MAX_IDLE_MS) {
+            Log.w(TAG, "[stall] scheduler hasn't advanced in " + (now - lastSchedulerAdvanceMs.get()) + "ms (state=" + curState + ")");
             reportError("scheduler", "stall");
         }
 
