@@ -1583,10 +1583,35 @@ import android.os.Looper;
                   // Cold load
                   if (preloadPlayer != null) { try { preloadPlayer.release(); } catch (Throwable ignored) {} preloadPlayer = null; preloadedVideoUrl = null; preloadVideoReady = false; preloadView.setPlayer(null); }
                   final androidx.media3.exoplayer.ExoPlayer coldPlayer = buildCachedExoPlayer();
-                  preloadView.setPlayer(coldPlayer); preloadView.setResizeMode(resizeMode); preloadView.setLayoutParams(lp);
+                  if (useTexture) {
+                      preloadView.setPlayer(null);
+                      coldPlayer.setVideoTextureView(incomingTexView);
+                      incomingTexView.setLayoutParams(lp);
+                      incomingTexView.setVisibility(View.VISIBLE); incomingTexView.setAlpha(0f);
+                      android.util.Log.d("DigipalVideo", "[cold2] TextureView path alpha=0");
+                  } else {
+                      preloadView.setPlayer(coldPlayer); preloadView.setResizeMode(resizeMode); preloadView.setLayoutParams(lp);
+                      preloadView.setVisibility(View.VISIBLE); preloadView.setAlpha(0f);
+                      android.util.Log.d("DigipalVideo", "[cold2] SurfaceView path alpha=0");
+                  }
                   coldPlayer.setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.parse(url)));
                   coldPlayer.setRepeatMode(loop ? androidx.media3.common.Player.REPEAT_MODE_ONE : androidx.media3.common.Player.REPEAT_MODE_OFF);
                   coldPlayer.setVolume(volume); coldPlayer.prepare(); coldPlayer.play();
+                  android.util.Log.d("DigipalVideo", "[cold-load diag] pvVisibility=" + (preloadView != null ? preloadView.getVisibility() : -1) + " pvAlpha=" + (preloadView != null ? preloadView.getAlpha() : -1f) + " state=" + coldPlayer.getPlaybackState() + " url_scheme=" + (url.contains("://") ? url.substring(0, url.indexOf("://")) : "?"));
+                  coldPlayer.addAnalyticsListener(new androidx.media3.exoplayer.analytics.AnalyticsListener() {
+                      @Override public void onVideoSizeChanged(androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime t, androidx.media3.common.VideoSize vs) {
+                          android.util.Log.i("DigipalVideo", "[cold diag] onVideoSizeChanged " + vs.width + "x" + vs.height);
+                      }
+                      @Override public void onPlaybackStateChanged(androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime t, int state) {
+                          android.util.Log.d("DigipalVideo", "[cold diag] onPlaybackStateChanged state=" + state + " (3=ready,4=ended)");
+                      }
+                      @Override public void onVideoDecoderInitialized(androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime t, String decoderName, long initDurationMs) {
+                          android.util.Log.i("DigipalVideo", "[cold diag] decoder=" + decoderName + " initMs=" + initDurationMs);
+                      }
+                      @Override public void onRenderedFirstFrame(androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime t, Object output, long renderMs) {
+                          android.util.Log.i("DigipalVideo", "[cold diag] onRenderedFirstFrame renderMs=" + renderMs + " pvAlpha=" + (preloadView != null ? preloadView.getAlpha() : -1f) + " texAlpha=" + (incomingTexView != null ? incomingTexView.getAlpha() : -1f));
+                      }
+                  });
                   final androidx.media3.exoplayer.ExoPlayer oldPlayer = exoPlayer;
                   exoPlayer = coldPlayer; pendingOldPlayer = oldPlayer;
                   final android.os.Handler rh = new android.os.Handler(android.os.Looper.getMainLooper());
@@ -2799,45 +2824,95 @@ import android.os.Looper;
       }
 
       private void showDiagnosticsOverlay() {
-          if (diagnosticsOverlay != null) return;
-          try {
-              android.widget.FrameLayout root = (android.widget.FrameLayout) getWindow().getDecorView();
-              android.widget.TextView diagTv = new android.widget.TextView(this);
-              diagTv.setBackgroundColor(0xCC000000);
-              diagTv.setTextColor(0xFFFFFFFF);
-              diagTv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 16);
-              diagTv.setPadding(60, 60, 60, 60);
-              diagTv.setGravity(android.view.Gravity.CENTER);
-              String ip = "unavailable";
-              try {
-                  WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
-                  if (wm != null) ip = Formatter.formatIpAddress(wm.getConnectionInfo().getIpAddress());
-              } catch (Throwable ignored) {}
-              long uptimeSec = android.os.SystemClock.elapsedRealtime() / 1000;
-              String uptime = String.format("%dh %02dm %02ds", uptimeSec / 3600, (uptimeSec % 3600) / 60, uptimeSec % 60);
-              String ver = "?";
-              try { ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Throwable ignored) {}
-               String curRenderer = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_VIDEO_RENDERER, isFireTv() ? "texture" : "surface");
-               diagTv.setText("DIGIPAL DIAGNOSTICS\n\nPackage: " + getPackageName()
-                       + "\nVersion:  " + ver
-                       + "\nIP:       " + ip
-                       + "\nUptime:   " + uptime
-                       + "\nDevice:   " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL
-                       + "\nRenderer: " + curRenderer + (isFireTv() ? " (Fire TV)" : "")
-                       + "\n\nPress SELECT x7 to toggle this overlay\nPress SELECT x5 to switch renderer + restart",
-                       + "\n\nCurrent renderer: " + curRenderer.toUpperCase() + "  (tap SELECT x5 to toggle)");
-               android.widget.FrameLayout.LayoutParams lp = new android.widget.FrameLayout.LayoutParams(
-                       android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
-                       android.widget.FrameLayout.LayoutParams.MATCH_PARENT);
-               root.addView(diagTv, lp);
-               diagnosticsOverlay = diagTv;
-               diagDismissHandler.postDelayed(this::hideDiagnosticsOverlay, 10_000L);
-          } catch (Throwable e) {
-              android.util.Log.e("Digipal", "showDiagnosticsOverlay failed", e);
-          }
-      }
+            if (diagnosticsOverlay != null) return;
+            try {
+                android.widget.FrameLayout root = (android.widget.FrameLayout) getWindow().getDecorView();
 
-      private void hideDiagnosticsOverlay() {
+                String ip = "unavailable";
+                try {
+                    WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+                    if (wm != null) ip = Formatter.formatIpAddress(wm.getConnectionInfo().getIpAddress());
+                } catch (Throwable ignored) {}
+                long uptimeSec = android.os.SystemClock.elapsedRealtime() / 1000;
+                String uptime = String.format("%dh %02dm %02ds", uptimeSec / 3600, (uptimeSec % 3600) / 60, uptimeSec % 60);
+                String ver = "?";
+                try { ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Throwable ignored) {}
+                final String curRenderer = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                    .getString(PREF_VIDEO_RENDERER, isFireTv() ? "texture" : "surface");
+
+                // Container — vertical LinearLayout so we can stack info + renderer buttons
+                android.widget.LinearLayout container = new android.widget.LinearLayout(this);
+                container.setBackgroundColor(0xCC000000);
+                container.setOrientation(android.widget.LinearLayout.VERTICAL);
+                container.setGravity(android.view.Gravity.CENTER);
+                container.setPadding(60, 60, 60, 60);
+
+                // Diagnostics info text
+                android.widget.TextView infoTv = new android.widget.TextView(this);
+                infoTv.setTextColor(0xFFFFFFFF);
+                infoTv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 16);
+                infoTv.setGravity(android.view.Gravity.CENTER);
+                infoTv.setText("DIGIPAL DIAGNOSTICS\n"
+                    + "\nPackage: " + getPackageName()
+                    + "\nVersion:  " + ver
+                    + "\nIP:       " + ip
+                    + "\nUptime:   " + uptime
+                    + "\nDevice:   " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL
+                    + "\n\nPress SELECT x7 to dismiss");
+                container.addView(infoTv);
+
+                // --- VIDEO RENDERER SETTINGS ROW ---
+                android.widget.TextView rendLabel = new android.widget.TextView(this);
+                rendLabel.setText("\n\nVIDEO RENDERER (persisted in SharedPreferences)");
+                rendLabel.setTextColor(0xFFCCCCCC);
+                rendLabel.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14);
+                rendLabel.setGravity(android.view.Gravity.CENTER);
+                container.addView(rendLabel);
+
+                // Button row: TextureView | SurfaceView
+                android.widget.LinearLayout btnRow = new android.widget.LinearLayout(this);
+                btnRow.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+                btnRow.setGravity(android.view.Gravity.CENTER);
+                btnRow.setPadding(0, 20, 0, 20);
+
+                android.widget.Button btnTexture = new android.widget.Button(this);
+                btnTexture.setText("TextureView" + ("texture".equals(curRenderer) ? " [ACTIVE]" : ""));
+                btnTexture.setFocusable(true);
+                btnTexture.setOnClickListener(v -> {
+                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putString(PREF_VIDEO_RENDERER, "texture").apply();
+                    android.util.Log.i("DigipalVideo", "[Settings] renderer set to texture");
+                    runOnUiThread(() -> { resetVideoRenderer(); hideDiagnosticsOverlay(); showDiagnosticsOverlay(); });
+                });
+
+                android.widget.Button btnSurface = new android.widget.Button(this);
+                btnSurface.setText("SurfaceView" + ("surface".equals(curRenderer) ? " [ACTIVE]" : ""));
+                btnSurface.setFocusable(true);
+                btnSurface.setOnClickListener(v -> {
+                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putString(PREF_VIDEO_RENDERER, "surface").apply();
+                    android.util.Log.i("DigipalVideo", "[Settings] renderer set to surface");
+                    runOnUiThread(() -> { resetVideoRenderer(); hideDiagnosticsOverlay(); showDiagnosticsOverlay(); });
+                });
+
+                android.widget.LinearLayout.LayoutParams btnLp = new android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT);
+                btnLp.setMargins(20, 0, 20, 0);
+                btnRow.addView(btnTexture, btnLp);
+                btnRow.addView(btnSurface, btnLp);
+                container.addView(btnRow);
+
+                android.widget.FrameLayout.LayoutParams lp = new android.widget.FrameLayout.LayoutParams(
+                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT);
+                root.addView(container, lp);
+                diagnosticsOverlay = container;
+                diagDismissHandler.postDelayed(this::hideDiagnosticsOverlay, 30_000L);
+            } catch (Throwable e) {
+                android.util.Log.e("Digipal", "showDiagnosticsOverlay failed", e);
+            }
+        }
+
+        private void hideDiagnosticsOverlay() {
           diagDismissHandler.removeCallbacksAndMessages(null);
           if (diagnosticsOverlay != null) {
               try {
