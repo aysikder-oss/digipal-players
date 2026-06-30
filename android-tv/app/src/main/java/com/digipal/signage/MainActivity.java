@@ -52,6 +52,8 @@ import android.os.Looper;
     private static final String KEY_SERVER_MODE = "server_mode";
     private static final String KEY_AUTO_RELAUNCH = "auto_relaunch";
     private static final String KEY_CHECK_SEC = "relaunch_check_sec";
+    /** "texture" or "surface" — defaults to "texture" on Fire TV, "surface" elsewhere */
+    private static final String PREF_VIDEO_RENDERER = "pref_video_renderer";
     private boolean isUserClosing = false;
     private View customView;
     private FrameLayout customViewContainer;
@@ -63,6 +65,9 @@ import android.os.Looper;
 
     // Native media overlay views (ExoPlayer + Glide) â Android TV only
     private androidx.media3.ui.PlayerView nativeVideoView;
+    // TextureView pair for Fire TV — used when pref_video_renderer="texture"
+    private android.view.TextureView nativeTexViewA;
+    private android.view.TextureView nativeTexViewB;
     private android.widget.ImageView nativeImageView;
     private androidx.media3.exoplayer.ExoPlayer exoPlayer;
       // ExoPlayer on-disk video cache (OptiSigns-style LRU, 2 GB max)
@@ -218,14 +223,25 @@ import android.os.Looper;
         nativeVideoView = new androidx.media3.ui.PlayerView(this);
         nativeVideoView.setUseController(false);
         nativeVideoView.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        nativeVideoView.setKeepContentOnPlayerReset(true);
+        try { nativeVideoView.setShutterBackgroundColor(android.graphics.Color.TRANSPARENT); } catch (Throwable ignored) {}
         nativeVideoView.setVisibility(View.INVISIBLE);
         root.addView(nativeVideoView, new FrameLayout.LayoutParams(1, 1));
         // Dual-buffer B video view â preloaded content renders here while A is visible
         nativeVideoViewB = new androidx.media3.ui.PlayerView(this);
         nativeVideoViewB.setUseController(false);
         nativeVideoViewB.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        nativeVideoViewB.setKeepContentOnPlayerReset(true);
+        try { nativeVideoViewB.setShutterBackgroundColor(android.graphics.Color.TRANSPARENT); } catch (Throwable ignored) {}
         nativeVideoViewB.setVisibility(View.INVISIBLE);
         root.addView(nativeVideoViewB, new FrameLayout.LayoutParams(1, 1));
+        // TextureView overlays for Fire TV — used when pref_video_renderer="texture"
+        nativeTexViewA = new android.view.TextureView(this);
+        nativeTexViewA.setVisibility(View.INVISIBLE); nativeTexViewA.setAlpha(0f);
+        root.addView(nativeTexViewA, new FrameLayout.LayoutParams(1, 1));
+        nativeTexViewB = new android.view.TextureView(this);
+        nativeTexViewB.setVisibility(View.INVISIBLE); nativeTexViewB.setAlpha(0f);
+        root.addView(nativeTexViewB, new FrameLayout.LayoutParams(1, 1));
         // Native image overlay (Glide ImageView) â sits above nativeVideoView
         nativeImageView = new RecyclingSafeImageView(this);
         nativeImageView.setVisibility(View.INVISIBLE);
@@ -808,6 +824,11 @@ import android.os.Looper;
                         // Active view = currently visible; preloadView = invisible, holds the buffered content
                         final androidx.media3.ui.PlayerView activeView  = activeVideoViewIsA ? nativeVideoView : nativeVideoViewB;
                         final androidx.media3.ui.PlayerView preloadView = activeVideoViewIsA ? nativeVideoViewB : nativeVideoView;
+                        // TextureView refs (Fire TV path)
+                        final boolean useTexture = useTextureViewRenderer();
+                        final android.view.TextureView activeTexView   = activeVideoViewIsA ? nativeTexViewA : nativeTexViewB;
+                        final android.view.TextureView incomingTexView = activeVideoViewIsA ? nativeTexViewB : nativeTexViewA;
+                        android.util.Log.d("DigipalVideo", "[schedPlay] url=" + (url.length() > 60 ? url.substring(0, 60) : url) + " useTexture=" + useTexture + " fromPreload=" + fromPreload + " pvState=" + (exoPlayer != null ? exoPlayer.getPlaybackState() : -1));
                         // Discard any pending-old player that was never cleaned up (e.g. back-to-back plays)
                           if (pendingOldPlayer != null) { try { pendingOldPlayer.stop(); pendingOldPlayer.release(); } catch (Throwable ignored) {} pendingOldPlayer = null; }
                           // DIAG: timing + device state for every video transition
@@ -829,10 +850,23 @@ import android.os.Looper;
                               // Move preloadView to the actual display position/size
                               preloadView.setResizeMode(resizeMode);
                               preloadView.setLayoutParams(lp);
+                // Make VISIBLE with alpha=0 so SurfaceView/TextureView renders immediately (Fire TV fix)
+                if (useTexture) {
+                    incomingTexView.setLayoutParams(lp);
+                    incomingTexView.setVisibility(View.VISIBLE); incomingTexView.setAlpha(0f);
+                } else {
+                    preloadView.setVisibility(View.VISIBLE); preloadView.setAlpha(0f);
+                }
                               if (preloadVideoReady) {
                                   // First frame already rendered on preloadView surface â instant, zero-black swap
-                                  preloadView.setVisibility(View.VISIBLE);
-                                  activeView.setVisibility(View.INVISIBLE);
+                                  // Alpha swap — incoming becomes visible, outgoing fades out (fixes Fire TV blank SurfaceView)
+                                  if (useTexture) {
+                                      incomingTexView.setAlpha(1f); incomingTexView.setVisibility(View.VISIBLE);
+                                      activeTexView.setAlpha(0f);   activeTexView.setVisibility(View.INVISIBLE);
+                                  } else {
+                                      preloadView.setAlpha(1f); preloadView.setVisibility(View.VISIBLE);
+                                      activeView.setAlpha(0f);  activeView.setVisibility(View.INVISIBLE);
+                                  }
                                   activeVideoViewIsA = !activeVideoViewIsA;
                                   preloadVideoReady = false;
                                   // Release old player now that new content is confirmed visible
@@ -851,8 +885,14 @@ import android.os.Looper;
                                           if (done[0]) return; done[0] = true;
                                           runOnUiThread(() -> {
                                               if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
-                                              preloadView.setVisibility(View.VISIBLE);
-                                              activeView.setVisibility(View.INVISIBLE);
+                                              // Alpha swap — incoming becomes visible, outgoing fades out (fixes Fire TV blank SurfaceView)
+                                              if (useTexture) {
+                                                  incomingTexView.setAlpha(1f); incomingTexView.setVisibility(View.VISIBLE);
+                                                  activeTexView.setAlpha(0f);   activeTexView.setVisibility(View.INVISIBLE);
+                                              } else {
+                                                  preloadView.setAlpha(1f); preloadView.setVisibility(View.VISIBLE);
+                                                  activeView.setAlpha(0f);  activeView.setVisibility(View.INVISIBLE);
+                                              }
                                               activeVideoViewIsA = !activeVideoViewIsA;
                                               preloadVideoReady = false;
                                               pendingOldPlayer = null;
@@ -889,8 +929,14 @@ import android.os.Looper;
                                       @Override public void run() {
                                           videoReadyHandler = null; videoReadyRunnable = null; nativeVideoListener = null;
                                           if (done[0]) return; done[0] = true;
-                                          preloadView.setVisibility(View.VISIBLE);
-                                          activeView.setVisibility(View.INVISIBLE);
+                                          // Alpha swap — incoming becomes visible, outgoing fades out (fixes Fire TV blank SurfaceView)
+                                          if (useTexture) {
+                                              incomingTexView.setAlpha(1f); incomingTexView.setVisibility(View.VISIBLE);
+                                              activeTexView.setAlpha(0f);   activeTexView.setVisibility(View.INVISIBLE);
+                                          } else {
+                                              preloadView.setAlpha(1f); preloadView.setVisibility(View.VISIBLE);
+                                              activeView.setAlpha(0f);  activeView.setVisibility(View.INVISIBLE);
+                                          }
                                           activeVideoViewIsA = !activeVideoViewIsA;
                                           preloadVideoReady = false;
                                           pendingOldPlayer = null;
@@ -911,9 +957,20 @@ import android.os.Looper;
                                   preloadView.setPlayer(null);
                               }
                               // Build new player on preloadView â old exoPlayer keeps playing on activeView
-                              final androidx.media3.exoplayer.ExoPlayer coldPlayer = buildCachedExoPlayer();
-                              preloadView.setPlayer(coldPlayer);
-                              preloadView.setResizeMode(resizeMode);
+                              if (useTexture) {
+                                  // Fire TV TextureView path: skip SurfaceView, render into TextureView directly
+                                  preloadView.setPlayer(null);
+                                  coldPlayer.setVideoTextureView(incomingTexView);
+                                  incomingTexView.setLayoutParams(lp);
+                                  incomingTexView.setVisibility(View.VISIBLE); incomingTexView.setAlpha(0f);
+                                  android.util.Log.d("DigipalVideo", "[cold-load] TextureView path started, alpha=0");
+                              } else {
+                                  preloadView.setPlayer(coldPlayer);
+                                  preloadView.setResizeMode(resizeMode); preloadView.setLayoutParams(lp);
+                                  // VISIBLE+alpha=0 so SurfaceView renders immediately (fixes Fire TV blank video)
+                                  preloadView.setVisibility(View.VISIBLE); preloadView.setAlpha(0f);
+                                  android.util.Log.d("DigipalVideo", "[cold-load] SurfaceView path started, alpha=0");
+                              }
                               preloadView.setLayoutParams(lp);
                               coldPlayer.setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.parse(url)));
                               coldPlayer.setRepeatMode(loop ? androidx.media3.common.Player.REPEAT_MODE_ONE : androidx.media3.common.Player.REPEAT_MODE_OFF);
@@ -951,8 +1008,14 @@ import android.os.Looper;
                                       final long diagLatencyMs = android.os.SystemClock.elapsedRealtime() - diagT0;
                                       android.util.Log.i("DigipalMetrics", "[onRenderedFirstFrame] path=" + diagPath + " latencyMs=" + diagLatencyMs);
                                       runOnUiThread(() -> {
-                                          preloadView.setVisibility(View.VISIBLE);
-                                          activeView.setVisibility(View.INVISIBLE);
+                                          // Alpha swap — incoming becomes visible, outgoing fades out (fixes Fire TV blank SurfaceView)
+                                          if (useTexture) {
+                                              incomingTexView.setAlpha(1f); incomingTexView.setVisibility(View.VISIBLE);
+                                              activeTexView.setAlpha(0f);   activeTexView.setVisibility(View.INVISIBLE);
+                                          } else {
+                                              preloadView.setAlpha(1f); preloadView.setVisibility(View.VISIBLE);
+                                              activeView.setAlpha(0f);  activeView.setVisibility(View.INVISIBLE);
+                                          }
                                           activeVideoViewIsA = !activeVideoViewIsA;
                                           pendingOldPlayer = null;
                                           if (oldPlayer != null) { try { oldPlayer.stop(); oldPlayer.release(); } catch (Throwable ignored) {} }
@@ -1170,8 +1233,17 @@ import android.os.Looper;
                           // Size the inactive view to full screen so ExoPlayer has a real surface to decode into
                           preloadView.setLayoutParams(new FrameLayout.LayoutParams(
                               FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-                          preloadPlayer = buildCachedExoPlayer();
-                          preloadView.setPlayer(preloadPlayer);
+                               preloadPlayer = buildCachedExoPlayer();
+                               if (useTextureViewRenderer()) {
+                                   final android.view.TextureView preloadTex = activeVideoViewIsA ? nativeTexViewB : nativeTexViewA;
+                                   preloadView.setPlayer(null);
+                                   preloadPlayer.setVideoTextureView(preloadTex);
+                                   preloadTex.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+                                   preloadTex.setVisibility(View.VISIBLE); preloadTex.setAlpha(0f);
+                               } else {
+                                   preloadView.setPlayer(preloadPlayer);
+                                   preloadView.setVisibility(View.VISIBLE); preloadView.setAlpha(0f);
+                               }
                           preloadPlayer.setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.parse(url)));
                           preloadPlayer.setVolume(0f);       // silent â not visible yet
                           preloadPlayer.setPlayWhenReady(false);
@@ -1448,7 +1520,9 @@ import android.os.Looper;
                   exoPlayer.setVolume(volume); exoPlayer.play();
                   preloadView.setResizeMode(resizeMode); preloadView.setLayoutParams(lp);
                   if (preloadVideoReady) {
-                      preloadView.setVisibility(View.VISIBLE); activeView.setVisibility(View.INVISIBLE);
+                      // Alpha swap — incoming becomes visible, outgoing fades out (fixes Fire TV blank SurfaceView)
+                      if (useTexture) { incomingTexView.setAlpha(1f); incomingTexView.setVisibility(View.VISIBLE); activeTexView.setAlpha(0f); activeTexView.setVisibility(View.INVISIBLE); }
+                      else { preloadView.setAlpha(1f); preloadView.setVisibility(View.VISIBLE); activeView.setAlpha(0f); activeView.setVisibility(View.INVISIBLE); }
                       activeVideoViewIsA = !activeVideoViewIsA; preloadVideoReady = false;
                       pendingOldPlayer = null;
                       if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
@@ -1462,7 +1536,9 @@ import android.os.Looper;
                               if (done[0]) return; done[0] = true;
                               runOnUiThread(() -> {
                                   if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
-                                  preloadView.setVisibility(View.VISIBLE); activeView.setVisibility(View.INVISIBLE);
+                                  // Alpha swap — incoming becomes visible, outgoing fades out (fixes Fire TV blank SurfaceView)
+                                  if (useTexture) { incomingTexView.setAlpha(1f); incomingTexView.setVisibility(View.VISIBLE); activeTexView.setAlpha(0f); activeTexView.setVisibility(View.INVISIBLE); }
+                                  else { preloadView.setAlpha(1f); preloadView.setVisibility(View.VISIBLE); activeView.setAlpha(0f); activeView.setVisibility(View.INVISIBLE); }
                                   activeVideoViewIsA = !activeVideoViewIsA; preloadVideoReady = false;
                                   pendingOldPlayer = null;
                                   if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
@@ -1489,7 +1565,9 @@ import android.os.Looper;
                           @Override public void run() {
                               videoReadyHandler = null; videoReadyRunnable = null; nativeVideoListener = null;
                               if (done[0]) return; done[0] = true;
-                              preloadView.setVisibility(View.VISIBLE); activeView.setVisibility(View.INVISIBLE);
+                              // Alpha swap — incoming becomes visible, outgoing fades out (fixes Fire TV blank SurfaceView)
+                              if (useTexture) { incomingTexView.setAlpha(1f); incomingTexView.setVisibility(View.VISIBLE); activeTexView.setAlpha(0f); activeTexView.setVisibility(View.INVISIBLE); }
+                              else { preloadView.setAlpha(1f); preloadView.setVisibility(View.VISIBLE); activeView.setAlpha(0f); activeView.setVisibility(View.INVISIBLE); }
                               activeVideoViewIsA = !activeVideoViewIsA; preloadVideoReady = false;
                                 pendingOldPlayer = null;
                                 if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
@@ -1545,7 +1623,9 @@ import android.os.Looper;
                           if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
                           if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
                           runOnUiThread(() -> {
-                              preloadView.setVisibility(View.VISIBLE); activeView.setVisibility(View.INVISIBLE);
+                              // Alpha swap — incoming becomes visible, outgoing fades out (fixes Fire TV blank SurfaceView)
+                              if (useTexture) { incomingTexView.setAlpha(1f); incomingTexView.setVisibility(View.VISIBLE); activeTexView.setAlpha(0f); activeTexView.setVisibility(View.INVISIBLE); }
+                              else { preloadView.setAlpha(1f); preloadView.setVisibility(View.VISIBLE); activeView.setAlpha(0f); activeView.setVisibility(View.INVISIBLE); }
                               activeVideoViewIsA = !activeVideoViewIsA;
                               pendingOldPlayer = null;
                               if (oldPlayer != null) { try { oldPlayer.stop(); oldPlayer.release(); } catch (Throwable ignored) {} }
@@ -1584,6 +1664,43 @@ import android.os.Looper;
                   exoPlayer.addListener(nativeVideoListener);
               }
           } catch (Exception e) { android.util.Log.e("DigipalNative", "playNativeVideoForScheduler error", e); }
+      }
+
+      /** True when running on an Amazon Fire TV / Fire Stick device. */
+      private boolean isFireTv() {
+          return android.os.Build.MANUFACTURER.equalsIgnoreCase("Amazon")
+              || android.os.Build.MODEL.toUpperCase().startsWith("AFT");
+      }
+
+      /** Returns true when TextureView renderer is selected (default for Fire TV). */
+      private boolean useTextureViewRenderer() {
+          String def = isFireTv() ? "texture" : "surface";
+          String pref = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+              .getString(PREF_VIDEO_RENDERER, def);
+          return "texture".equals(pref);
+      }
+
+      /**
+       * Releases both video PlayerViews and reattaches them with the currently-selected
+       * surface type. Call after the user changes pref_video_renderer in settings.
+       */
+      private void resetVideoRenderer() {
+          try {
+              // Release active player
+              if (exoPlayer != null) {
+                  try { exoPlayer.stop(); exoPlayer.release(); } catch (Throwable ignored) {}
+                  exoPlayer = null;
+              }
+              // Detach PlayerViews and reset TextureViews to idle state
+              if (nativeVideoView  != null) { try { nativeVideoView.setPlayer(null);  } catch (Throwable ignored) {} nativeVideoView.setVisibility(View.INVISIBLE);  }
+              if (nativeVideoViewB != null) { try { nativeVideoViewB.setPlayer(null); } catch (Throwable ignored) {} nativeVideoViewB.setVisibility(View.INVISIBLE); }
+              if (nativeTexViewA   != null) { nativeTexViewA.setAlpha(0f);   nativeTexViewA.setVisibility(View.INVISIBLE);   }
+              if (nativeTexViewB   != null) { nativeTexViewB.setAlpha(0f);   nativeTexViewB.setVisibility(View.INVISIBLE);   }
+              activeVideoViewIsA = true;
+              android.util.Log.i("DigipalVideo", "[resetVideoRenderer] renderer=" + (useTextureViewRenderer() ? "texture" : "surface"));
+          } catch (Throwable e) {
+              android.util.Log.e("DigipalVideo", "resetVideoRenderer error", e);
+          }
       }
 
       private void initNativeComponents() {
@@ -2527,6 +2644,22 @@ import android.os.Looper;
               long now = System.currentTimeMillis();
               if (now - dpadFirstPressMs > 5_000L) { dpadPressCount = 0; dpadFirstPressMs = now; }
               dpadPressCount++;
+              if (dpadPressCount == 5) {
+                  // 5 DPAD presses: toggle video renderer (TextureView ↔ SurfaceView) + restart pipeline
+                  dpadPressCount = 0;
+                  android.content.SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+                  String cur = prefs.getString(PREF_VIDEO_RENDERER, isFireTv() ? "texture" : "surface");
+                  String next = "texture".equals(cur) ? "surface" : "texture";
+                  prefs.edit().putString(PREF_VIDEO_RENDERER, next).apply();
+                  android.util.Log.i("DigipalVideo", "[DPAD5] renderer toggled: " + cur + " -> " + next);
+                  runOnUiThread(() -> {
+                      resetVideoRenderer();
+                      // Brief toast-style feedback via diagnostics overlay
+                      if (diagnosticsOverlay != null) hideDiagnosticsOverlay();
+                      showDiagnosticsOverlay();
+                  });
+                  return true;
+              }
               if (dpadPressCount >= 7) {
                   dpadPressCount = 0;
                   if (diagnosticsOverlay != null) hideDiagnosticsOverlay();
@@ -2684,17 +2817,21 @@ import android.os.Looper;
               String uptime = String.format("%dh %02dm %02ds", uptimeSec / 3600, (uptimeSec % 3600) / 60, uptimeSec % 60);
               String ver = "?";
               try { ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Throwable ignored) {}
-              diagTv.setText("DIGIPAL DIAGNOSTICS\n\nPackage: " + getPackageName()
-                      + "\nVersion:  " + ver
-                      + "\nIP:       " + ip
-                      + "\nUptime:   " + uptime
-                      + "\n\nPress SELECT again or wait 10s to dismiss");
-              android.widget.FrameLayout.LayoutParams lp = new android.widget.FrameLayout.LayoutParams(
-                      android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
-                      android.widget.FrameLayout.LayoutParams.MATCH_PARENT);
-              root.addView(diagTv, lp);
-              diagnosticsOverlay = diagTv;
-              diagDismissHandler.postDelayed(this::hideDiagnosticsOverlay, 10_000L);
+               String curRenderer = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_VIDEO_RENDERER, isFireTv() ? "texture" : "surface");
+               diagTv.setText("DIGIPAL DIAGNOSTICS\n\nPackage: " + getPackageName()
+                       + "\nVersion:  " + ver
+                       + "\nIP:       " + ip
+                       + "\nUptime:   " + uptime
+                       + "\nDevice:   " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL
+                       + "\nRenderer: " + curRenderer + (isFireTv() ? " (Fire TV)" : "")
+                       + "\n\nPress SELECT x7 to toggle this overlay\nPress SELECT x5 to switch renderer + restart",
+                       + "\n\nCurrent renderer: " + curRenderer.toUpperCase() + "  (tap SELECT x5 to toggle)");
+               android.widget.FrameLayout.LayoutParams lp = new android.widget.FrameLayout.LayoutParams(
+                       android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                       android.widget.FrameLayout.LayoutParams.MATCH_PARENT);
+               root.addView(diagTv, lp);
+               diagnosticsOverlay = diagTv;
+               diagDismissHandler.postDelayed(this::hideDiagnosticsOverlay, 10_000L);
           } catch (Throwable e) {
               android.util.Log.e("Digipal", "showDiagnosticsOverlay failed", e);
           }
