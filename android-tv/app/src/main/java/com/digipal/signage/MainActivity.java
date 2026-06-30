@@ -1068,11 +1068,9 @@ import android.os.Looper;
                             if (exoPlayer != null) exoPlayer.removeListener(nativeVideoListener);
                             nativeVideoListener = null;
                         }
-                        if (exoPlayer != null) { exoPlayer.stop(); exoPlayer.clearMediaItems(); }
-                        // Also release any old player held alive during a swap-wait
-                        if (pendingOldPlayer != null) { try { pendingOldPlayer.stop(); pendingOldPlayer.release(); } catch (Throwable ignored) {} pendingOldPlayer = null; }
-                        nativeVideoView.setVisibility(View.INVISIBLE);
-                        if (nativeVideoViewB != null) nativeVideoViewB.setVisibility(View.INVISIBLE);
+                        releaseVideoPlayer(exoPlayer); exoPlayer = null;
+                        if (pendingOldPlayer != null) { releaseVideoPlayer(pendingOldPlayer); pendingOldPlayer = null; }
+                        hideNativeVideoSurfaces();
                     } catch (Exception e) {}
                 });
             }
@@ -1633,8 +1631,7 @@ import android.os.Looper;
                               try { _timedOut.stop(); _timedOut.release(); } catch (Throwable ignored) {}
                               if (exoPlayer == _timedOut) exoPlayer = null;
                           }
-                          if (nativeVideoView  != null) nativeVideoView.setVisibility(android.view.View.INVISIBLE);
-                          if (nativeVideoViewB != null) nativeVideoViewB.setVisibility(android.view.View.INVISIBLE);
+                          hideNativeVideoSurfaces();
                           if (nativeImageView  != null) nativeImageView.setVisibility(android.view.View.INVISIBLE);
                           if (nativeImageViewB != null) nativeImageViewB.setVisibility(android.view.View.INVISIBLE);
                           if (webView != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
@@ -1676,9 +1673,7 @@ import android.os.Looper;
                               try { _failedSched.stop(); _failedSched.release(); } catch (Throwable ignored) {}
                           }
                           if (preloadView != null) preloadView.setPlayer(null);
-                          // Hide all native surfaces so WebView is not covered
-                          if (nativeVideoView  != null) nativeVideoView.setVisibility(android.view.View.INVISIBLE);
-                          if (nativeVideoViewB != null) nativeVideoViewB.setVisibility(android.view.View.INVISIBLE);
+                          hideNativeVideoSurfaces();
                           if (nativeImageView  != null) nativeImageView.setVisibility(android.view.View.INVISIBLE);
                           if (nativeImageViewB != null) nativeImageViewB.setVisibility(android.view.View.INVISIBLE);
                           if (webView != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
@@ -1753,7 +1748,31 @@ import android.os.Looper;
           }
       }
 
-      private void initNativeComponents() {
+      /** Detach player p from both TextureViews and both PlayerViews. Safe with null. */
+        private void clearVideoOutput(androidx.media3.exoplayer.ExoPlayer p) {
+            if (p == null) return;
+            try { p.setVideoTextureView(null); } catch (Throwable ignored) {}
+            try { p.setVideoSurface(null);     } catch (Throwable ignored) {}
+            try { if (nativeVideoView  != null) nativeVideoView.setPlayer(null);  } catch (Throwable ignored) {}
+            try { if (nativeVideoViewB != null) nativeVideoViewB.setPlayer(null); } catch (Throwable ignored) {}
+        }
+
+        /** Set all four video surfaces alpha=0/INVISIBLE — nothing covers WebView/design/kiosk. */
+        private void hideNativeVideoSurfaces() {
+            if (nativeVideoView  != null) { nativeVideoView.setAlpha(0f);  nativeVideoView.setVisibility(View.INVISIBLE);  }
+            if (nativeVideoViewB != null) { nativeVideoViewB.setAlpha(0f); nativeVideoViewB.setVisibility(View.INVISIBLE); }
+            if (nativeTexViewA   != null) { nativeTexViewA.setAlpha(0f);   nativeTexViewA.setVisibility(View.INVISIBLE);   }
+            if (nativeTexViewB   != null) { nativeTexViewB.setAlpha(0f);   nativeTexViewB.setVisibility(View.INVISIBLE);   }
+        }
+
+        /** Clear output binding then stop+release player. Safe with null. */
+        private void releaseVideoPlayer(androidx.media3.exoplayer.ExoPlayer p) {
+            if (p == null) return;
+            clearVideoOutput(p);
+            try { p.stop(); p.release(); } catch (Throwable ignored) {}
+        }
+
+        private void initNativeComponents() {
           try {
               playlistRepository = new PlaylistRepository(this);
               telemetryManager   = new TelemetryManager(this, playlistRepository, getServerUrl());
@@ -1946,7 +1965,16 @@ import android.os.Looper;
                                   _am.getMemoryInfo(_mi); if (_mi.lowMemory) return;
                                   preloadView.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
                                   preloadPlayer = buildCachedExoPlayer();
-                                  preloadView.setPlayer(preloadPlayer);
+                                  if (useTextureViewRenderer()) {
+                                    final android.view.TextureView _preloadTex = activeVideoViewIsA ? nativeTexViewB : nativeTexViewA;
+                                    preloadView.setPlayer(null);
+                                    preloadPlayer.setVideoTextureView(_preloadTex);
+                                    _preloadTex.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+                                    _preloadTex.setVisibility(View.VISIBLE); _preloadTex.setAlpha(0f);
+                                  } else {
+                                    preloadView.setPlayer(preloadPlayer);
+                                    preloadView.setVisibility(View.VISIBLE); preloadView.setAlpha(0f);
+                                  }
                                   preloadPlayer.setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.parse(_url)));
                                   preloadPlayer.setVolume(0f); preloadPlayer.setPlayWhenReady(false); preloadPlayer.prepare();
                                   preloadedVideoUrl = _url;
@@ -1992,6 +2020,7 @@ import android.os.Looper;
                           final int _contentId = s.contentId;
                           runOnUiThread(() -> {
                               try {
+                                  hideNativeVideoSurfaces(); // ensure no stale TextureView covers WebView
                                   if (webView != null) {
                                       webView.resumeTimers();
                                       // Sync React playlist index to the WebView slide PlaylistScheduler intends.
@@ -2025,21 +2054,9 @@ import android.os.Looper;
                                       if (exoPlayer != null) exoPlayer.removeListener(nativeVideoListener);
                                       nativeVideoListener = null;
                                   }
-                                  if (exoPlayer != null) {
-                                      try {
-                                          exoPlayer.stop();
-                                          exoPlayer.clearMediaItems();
-                                          try { nativeVideoView.setPlayer(null); } catch (Throwable ignored) {}
-                                          try { nativeVideoViewB.setPlayer(null); } catch (Throwable ignored) {}
-                                          exoPlayer.release();
-                                          exoPlayer = null;
-                                      } catch (Throwable ignored) {}
-                                  }
-                                  if (pendingOldPlayer != null) { try { pendingOldPlayer.stop(); pendingOldPlayer.release(); } catch (Throwable ignored) {} pendingOldPlayer = null; }
-                                  final androidx.media3.ui.PlayerView activeView = activeVideoViewIsA ? nativeVideoView : nativeVideoViewB;
-                                  final androidx.media3.ui.PlayerView inactiveView = activeVideoViewIsA ? nativeVideoViewB : nativeVideoView;
-                                  activeView.setVisibility(View.INVISIBLE);
-                                  inactiveView.setVisibility(View.INVISIBLE);
+                                  releaseVideoPlayer(exoPlayer); exoPlayer = null;
+                                  if (pendingOldPlayer != null) { releaseVideoPlayer(pendingOldPlayer); pendingOldPlayer = null; }
+                                  hideNativeVideoSurfaces();
                               } catch (Throwable ignored) {}
                           });
                       }
@@ -2795,9 +2812,8 @@ import android.os.Looper;
                   try { pendingOldPlayer.stop(); pendingOldPlayer.release(); } catch (Throwable ignored) {}
                   pendingOldPlayer = null;
               }
-              // Detach players from video views to release SurfaceView GPU memory
-              if (nativeVideoView != null) { try { nativeVideoView.setPlayer(null); } catch (Throwable ignored) {} nativeVideoView.setVisibility(View.INVISIBLE); }
-              if (nativeVideoViewB != null) { try { nativeVideoViewB.setPlayer(null); } catch (Throwable ignored) {} nativeVideoViewB.setVisibility(View.INVISIBLE); }
+              // Detach players from all video surfaces and hide everything
+              hideNativeVideoSurfaces();
               // Cancel all pending Glide decodes (prevent callbacks on destroyed activity)
               if (nativeImageView != null) {
                   try { com.bumptech.glide.Glide.with(MainActivity.this).clear(nativeImageView); } catch (Throwable ignored) {}
