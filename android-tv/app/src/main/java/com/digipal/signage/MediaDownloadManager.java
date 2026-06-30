@@ -414,6 +414,11 @@ package com.digipal.signage;
           }
       }
 
+      /** Release executor resources. Call from MainActivity.onDestroy(). */
+      public void shutdown() {
+          try { executor.shutdownNow(); } catch (Throwable ignored) {}
+      }
+
       private String escapeJs(String s) {
           if (s == null) return "";
           return s.replace("\\", "\\\\")
