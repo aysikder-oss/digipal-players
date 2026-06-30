@@ -1537,6 +1537,8 @@ import android.os.Looper;
                           if (webView != null) webView.evaluateJavascript(
                               "try{window.__digipalGotoSlide&&window.__digipalGotoSlide(" + contentId + ");}catch(e){}", null);
                           if (playlistScheduler != null) playlistScheduler.onRendererReady(slideId);
+                      }
+                  };
                   videoReadyHandler = rh; videoReadyRunnable = rc; rh.postDelayed(rc, 8000);
                   nativeVideoListener = new androidx.media3.common.Player.Listener() {
                       @Override public void onRenderedFirstFrame() {
@@ -2255,6 +2257,7 @@ import android.os.Looper;
         }
         webViewRecoveryInProgress = true;
         // Report WebView crash to RecoveryCoordinator for escalation tracking
+        if (recoveryCoordinator != null) {
             recoveryCoordinator.reportWebViewCrash("render_process_gone",
                     memoryBudgetManager != null ? memoryBudgetManager.getCurrentTier() : null);
         }
