@@ -1579,6 +1579,7 @@ import android.os.Looper;
                           if (webView != null) webView.evaluateJavascript(
                               "try{window.__digipalGotoSlide&&window.__digipalGotoSlide(" + contentId + ");}catch(e){}", null);
                           if (playlistScheduler != null) playlistScheduler.onRendererReady(slideId);
+                      }
                   };
                   exoPlayer.addListener(nativeVideoListener);
               }
