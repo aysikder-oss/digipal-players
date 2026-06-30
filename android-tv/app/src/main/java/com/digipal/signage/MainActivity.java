@@ -1709,20 +1709,41 @@ import android.os.Looper;
        * Releases both video PlayerViews and reattaches them with the currently-selected
        * surface type. Call after the user changes pref_video_renderer in settings.
        */
+      /**
+       * Full renderer reset: tears down all active players and surface bindings, then
+       * re-establishes the view-pair state for the renderer mode currently in SharedPrefs.
+       * Call after the user changes pref_video_renderer in settings.
+       */
       private void resetVideoRenderer() {
           try {
-              // Release active player
+              boolean useTexture = useTextureViewRenderer();
+              android.util.Log.i("DigipalVideo", "[resetVideoRenderer] mode=" + (useTexture ? "texture" : "surface") + " — releasing players...");
+              // 1. Detach texture/surface binding BEFORE release so ExoPlayer does not hold a dead surface
               if (exoPlayer != null) {
+                  try {
+                      if (useTexture) { exoPlayer.setVideoTextureView(null); }
+                      else            { exoPlayer.setVideoSurface(null); }
+                  } catch (Throwable ignored) {}
                   try { exoPlayer.stop(); exoPlayer.release(); } catch (Throwable ignored) {}
                   exoPlayer = null;
               }
-              // Detach PlayerViews and reset TextureViews to idle state
-              if (nativeVideoView  != null) { try { nativeVideoView.setPlayer(null);  } catch (Throwable ignored) {} nativeVideoView.setVisibility(View.INVISIBLE);  }
-              if (nativeVideoViewB != null) { try { nativeVideoViewB.setPlayer(null); } catch (Throwable ignored) {} nativeVideoViewB.setVisibility(View.INVISIBLE); }
-              if (nativeTexViewA   != null) { nativeTexViewA.setAlpha(0f);   nativeTexViewA.setVisibility(View.INVISIBLE);   }
-              if (nativeTexViewB   != null) { nativeTexViewB.setAlpha(0f);   nativeTexViewB.setVisibility(View.INVISIBLE);   }
+              // 2. Release preload player (if any)
+              if (preloadPlayer != null) {
+                  try {
+                      if (useTexture) { preloadPlayer.setVideoTextureView(null); }
+                      preloadPlayer.stop(); preloadPlayer.release();
+                  } catch (Throwable ignored) {}
+                  preloadPlayer = null; preloadedVideoUrl = null; preloadVideoReady = false;
+              }
+              // 3. Detach and hide PlayerViews (SurfaceView path)
+              if (nativeVideoView  != null) { try { nativeVideoView.setPlayer(null);  } catch (Throwable ignored) {} nativeVideoView.setAlpha(0f);  nativeVideoView.setVisibility(View.INVISIBLE);  }
+              if (nativeVideoViewB != null) { try { nativeVideoViewB.setPlayer(null); } catch (Throwable ignored) {} nativeVideoViewB.setAlpha(0f); nativeVideoViewB.setVisibility(View.INVISIBLE); }
+              // 4. Clear TextureView alpha/visibility (TextureView path)
+              if (nativeTexViewA != null) { nativeTexViewA.setAlpha(0f); nativeTexViewA.setVisibility(View.INVISIBLE); }
+              if (nativeTexViewB != null) { nativeTexViewB.setAlpha(0f); nativeTexViewB.setVisibility(View.INVISIBLE); }
+              // 5. Reset slot pointer so next playNativeVideo() starts clean in slot A
               activeVideoViewIsA = true;
-              android.util.Log.i("DigipalVideo", "[resetVideoRenderer] renderer=" + (useTextureViewRenderer() ? "texture" : "surface"));
+              android.util.Log.i("DigipalVideo", "[resetVideoRenderer] done — next pipeline will use " + (useTexture ? "TextureView" : "SurfaceView"));
           } catch (Throwable e) {
               android.util.Log.e("DigipalVideo", "resetVideoRenderer error", e);
           }
@@ -2647,6 +2668,7 @@ import android.os.Looper;
         isUserClosing = true;
         Intent intent = new Intent(this, ServerSetupActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+        intent.putExtra("show_settings", true);
         startActivity(intent);
         finish();
     }
