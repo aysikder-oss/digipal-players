@@ -957,6 +957,7 @@ import android.os.Looper;
                                   preloadView.setPlayer(null);
                               }
                               // Build new player on preloadView â old exoPlayer keeps playing on activeView
+                              final androidx.media3.exoplayer.ExoPlayer coldPlayer = buildCachedExoPlayer();
                               if (useTexture) {
                                   // Fire TV TextureView path: skip SurfaceView, render into TextureView directly
                                   preloadView.setPlayer(null);
@@ -1511,6 +1512,9 @@ import android.os.Looper;
                                androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT;
               final androidx.media3.ui.PlayerView activeView  = activeVideoViewIsA ? nativeVideoView : nativeVideoViewB;
               final androidx.media3.ui.PlayerView preloadView = activeVideoViewIsA ? nativeVideoViewB : nativeVideoView;
+              final boolean useTexture = useTextureViewRenderer();
+              final android.view.TextureView activeTexView  = activeVideoViewIsA ? nativeTexViewA : nativeTexViewB;
+              final android.view.TextureView incomingTexView = activeVideoViewIsA ? nativeTexViewB : nativeTexViewA;
               if (pendingOldPlayer != null) { try { pendingOldPlayer.stop(); pendingOldPlayer.release(); } catch (Throwable ignored) {} pendingOldPlayer = null; }
               if (fromPreload) {
                   final androidx.media3.exoplayer.ExoPlayer oldPlayer = exoPlayer;
