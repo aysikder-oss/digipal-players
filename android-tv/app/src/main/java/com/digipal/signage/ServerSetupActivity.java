@@ -43,6 +43,7 @@ public class ServerSetupActivity extends Activity {
     private static final String KEY_SERVER_URL = "server_url";
     private static final String KEY_SERVER_MODE = "server_mode";
     private static final String SERVICE_TYPE = "_digipal._tcp.";
+    private static final String PREF_VIDEO_RENDERER = "pref_video_renderer";
 
     private NsdManager nsdManager;
     private NsdManager.DiscoveryListener discoveryListener;
@@ -79,6 +80,13 @@ public class ServerSetupActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        boolean showSettings = getIntent() != null && getIntent().getBooleanExtra("show_settings", false);
+        if (showSettings) {
+            requestWindowFeature(Window.FEATURE_NO_TITLE);
+            getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
+            setContentView(buildRendererSettingsUI(prefs));
+            return;
+        }
         String savedMode = prefs.getString(KEY_SERVER_MODE, null);
         if (savedMode != null) {
             launchPlayer();
@@ -815,7 +823,118 @@ public class ServerSetupActivity extends Activity {
             .apply();
     }
 
-    private void launchPlayer() {
+    @SuppressLint("SetTextI18n")
+      private View buildRendererSettingsUI(SharedPreferences prefs) {
+          android.widget.ScrollView scroll = new android.widget.ScrollView(this);
+          scroll.setBackgroundColor(Color.parseColor("#ffffff"));
+          scroll.setFillViewport(true);
+          LinearLayout root = new LinearLayout(this);
+          root.setOrientation(LinearLayout.VERTICAL);
+          root.setBackgroundColor(Color.parseColor("#ffffff"));
+          root.setPadding(dp(24), dp(56), dp(24), dp(24));
+          // Title
+          TextView title = new TextView(this);
+          title.setText("Player Settings");
+          title.setTextColor(Color.parseColor("#0f172a"));
+          title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+          title.setTypeface(null, Typeface.BOLD);
+          LinearLayout.LayoutParams titleP = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+          titleP.bottomMargin = dp(24);
+          title.setLayoutParams(titleP);
+          root.addView(title);
+          // Video Renderer label
+          TextView rendererLabel = new TextView(this);
+          rendererLabel.setText("Video Renderer");
+          rendererLabel.setTextColor(Color.parseColor("#334155"));
+          rendererLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+          rendererLabel.setTypeface(null, Typeface.BOLD);
+          LinearLayout.LayoutParams rlP = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+          rlP.bottomMargin = dp(4);
+          rendererLabel.setLayoutParams(rlP);
+          root.addView(rendererLabel);
+          // Video Renderer description
+          TextView rendererDesc = new TextView(this);
+          rendererDesc.setText("TextureView is recommended for Fire TV devices. If video appears blank, switch to SurfaceView. Changes apply when you return to the player.");
+          rendererDesc.setTextColor(Color.parseColor("#64748b"));
+          rendererDesc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+          LinearLayout.LayoutParams rdP = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+          rdP.bottomMargin = dp(14);
+          rendererDesc.setLayoutParams(rdP);
+          root.addView(rendererDesc);
+          // Determine current and default renderer
+          boolean isFireTvDevice = Build.MANUFACTURER.equalsIgnoreCase("Amazon") || Build.MODEL.toUpperCase().startsWith("AFT");
+          String[] curRef = { prefs.getString(PREF_VIDEO_RENDERER, isFireTvDevice ? "texture" : "surface") };
+          // Renderer buttons
+          LinearLayout btnRow = new LinearLayout(this);
+          btnRow.setOrientation(LinearLayout.HORIZONTAL);
+          LinearLayout.LayoutParams brP = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+          brP.bottomMargin = dp(24);
+          btnRow.setLayoutParams(brP);
+          Button btnTexture = createRendererBtn("TextureView");
+          Button btnSurface = createRendererBtn("SurfaceView");
+          btnTexture.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+          View btnGap = new View(this); btnGap.setLayoutParams(new LinearLayout.LayoutParams(dp(8), 1));
+          btnSurface.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+          Runnable[] refreshRef = new Runnable[1];
+          refreshRef[0] = () -> {
+              applyRendererBtnState(btnTexture, curRef[0].equals("texture"), "TextureView");
+              applyRendererBtnState(btnSurface, curRef[0].equals("surface"), "SurfaceView");
+          };
+          refreshRef[0].run();
+          btnTexture.setOnClickListener(v -> { curRef[0] = "texture"; prefs.edit().putString(PREF_VIDEO_RENDERER, "texture").apply(); refreshRef[0].run(); });
+          btnSurface.setOnClickListener(v -> { curRef[0] = "surface"; prefs.edit().putString(PREF_VIDEO_RENDERER, "surface").apply(); refreshRef[0].run(); });
+          btnRow.addView(btnTexture); btnRow.addView(btnGap); btnRow.addView(btnSurface);
+          root.addView(btnRow);
+          // Divider
+          View div = new View(this);
+          div.setBackgroundColor(Color.parseColor("#f1f5f9"));
+          LinearLayout.LayoutParams divP = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
+          divP.bottomMargin = dp(20);
+          div.setLayoutParams(divP);
+          root.addView(div);
+          // Reconfigure Server
+          Button btnReconfig = createButton("Reconfigure Server Connection ›", "#ef4444");
+          LinearLayout.LayoutParams recP = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+          recP.bottomMargin = dp(10);
+          btnReconfig.setLayoutParams(recP);
+          btnReconfig.setOnClickListener(v -> { prefs.edit().remove(KEY_SERVER_MODE).remove(KEY_SERVER_URL).apply(); setContentView(buildUI()); });
+          root.addView(btnReconfig);
+          // Back to Player
+          Button btnBack = createButton("Back to Player", "#64748b");
+          btnBack.setOnClickListener(v -> launchPlayer());
+          root.addView(btnBack);
+          scroll.addView(root, new android.widget.ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+          return scroll;
+      }
+
+      private Button createRendererBtn(String label) {
+          Button btn = new Button(this);
+          btn.setText(label);
+          btn.setAllCaps(false);
+          btn.setTypeface(null, Typeface.BOLD);
+          btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+          btn.setPadding(dp(8), dp(10), dp(8), dp(10));
+          btn.setMinHeight(0); btn.setMinimumHeight(0);
+          return btn;
+      }
+
+      private void applyRendererBtnState(Button btn, boolean active, String label) {
+          GradientDrawable bg = new GradientDrawable();
+          bg.setCornerRadius(dp(10));
+          if (active) {
+              bg.setColor(Color.parseColor("#3b82f6"));
+              btn.setTextColor(Color.WHITE);
+              btn.setText(label + " ✓");
+          } else {
+              bg.setColor(Color.parseColor("#f8fafc"));
+              bg.setStroke(dp(1), Color.parseColor("#cbd5e1"));
+              btn.setTextColor(Color.parseColor("#64748b"));
+              btn.setText(label);
+          }
+          btn.setBackground(bg);
+      }
+
+      private void launchPlayer() {
         Intent intent = new Intent(this, MainActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
         startActivity(intent);
