@@ -867,6 +867,8 @@ import android.os.Looper;
                                       preloadView.setAlpha(1f); preloadView.setVisibility(View.VISIBLE);
                                       activeView.setAlpha(0f);  activeView.setVisibility(View.INVISIBLE);
                                   }
+                                  hideNativeImagesForVideo();
+                                  android.util.Log.d("RendererOwner", "owner=video hideImages=true useTexture=" + useTextureViewRenderer());
                                   activeVideoViewIsA = !activeVideoViewIsA;
                                   preloadVideoReady = false;
                                   // Release old player now that new content is confirmed visible
@@ -893,6 +895,8 @@ import android.os.Looper;
                                                   preloadView.setAlpha(1f); preloadView.setVisibility(View.VISIBLE);
                                                   activeView.setAlpha(0f);  activeView.setVisibility(View.INVISIBLE);
                                               }
+                                              hideNativeImagesForVideo();
+                                              android.util.Log.d("RendererOwner", "owner=video hideImages=true useTexture=" + useTextureViewRenderer());
                                               activeVideoViewIsA = !activeVideoViewIsA;
                                               preloadVideoReady = false;
                                               pendingOldPlayer = null;
@@ -937,6 +941,8 @@ import android.os.Looper;
                                               preloadView.setAlpha(1f); preloadView.setVisibility(View.VISIBLE);
                                               activeView.setAlpha(0f);  activeView.setVisibility(View.INVISIBLE);
                                           }
+                                          hideNativeImagesForVideo();
+                                          android.util.Log.d("RendererOwner", "owner=video hideImages=true useTexture=" + useTextureViewRenderer());
                                           activeVideoViewIsA = !activeVideoViewIsA;
                                           preloadVideoReady = false;
                                           pendingOldPlayer = null;
@@ -1017,6 +1023,8 @@ import android.os.Looper;
                                               preloadView.setAlpha(1f); preloadView.setVisibility(View.VISIBLE);
                                               activeView.setAlpha(0f);  activeView.setVisibility(View.INVISIBLE);
                                           }
+                                          hideNativeImagesForVideo();
+                                          android.util.Log.d("RendererOwner", "owner=video hideImages=true useTexture=" + useTextureViewRenderer());
                                           activeVideoViewIsA = !activeVideoViewIsA;
                                           pendingOldPlayer = null;
                                           if (oldPlayer != null) { try { oldPlayer.stop(); oldPlayer.release(); } catch (Throwable ignored) {} }
@@ -1525,6 +1533,8 @@ import android.os.Looper;
                       // Alpha swap — incoming becomes visible, outgoing fades out (fixes Fire TV blank SurfaceView)
                       if (useTexture) { incomingTexView.setAlpha(1f); incomingTexView.setVisibility(View.VISIBLE); activeTexView.setAlpha(0f); activeTexView.setVisibility(View.INVISIBLE); }
                       else { preloadView.setAlpha(1f); preloadView.setVisibility(View.VISIBLE); activeView.setAlpha(0f); activeView.setVisibility(View.INVISIBLE); }
+                      hideNativeImagesForVideo();
+                      android.util.Log.d("RendererOwner", "owner=video hideImages=true useTexture=" + useTextureViewRenderer());
                       activeVideoViewIsA = !activeVideoViewIsA; preloadVideoReady = false;
                       pendingOldPlayer = null;
                       if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
@@ -1541,6 +1551,8 @@ import android.os.Looper;
                                   // Alpha swap — incoming becomes visible, outgoing fades out (fixes Fire TV blank SurfaceView)
                                   if (useTexture) { incomingTexView.setAlpha(1f); incomingTexView.setVisibility(View.VISIBLE); activeTexView.setAlpha(0f); activeTexView.setVisibility(View.INVISIBLE); }
                                   else { preloadView.setAlpha(1f); preloadView.setVisibility(View.VISIBLE); activeView.setAlpha(0f); activeView.setVisibility(View.INVISIBLE); }
+                                  hideNativeImagesForVideo();
+                                  android.util.Log.d("RendererOwner", "owner=video hideImages=true useTexture=" + useTextureViewRenderer());
                                   activeVideoViewIsA = !activeVideoViewIsA; preloadVideoReady = false;
                                   pendingOldPlayer = null;
                                   if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
@@ -1570,6 +1582,8 @@ import android.os.Looper;
                               // Alpha swap — incoming becomes visible, outgoing fades out (fixes Fire TV blank SurfaceView)
                               if (useTexture) { incomingTexView.setAlpha(1f); incomingTexView.setVisibility(View.VISIBLE); activeTexView.setAlpha(0f); activeTexView.setVisibility(View.INVISIBLE); }
                               else { preloadView.setAlpha(1f); preloadView.setVisibility(View.VISIBLE); activeView.setAlpha(0f); activeView.setVisibility(View.INVISIBLE); }
+                              hideNativeImagesForVideo();
+                              android.util.Log.d("RendererOwner", "owner=video hideImages=true useTexture=" + useTextureViewRenderer());
                               activeVideoViewIsA = !activeVideoViewIsA; preloadVideoReady = false;
                                 pendingOldPlayer = null;
                                 if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
@@ -1652,6 +1666,8 @@ import android.os.Looper;
                               // Alpha swap — incoming becomes visible, outgoing fades out (fixes Fire TV blank SurfaceView)
                               if (useTexture) { incomingTexView.setAlpha(1f); incomingTexView.setVisibility(View.VISIBLE); activeTexView.setAlpha(0f); activeTexView.setVisibility(View.INVISIBLE); }
                               else { preloadView.setAlpha(1f); preloadView.setVisibility(View.VISIBLE); activeView.setAlpha(0f); activeView.setVisibility(View.INVISIBLE); }
+                              hideNativeImagesForVideo();
+                              android.util.Log.d("RendererOwner", "owner=video hideImages=true useTexture=" + useTextureViewRenderer());
                               activeVideoViewIsA = !activeVideoViewIsA;
                               pendingOldPlayer = null;
                               if (oldPlayer != null) { try { oldPlayer.stop(); oldPlayer.release(); } catch (Throwable ignored) {} }
@@ -1770,6 +1786,17 @@ import android.os.Looper;
             if (p == null) return;
             clearVideoOutput(p);
             try { p.stop(); p.release(); } catch (Throwable ignored) {}
+        }
+
+        /** Hide both native image views when video becomes the active renderer.
+         *  nativeImageView/nativeImageViewB sit above TextureView/PlayerView in the
+         *  FrameLayout, so they must be explicitly hidden or they cover the video.
+         *  Call at every video-visible swap point (first frame ready / immediate swap). */
+        private void hideNativeImagesForVideo() {
+            try { com.bumptech.glide.Glide.with(this).clear(nativeImageView);  } catch (Throwable ignored) {}
+            try { com.bumptech.glide.Glide.with(this).clear(nativeImageViewB); } catch (Throwable ignored) {}
+            if (nativeImageView  != null) { nativeImageView.setAlpha(0f);  nativeImageView.setVisibility(View.INVISIBLE);  }
+            if (nativeImageViewB != null) { nativeImageViewB.setAlpha(0f); nativeImageViewB.setVisibility(View.INVISIBLE); }
         }
 
         private void initNativeComponents() {
