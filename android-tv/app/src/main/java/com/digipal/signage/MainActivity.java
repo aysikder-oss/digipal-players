@@ -98,6 +98,9 @@ import android.os.Looper;
     private boolean nativeFirstRendering = false;
     // Fix 3: generation token to cancel stale WebView recreations.
     private volatile int dormantGeneration = 0;
+    /** Duration (ms) of the currently active native slide. Used by setWebViewDormant
+     *  to skip WebView recreation for short slides (Fix 8). */
+    private volatile long currentNativeSlideDurationMs = 0L;
     // Fix 4: ExoPlayer stall watchdog fields.
     private long stallLastPositionMs = -1L;
     private long stallLastCheckMs = 0L;
@@ -1135,6 +1138,8 @@ import android.os.Looper;
             public void showNativeImage(String url, float x, float y, float w, float h, String scaleType, String contentIdStr) {
                 runOnUiThread(() -> {
                     try {
+                        // Fix 2: safe-quote contentIdStr so JS key lookup is always valid.
+                        String safeContentId = org.json.JSONObject.quote(contentIdStr == null ? "" : contentIdStr);
                         float d = getResources().getDisplayMetrics().density;
                         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams((int)(w * d), (int)(h * d));
                         lp.leftMargin = (int)(x * d); lp.topMargin = (int)(y * d);
@@ -1156,7 +1161,7 @@ import android.os.Looper;
                             activeImageViewIsA = !activeImageViewIsA;
                             preloadedImageUrl = null; preloadImageReady = false;
                             // Fix 1: content-scoped ready callback on preloaded image swap (APK v3.16.14+).
-                            webView.evaluateJavascript("try{var _f=window['__digipalNativeImageReady_'+" + contentIdStr + "];if(typeof _f==='function')_f();else if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady();}catch(e){}", null);
+                            webView.evaluateJavascript("try{var _f=window['__digipalNativeImageReady_'+" + safeContentId + "];if(typeof _f==='function')_f();else if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady();}catch(e){}", null);
                         } else {
                               // Cold fallback: load into inactive (preload) view — old content stays visible until first draw confirmed
                               com.bumptech.glide.Glide.with(MainActivity.this).clear(preloadImgView);
@@ -1177,7 +1182,7 @@ import android.os.Looper;
                                               boolean isFirstResource) {
                                           incoming.setVisibility(View.INVISIBLE);
                                           // Fix 1: call error callback on Glide failure — do NOT signal ready.
-                                          webView.evaluateJavascript("try{var _ef=window['__digipalNativeImageError_'+" + contentIdStr + "];if(typeof _ef==='function')_ef('glide_load_failed');}catch(e){}", null);
+                                          webView.evaluateJavascript("try{var _ef=window['__digipalNativeImageError_'+" + safeContentId + "];if(typeof _ef==='function')_ef('glide_load_failed');}catch(e){}", null);
                                           return false;
                                       }
                                       @Override
@@ -1197,7 +1202,7 @@ import android.os.Looper;
                                                   activeImageViewIsA = !activeImageViewIsA;
                                                   try { com.bumptech.glide.Glide.get(MainActivity.this).trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE); } catch (Throwable ignored) {}
                                                   com.bumptech.glide.Glide.with(MainActivity.this).clear(outgoing);
-                                                   webView.evaluateJavascript("try{var _f=window['__digipalNativeImageReady_'+" + contentIdStr + "];if(typeof _f==='function')_f();else if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady();}catch(e){}", null);
+                                                   webView.evaluateJavascript("try{var _f=window['__digipalNativeImageReady_'+" + safeContentId + "];if(typeof _f==='function')_f();else if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady();}catch(e){}", null);
                                                   return true;
                                               }
                                           });
@@ -1397,6 +1402,13 @@ import android.os.Looper;
                               // Per-slide WebView recreation: destroy V8 heap + GPU compositor while native
                               // overlay covers the screen, then reload fresh for the next web slide.
                               // (OptiSigns technique — eliminates cumulative memory leak between slides.)
+                              // Fix 8: skip WebView recreation for short slides (< 30 s) — mixed image/design
+                              // playlists need the WebView imminently; recreating causes black frames.
+                              final boolean longSlide = (currentNativeSlideDurationMs > 30_000L);
+                              if (!longSlide) {
+                                  android.util.Log.d("DigipalNative", "[nativeFirst] WebView recreate skipped — slide < 30 s");
+                                  return;
+                              }
                               final int myGen = ++dormantGeneration; // Fix 3: capture recreation token
                               new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
                                   try {
@@ -2071,6 +2083,7 @@ import android.os.Looper;
                       }
                       @Override public void schedulerActivateWebView(PlaylistScheduler.SlidePlan s) {
                           if (healthMonitor != null) healthMonitor.setRendererTypeWeb();
+                          currentNativeSlideDurationMs = 0L; // Fix 8: web slide — reset duration guard
                           final int _contentId = s.contentId;
                           runOnUiThread(() -> {
                               try {
@@ -2127,6 +2140,12 @@ import android.os.Looper;
                                         // pauseTimers() freezes setInterval so the WS heartbeat stops —
                                         // a Java Handler fires evaluateJavascript every 25s instead.
                                         if (isFireTv()) {
+                                            // Fix 7: cancel any existing runnable first to prevent duplicate heartbeats
+                                            // on repeated native-to-native playlist transitions.
+                                            if (heartbeatRunnable != null) {
+                                                heartbeatHandler.removeCallbacks(heartbeatRunnable);
+                                                heartbeatRunnable = null;
+                                            }
                                             heartbeatRunnable = new Runnable() {
                                                 @Override public void run() {
                                                     try {
