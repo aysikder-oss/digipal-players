@@ -98,6 +98,12 @@ import android.os.Looper;
     private boolean nativeFirstRendering = false;
     // Native content loop — drives video/image slides via NativePlaylistManager without WebView
     private NativePlaylistManager nativePlaylistManager;
+      // Native heartbeat for Fire TV: when WebView is paused (timers frozen), a Java
+      // Handler fires evaluateJavascript every 25s to keep the WebSocket alive.
+      // Without this, Amazon WebView's pauseTimers() suspends setInterval-based heartbeats
+      // and the server disconnects the screen after its 300s WebSocket timeout.
+      private final android.os.Handler heartbeatHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+      private Runnable heartbeatRunnable;
     // Native-first playlist engine (v3.11.0) — PlaylistScheduler replaces JS timer
     private PlaylistRepository      playlistRepository;
     private TelemetryManager        telemetryManager;
@@ -1651,7 +1657,13 @@ import android.os.Looper;
                           if (webView != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                               try { webView.setRendererPriorityPolicy(android.webkit.WebView.RENDERER_PRIORITY_IMPORTANT, false); } catch (Throwable ignored) {}
                           }
-                          if (webView != null) { try { webView.resumeTimers(); } catch (Throwable ignored) {} }
+                          // Cancel pending Fire TV heartbeat — JS timers resume now.
+                            if (heartbeatRunnable != null) {
+                                heartbeatHandler.removeCallbacks(heartbeatRunnable);
+                                heartbeatRunnable = null;
+                                android.util.Log.d("RendererOwner", "native heartbeat stopped");
+                            }
+                            if (webView != null) { try { webView.resumeTimers(); } catch (Throwable ignored) {} }
                           if (webView != null) webView.evaluateJavascript(
                               "try{window.__digipalGotoSlide&&window.__digipalGotoSlide(" + contentId + ");}catch(e){}", null);
                           if (playlistScheduler != null) playlistScheduler.onRendererReady(slideId);
@@ -2078,9 +2090,29 @@ import android.os.Looper;
                                       webView.setAlpha(0f);
                                       webView.setVisibility(View.INVISIBLE);
                                       webView.pauseTimers();
-                                      android.util.Log.d("RendererOwner", "owner=native webView hidden");
-                                  }
-                              } catch (Throwable ignored) {}
+                                        android.util.Log.d("RendererOwner", "owner=native webView hidden");
+                                        // Fire TV: keep WebSocket alive while JS timers are paused.
+                                        // pauseTimers() freezes setInterval so the WS heartbeat stops —
+                                        // a Java Handler fires evaluateJavascript every 25s instead.
+                                        if (isFireTv()) {
+                                            heartbeatRunnable = new Runnable() {
+                                                @Override public void run() {
+                                                    try {
+                                                        if (webView != null) {
+                                                            webView.evaluateJavascript(
+                                                                "try{window.__digipalHeartbeat&&window.__digipalHeartbeat();}catch(e){}",
+                                                                null
+                                                            );
+                                                        }
+                                                    } catch (Throwable ignored2) {}
+                                                    heartbeatHandler.postDelayed(this, 25_000);
+                                                }
+                                            };
+                                            heartbeatHandler.postDelayed(heartbeatRunnable, 25_000);
+                                            android.util.Log.d("RendererOwner", "native heartbeat started (Fire TV)");
+                                        }
+                                    }
+                                } catch (Throwable ignored) {}
                           });
                       }
                       @Override public void schedulerStopVideo() {
