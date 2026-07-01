@@ -27,8 +27,8 @@ plugins {
           applicationId "com.digipal.signage"
           minSdk 21
           targetSdk 35
-          versionCode 33
-          versionName "3.16.13"
+          versionCode 34
+          versionName "3.16.14"
 
           buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
           buildConfigField "String", "SENTRY_DSN", "\"${System.getenv('SENTRY_DSN') ?: ''}\""
@@ -63,7 +63,7 @@ plugins {
       }
 
       lintOptions {
-          abortOnError false
+          abortOnError true
       }
 
       packagingOptions {
