@@ -359,7 +359,7 @@ public class PlaylistScheduler {
             if (state != State.PLAYING) return;
             if (slides.isEmpty() || currentIndex >= slides.size()) return;
             if (!slides.get(currentIndex).slideId.equals(slideId)) return;
-            Log.i(TAG, "[onSlideNaturalEnd] video looped naturally -- advancing now, slide=" + slideId);
+            Log.i(TAG, "[VideoLoop][Scheduler] naturalEnd reason=naturalEnd slide=" + slideId);
             if (advanceRunnable != null) { handler.removeCallbacks(advanceRunnable); advanceRunnable = null; }
             advance();
         });
@@ -567,6 +567,7 @@ public class PlaylistScheduler {
                 Log.d(TAG, "[advance] dropped stale callback (gen mismatch)");
                 return;
             }
+            Log.d(TAG, "[Scheduler] advance reason=duration gen=" + capturedGen);
             advance();
         };
         handler.postDelayed(advanceRunnable, dur);
