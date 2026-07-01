@@ -2070,11 +2070,28 @@ import android.os.Looper;
                                       // The JS advance timer is suspended when nativeSchedulerActive; this keeps
                                       // WebView content in lock-step with the native state machine so two
                                       // playlists cannot play simultaneously on mixed-content playlists.
-                                      webView.evaluateJavascript(
-                                          "try{window.__digipalGotoSlide&&window.__digipalGotoSlide("
-                                          + _contentId + ");}catch(e){}",
-                                          null
-                                      );
+                                      //
+                                      // Fire TV: Amazon WebView JS engine takes ~300 ms to unfreeze after
+                                      // resumeTimers() — delay the gotoSlide command so React is ready to
+                                      // receive it, preventing blank/wrong-content design slides.
+                                      if (isFireTv()) {
+                                          final WebView _wv = webView;
+                                          webView.postDelayed(() -> {
+                                              try {
+                                                  _wv.evaluateJavascript(
+                                                      "try{window.__digipalGotoSlide&&window.__digipalGotoSlide("
+                                                      + _contentId + ");}catch(e){}",
+                                                      null
+                                                  );
+                                              } catch (Throwable ignored2) {}
+                                          }, 350);
+                                      } else {
+                                          webView.evaluateJavascript(
+                                              "try{window.__digipalGotoSlide&&window.__digipalGotoSlide("
+                                              + _contentId + ");}catch(e){}",
+                                              null
+                                          );
+                                      }
                                   }
                                   applyWebViewProfile(s.type);
                               } catch (Throwable ignored) {}
