@@ -217,9 +217,22 @@ public class PlaylistScheduler {
         }
 
         if (isSameStructure(newSlides)) {
+            // Fix 4: check if the active video's signed URL changed — reload ExoPlayer seamlessly
+            // so it doesn't serve an expired URL after ~1 hour of native playback.
+            final SlidePlan activeOld = (currentIndex >= 0 && currentIndex < slides.size()) ? slides.get(currentIndex) : null;
+            final SlidePlan activeNew = (currentIndex >= 0 && currentIndex < newSlides.size()) ? newSlides.get(currentIndex) : null;
             slides = newSlides;
             if (prefs != null) prefs.edit().remove(KEY_PLS_WAS_STOPPED).apply();
-            Log.d(TAG, "[setPlaylist] URL refresh -- keeping index=" + currentIndex);
+            if (activeOld != null && activeNew != null
+                    && activeOld.type == SlideType.VIDEO
+                    && !activeOld.url.equals(activeNew.url)
+                    && running && delegate != null) {
+                Log.i(TAG, "[setPlaylist] signed URL changed for active video contentId=" + activeNew.contentId + " — reloading ExoPlayer");
+                final Delegate _d = delegate; final SlidePlan _slide = activeNew;
+                handler.post(() -> _d.schedulerPlayVideo(_slide));
+            } else {
+                Log.d(TAG, "[setPlaylist] URL refresh -- keeping index=" + currentIndex);
+            }
             return;
         }
 
@@ -655,8 +668,25 @@ public class PlaylistScheduler {
     private boolean isSameStructure(List<SlidePlan> n) {
         if (n.size() != slides.size()) return false;
         for (int i = 0; i < slides.size(); i++) {
-            if (slides.get(i).contentId != n.get(i).contentId) return false;
-            if (slides.get(i).type != n.get(i).type) return false;
+            SlidePlan a = slides.get(i), b = n.get(i);
+            if (a.contentId != b.contentId) return false;
+            if (a.type != b.type) return false;
+            // Fix 4: also check playback settings — changes require full restart.
+            // URL intentionally excluded — signed URL refreshes handled seamlessly below.
+            if (a.durationMs != b.durationMs) return false;
+            if (!a.objectFit.equals(b.objectFit)) return false;
+            if (a.loop != b.loop) return false;
+            if (Math.abs(a.volume - b.volume) > 0.001f) return false;
+            if (!a.scaleType.equals(b.scaleType)) return false;
+        }
+        return true;
+    }
+            // by the active-video reload path in setPlaylist().
+            if (a.durationMs != b.durationMs) return false;
+            if (!a.objectFit.equals(b.objectFit)) return false;
+            if (a.loop != b.loop) return false;
+            if (Math.abs(a.volume - b.volume) > 0.001f) return false;
+            if (!a.scaleType.equals(b.scaleType)) return false;
         }
         return true;
     }
