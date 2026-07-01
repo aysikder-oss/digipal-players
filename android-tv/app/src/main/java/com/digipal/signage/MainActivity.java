@@ -1197,8 +1197,6 @@ import android.os.Looper;
                                                   activeImageViewIsA = !activeImageViewIsA;
                                                   try { com.bumptech.glide.Glide.get(MainActivity.this).trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE); } catch (Throwable ignored) {}
                                                   com.bumptech.glide.Glide.with(MainActivity.this).clear(outgoing);
-                                                  webView.evaluateJavascript(
-                                                   // Fix 1: content-scoped ready callback on actual first draw.
                                                    webView.evaluateJavascript("try{var _f=window['__digipalNativeImageReady_'+" + contentIdStr + "];if(typeof _f==='function')_f();else if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady();}catch(e){}", null);
                                                   return true;
                                               }
