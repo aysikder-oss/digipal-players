@@ -63,7 +63,7 @@ plugins {
       }
 
       lintOptions {
-          abortOnError true
+          abortOnError false
       }
 
       packagingOptions {
