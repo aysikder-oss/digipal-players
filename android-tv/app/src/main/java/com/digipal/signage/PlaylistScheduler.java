@@ -124,6 +124,7 @@ public class PlaylistScheduler {
     /** SharedPreferences for persisting playlist epoch across process death. */
     private android.content.SharedPreferences prefs;
     private static final String KEY_PLAYLIST_EPOCH = "playlist_epoch_ms";
+    private static final String KEY_PLS_WAS_STOPPED = "pls_was_stopped";
     /**
      * When > 0: use this as the advance-timer duration for the first slide only (wall-clock resume).
      * Reset to -1 immediately after first use in showCurrent().
@@ -160,6 +161,13 @@ public class PlaylistScheduler {
     public void boot() {
         toState(State.BOOTING, "");
         dbExec.execute(() -> {
+            // Honour a prior JS stop signal across reboots — prevents a removed video from
+            // replaying when the device restarts before the server is reachable.
+            if (prefs != null && prefs.getBoolean(KEY_PLS_WAS_STOPPED, false)) {
+                Log.i(TAG, "[boot] pls_was_stopped=true — skipping Room restore, staying IDLE");
+                handler.post(() -> toState(State.IDLE, ""));
+                return;
+            }
             PlaylistDatabase.PlaylistRevisionEntity rev = repository.getActive();
             if (rev != null) {
                 List<PlaylistDatabase.SlideEntity> ents = repository.getSlidesForRevision(rev.id);
@@ -199,16 +207,24 @@ public class PlaylistScheduler {
         if (newSlides.isEmpty()) {
             stop();
             dbExec.execute(() -> repository.clearActiveRevision());
+            // Persist stop signal across device reboots — boot() stays IDLE even when
+            // the server is unreachable, preventing a removed video from ghost-playing.
+            if (prefs != null) {
+                prefs.edit().putBoolean(KEY_PLS_WAS_STOPPED, true).apply();
+            }
             Log.i(TAG, "[setPlaylist] empty -- stopped and cleared active revision");
             return;
         }
 
         if (isSameStructure(newSlides)) {
             slides = newSlides;
+            if (prefs != null) prefs.edit().remove(KEY_PLS_WAS_STOPPED).apply();
             Log.d(TAG, "[setPlaylist] URL refresh -- keeping index=" + currentIndex);
             return;
         }
 
+        // Clear the was-stopped flag — real content is incoming.
+        if (prefs != null) prefs.edit().remove(KEY_PLS_WAS_STOPPED).apply();
         stop();
         slides = newSlides;
         currentIndex = 0;
