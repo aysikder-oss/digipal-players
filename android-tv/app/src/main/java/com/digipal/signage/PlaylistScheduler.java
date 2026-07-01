@@ -681,15 +681,6 @@ public class PlaylistScheduler {
         }
         return true;
     }
-            // by the active-video reload path in setPlaylist().
-            if (a.durationMs != b.durationMs) return false;
-            if (!a.objectFit.equals(b.objectFit)) return false;
-            if (a.loop != b.loop) return false;
-            if (Math.abs(a.volume - b.volume) > 0.001f) return false;
-            if (!a.scaleType.equals(b.scaleType)) return false;
-        }
-        return true;
-    }
 
     private List<SlidePlan> parseSlides(String json) {
         List<SlidePlan> result = new ArrayList<>();
