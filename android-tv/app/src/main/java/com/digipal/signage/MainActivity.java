@@ -1212,37 +1212,6 @@ import android.os.Looper;
 
           @android.webkit.JavascriptInterface
 
-    // Fix 4: ExoPlayer stall watchdog — detects and recovers from position-stuck video after signed URL refresh.
-    private void startStallWatchdog() {
-        if (stallRunnable != null) { stallHandler.removeCallbacks(stallRunnable); stallRunnable = null; }
-        stallLastPositionMs = -1L;
-        stallLastCheckMs = System.currentTimeMillis();
-        stallRunnable = new Runnable() {
-            @Override public void run() {
-                try {
-                    final androidx.media3.exoplayer.ExoPlayer ep = exoPlayer;
-                    if (ep == null || !ep.getPlayWhenReady()) { stallHandler.postDelayed(this, STALL_CHECK_MS); return; }
-                    if (ep.getPlaybackState() == androidx.media3.common.Player.STATE_READY) {
-                        long pos = ep.getCurrentPosition();
-                        long now = System.currentTimeMillis();
-                        if (stallLastPositionMs >= 0 && pos == stallLastPositionMs) {
-                            if ((now - stallLastCheckMs) >= STALL_THRESHOLD_MS) {
-                                android.util.Log.w("DigipalNative", "[stallWatchdog] stalled at " + pos + "ms — seeking forward");
-                                try { ep.seekTo(pos + 500); } catch (Throwable ignored2) {}
-                                stallLastPositionMs = -1L; stallLastCheckMs = now;
-                            }
-                        } else { stallLastPositionMs = pos; stallLastCheckMs = now; }
-                    }
-                } catch (Throwable ignored) {}
-                stallHandler.postDelayed(this, STALL_CHECK_MS);
-            }
-        };
-        stallHandler.postDelayed(stallRunnable, STALL_CHECK_MS);
-    }
-    private void stopStallWatchdog() {
-        if (stallRunnable != null) { stallHandler.removeCallbacks(stallRunnable); stallRunnable = null; }
-        stallLastPositionMs = -1L;
-    }
 
             public void hideNativeImage() {
                 runOnUiThread(() -> {
@@ -2418,6 +2387,38 @@ import android.os.Looper;
             return saved;
         }
         return BuildConfig.SERVER_URL;
+    }
+
+    // Fix 4: ExoPlayer stall watchdog — detects and recovers from position-stuck video after signed URL refresh.
+    private void startStallWatchdog() {
+        if (stallRunnable != null) { stallHandler.removeCallbacks(stallRunnable); stallRunnable = null; }
+        stallLastPositionMs = -1L;
+        stallLastCheckMs = System.currentTimeMillis();
+        stallRunnable = new Runnable() {
+            @Override public void run() {
+                try {
+                    final androidx.media3.exoplayer.ExoPlayer ep = exoPlayer;
+                    if (ep == null || !ep.getPlayWhenReady()) { stallHandler.postDelayed(this, STALL_CHECK_MS); return; }
+                    if (ep.getPlaybackState() == androidx.media3.common.Player.STATE_READY) {
+                        long pos = ep.getCurrentPosition();
+                        long now = System.currentTimeMillis();
+                        if (stallLastPositionMs >= 0 && pos == stallLastPositionMs) {
+                            if ((now - stallLastCheckMs) >= STALL_THRESHOLD_MS) {
+                                android.util.Log.w("DigipalNative", "[stallWatchdog] stalled at " + pos + "ms — seeking forward");
+                                try { ep.seekTo(pos + 500); } catch (Throwable ignored2) {}
+                                stallLastPositionMs = -1L; stallLastCheckMs = now;
+                            }
+                        } else { stallLastPositionMs = pos; stallLastCheckMs = now; }
+                    }
+                } catch (Throwable ignored) {}
+                stallHandler.postDelayed(this, STALL_CHECK_MS);
+            }
+        };
+        stallHandler.postDelayed(stallRunnable, STALL_CHECK_MS);
+    }
+    private void stopStallWatchdog() {
+        if (stallRunnable != null) { stallHandler.removeCallbacks(stallRunnable); stallRunnable = null; }
+        stallLastPositionMs = -1L;
     }
 
     private void loadPlayerUrl(String baseUrl) {
