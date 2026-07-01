@@ -96,6 +96,15 @@ import android.os.Looper;
     private androidx.media3.exoplayer.ExoPlayer pendingOldPlayer;
     // Native-first rendering mode (OptiSigns-style OOM elimination on low-mem Fire TV)
     private boolean nativeFirstRendering = false;
+    // Fix 3: generation token to cancel stale WebView recreations.
+    private volatile int dormantGeneration = 0;
+    // Fix 4: ExoPlayer stall watchdog fields.
+    private long stallLastPositionMs = -1L;
+    private long stallLastCheckMs = 0L;
+    private static final long STALL_THRESHOLD_MS = 30_000L;
+    private static final long STALL_CHECK_MS = 5_000L;
+    private final android.os.Handler stallHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable stallRunnable;
     // Native content loop — drives video/image slides via NativePlaylistManager without WebView
     private NativePlaylistManager nativePlaylistManager;
       // Native heartbeat for Fire TV: when WebView is paused (timers frozen), a Java
@@ -1083,6 +1092,7 @@ import android.os.Looper;
                             nativeVideoListener = null;
                         }
                         releaseVideoPlayer(exoPlayer); exoPlayer = null;
+                        stopStallWatchdog(); // Fix 4
                         if (pendingOldPlayer != null) { releaseVideoPlayer(pendingOldPlayer); pendingOldPlayer = null; }
                         hideNativeVideoSurfaces();
                     } catch (Exception e) {}
@@ -1122,7 +1132,7 @@ import android.os.Looper;
           }
 
           @android.webkit.JavascriptInterface
-            public void showNativeImage(String url, float x, float y, float w, float h, String scaleType) {
+            public void showNativeImage(String url, float x, float y, float w, float h, String scaleType, String contentIdStr) {
                 runOnUiThread(() -> {
                     try {
                         float d = getResources().getDisplayMetrics().density;
@@ -1145,8 +1155,8 @@ import android.os.Looper;
                             com.bumptech.glide.Glide.with(MainActivity.this).clear(activeImgView);
                             activeImageViewIsA = !activeImageViewIsA;
                             preloadedImageUrl = null; preloadImageReady = false;
-                            webView.evaluateJavascript(
-                                "if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady()", null);
+                            // Fix 1: content-scoped ready callback on preloaded image swap (APK v3.16.14+).
+                            webView.evaluateJavascript("try{var _f=window['__digipalNativeImageReady_'+" + contentIdStr + "];if(typeof _f==='function')_f();else if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady();}catch(e){}", null);
                         } else {
                               // Cold fallback: load into inactive (preload) view — old content stays visible until first draw confirmed
                               com.bumptech.glide.Glide.with(MainActivity.this).clear(preloadImgView);
@@ -1166,8 +1176,8 @@ import android.os.Looper;
                                               Object model, com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
                                               boolean isFirstResource) {
                                           incoming.setVisibility(View.INVISIBLE);
-                                          webView.evaluateJavascript(
-                                              "if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady()", null);
+                                          // Fix 1: call error callback on Glide failure — do NOT signal ready.
+                                          webView.evaluateJavascript("try{var _ef=window['__digipalNativeImageError_'+" + contentIdStr + "];if(typeof _ef==='function')_ef('glide_load_failed');}catch(e){}", null);
                                           return false;
                                       }
                                       @Override
@@ -1188,7 +1198,8 @@ import android.os.Looper;
                                                   try { com.bumptech.glide.Glide.get(MainActivity.this).trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE); } catch (Throwable ignored) {}
                                                   com.bumptech.glide.Glide.with(MainActivity.this).clear(outgoing);
                                                   webView.evaluateJavascript(
-                                                      "if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady()", null);
+                                                   // Fix 1: content-scoped ready callback on actual first draw.
+                                                   webView.evaluateJavascript("try{var _f=window['__digipalNativeImageReady_'+" + contentIdStr + "];if(typeof _f==='function')_f();else if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady();}catch(e){}", null);
                                                   return true;
                                               }
                                           });
@@ -1202,6 +1213,39 @@ import android.os.Looper;
               }
 
           @android.webkit.JavascriptInterface
+
+    // Fix 4: ExoPlayer stall watchdog — detects and recovers from position-stuck video after signed URL refresh.
+    private void startStallWatchdog() {
+        if (stallRunnable != null) { stallHandler.removeCallbacks(stallRunnable); stallRunnable = null; }
+        stallLastPositionMs = -1L;
+        stallLastCheckMs = System.currentTimeMillis();
+        stallRunnable = new Runnable() {
+            @Override public void run() {
+                try {
+                    final androidx.media3.exoplayer.ExoPlayer ep = exoPlayer;
+                    if (ep == null || !ep.getPlayWhenReady()) { stallHandler.postDelayed(this, STALL_CHECK_MS); return; }
+                    if (ep.getPlaybackState() == androidx.media3.common.Player.STATE_READY) {
+                        long pos = ep.getCurrentPosition();
+                        long now = System.currentTimeMillis();
+                        if (stallLastPositionMs >= 0 && pos == stallLastPositionMs) {
+                            if ((now - stallLastCheckMs) >= STALL_THRESHOLD_MS) {
+                                android.util.Log.w("DigipalNative", "[stallWatchdog] stalled at " + pos + "ms — seeking forward");
+                                try { ep.seekTo(pos + 500); } catch (Throwable ignored2) {}
+                                stallLastPositionMs = -1L; stallLastCheckMs = now;
+                            }
+                        } else { stallLastPositionMs = pos; stallLastCheckMs = now; }
+                    }
+                } catch (Throwable ignored) {}
+                stallHandler.postDelayed(this, STALL_CHECK_MS);
+            }
+        };
+        stallHandler.postDelayed(stallRunnable, STALL_CHECK_MS);
+    }
+    private void stopStallWatchdog() {
+        if (stallRunnable != null) { stallHandler.removeCallbacks(stallRunnable); stallRunnable = null; }
+        stallLastPositionMs = -1L;
+    }
+
             public void hideNativeImage() {
                 runOnUiThread(() -> {
                     try {
@@ -1378,6 +1422,7 @@ import android.os.Looper;
                                   webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_BOUND, false);
                               } else {
                                   webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true);
+                    dormantGeneration++; // Fix 3: cancel any pending delayed WebView recreation
                               }
                           }
                           android.util.Log.d("DigipalNative", "[nativeFirst] setWebViewDormant=" + dormant);
@@ -1385,8 +1430,10 @@ import android.os.Looper;
                               // Per-slide WebView recreation: destroy V8 heap + GPU compositor while native
                               // overlay covers the screen, then reload fresh for the next web slide.
                               // (OptiSigns technique — eliminates cumulative memory leak between slides.)
+                              final int myGen = ++dormantGeneration; // Fix 3: capture recreation token
                               new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
                                   try {
+                                      if (myGen != dormantGeneration) { android.util.Log.d("DigipalNative", "[nativeFirst] WebView recreate cancelled gen=" + myGen); return; } // Fix 3
                                       final android.webkit.WebView oldWv = webView;
                                       if (rootLayout != null) rootLayout.removeView(oldWv);
                                       webView = new android.webkit.WebView(MainActivity.this);
@@ -1915,6 +1962,7 @@ import android.os.Looper;
                                       try { webView.setRendererPriorityPolicy(android.webkit.WebView.RENDERER_PRIORITY_BOUND, false); } catch (Throwable ignored) {}
                                   }
                                   playNativeVideoForScheduler(_url, _fit, _loop, _vol, _sid, _contentId);
+                        startStallWatchdog(); // Fix 4
                               } catch (Throwable ignored) {}
                               if (supRef[0] != null) supRef[0].reportSchedulerAdvance();
                           });
