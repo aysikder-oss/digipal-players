@@ -1092,7 +1092,7 @@ import android.os.Looper;
                             nativeVideoListener = null;
                         }
                         releaseVideoPlayer(exoPlayer); exoPlayer = null;
-                        stopStallWatchdog(); // Fix 4
+                        MainActivity.this.stopStallWatchdog(); // Fix 4
                         if (pendingOldPlayer != null) { releaseVideoPlayer(pendingOldPlayer); pendingOldPlayer = null; }
                         hideNativeVideoSurfaces();
                     } catch (Exception e) {}
@@ -1960,7 +1960,7 @@ import android.os.Looper;
                                       try { webView.setRendererPriorityPolicy(android.webkit.WebView.RENDERER_PRIORITY_BOUND, false); } catch (Throwable ignored) {}
                                   }
                                   playNativeVideoForScheduler(_url, _fit, _loop, _vol, _sid, _contentId);
-                        startStallWatchdog(); // Fix 4
+                        MainActivity.this.startStallWatchdog(); // Fix 4
                               } catch (Throwable ignored) {}
                               if (supRef[0] != null) supRef[0].reportSchedulerAdvance();
                           });
