@@ -67,12 +67,22 @@ package com.digipal.signage;
             }
         }
 
-        /** True when new slide list has same contentIds+types in the same order. */
+        /** True when new slide list has same contentIds, types, durations, and playback settings
+         *  in the same order. URL changes are safe to apply in-place (Fix 10). */
         private boolean isSameStructure(List<NativeSlide> newSlides) {
             if (newSlides.size() != slides.size()) return false;
             for (int i = 0; i < slides.size(); i++) {
-                if (slides.get(i).contentId != newSlides.get(i).contentId) return false;
-                if (slides.get(i).type != newSlides.get(i).type) return false;
+                NativeSlide old = slides.get(i);
+                NativeSlide nw  = newSlides.get(i);
+                // Fix 10: compare all playback-relevant fields, not just contentId + type.
+                // URL changes are safe to apply in-place; any other change restarts the loop.
+                if (old.contentId   != nw.contentId)   return false;
+                if (old.type        != nw.type)         return false;
+                if (old.durationSec != nw.durationSec)  return false;
+                if (old.loop        != nw.loop)         return false;
+                if (Math.abs(old.volume - nw.volume) > 0.001f) return false;
+                if (!old.objectFit.equals(nw.objectFit))   return false;
+                if (!old.scaleType.equals(nw.scaleType))   return false;
             }
             return true;
         }
@@ -113,12 +123,17 @@ package com.digipal.signage;
                             slide.loop + "," + slide.volume + ");}catch(e){}");
                     break;
                 case IMAGE:
+                    // Fix 4: do NOT hide WebView before Glide confirms first draw —
+                    // NativeTvImageOverlay.onReady calls setWebViewDormant(true) after
+                    // the Glide callback fires, preventing black screens on slow decodes.
+                    // Fix 1: pass contentId as 7th arg so APK fires content-scoped callbacks
+                    // (__digipalNativeImageReady_<id> / __digipalNativeImageError_<id>).
                     delegate.evaluateJs(
-                            "try{window.Android.setWebViewDormant(true);}catch(e){}" +
                             "try{window.Android.showNativeImage(" +
                             JSONObject.quote(slide.url) +
                             ",0,0,window.innerWidth,window.innerHeight," +
-                            JSONObject.quote(slide.scaleType) + ");}catch(e){}");
+                            JSONObject.quote(slide.scaleType) + "," +
+                            JSONObject.quote(String.valueOf(slide.contentId)) + ");}catch(e){}");
                     break;
                 default:
                     delegate.evaluateJs(
