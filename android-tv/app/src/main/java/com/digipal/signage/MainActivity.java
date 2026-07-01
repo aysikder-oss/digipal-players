@@ -980,7 +980,7 @@ import android.os.Looper;
                               }
                               preloadView.setLayoutParams(lp);
                               coldPlayer.setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.parse(url)));
-                              coldPlayer.setRepeatMode(loop ? androidx.media3.common.Player.REPEAT_MODE_ONE : androidx.media3.common.Player.REPEAT_MODE_OFF);
+                              coldPlayer.setRepeatMode(androidx.media3.common.Player.REPEAT_MODE_OFF); // scheduler owns loop via natural-end listener
                               coldPlayer.setVolume(volume);
                               coldPlayer.prepare();
                               coldPlayer.play();
@@ -1526,7 +1526,7 @@ import android.os.Looper;
                   final androidx.media3.exoplayer.ExoPlayer oldPlayer = exoPlayer;
                   pendingOldPlayer = oldPlayer;
                   exoPlayer = preloadPlayer; preloadPlayer = null; preloadedVideoUrl = null;
-                  exoPlayer.setRepeatMode(loop ? androidx.media3.common.Player.REPEAT_MODE_ONE : androidx.media3.common.Player.REPEAT_MODE_OFF);
+                  exoPlayer.setRepeatMode(androidx.media3.common.Player.REPEAT_MODE_OFF); // scheduler owns loop via natural-end listener
                   exoPlayer.setVolume(volume); exoPlayer.play();
                   preloadView.setResizeMode(resizeMode); preloadView.setLayoutParams(lp);
                   if (preloadVideoReady) {
@@ -1714,7 +1714,7 @@ import android.os.Looper;
 
       /** Returns true when TextureView renderer is selected (default for Fire TV). */
       private boolean useTextureViewRenderer() {
-          String def = isFireTv() ? "texture" : "surface";
+          String def = "texture" /* TextureView for all Android TV — avoids SurfaceView z-order issues on Android box */;
           String pref = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
               .getString(PREF_VIDEO_RENDERER, def);
           return "texture".equals(pref);
@@ -2048,8 +2048,12 @@ import android.os.Looper;
                           runOnUiThread(() -> {
                               try {
                                   hideNativeVideoSurfaces(); // ensure no stale TextureView covers WebView
+                                   hideNativeImagesForVideo(); // owner=webview — clear native image layered above WebView
                                   if (webView != null) {
+                                      webView.setAlpha(1f);
+                                      webView.setVisibility(View.VISIBLE);
                                       webView.resumeTimers();
+                                      android.util.Log.d("RendererOwner", "owner=webview webView visible");
                                       // Sync React playlist index to the WebView slide PlaylistScheduler intends.
                                       // The JS advance timer is suspended when nativeSchedulerActive; this keeps
                                       // WebView content in lock-step with the native state machine so two
@@ -2065,9 +2069,19 @@ import android.os.Looper;
                           });
                       }
                       @Override public void schedulerDeactivateWebView() {
-                          // WebView dormant enforced in schedulerPlayVideo/schedulerShowImage via setWebViewDormant(true)
-                          // Pause V8/Blink timer loop to release JS heap pressure during native playback
-                          runOnUiThread(() -> { try { if (webView != null) webView.pauseTimers(); } catch (Throwable ignored) {} });
+                          // Hide WebView + pause timers — enforces single renderer ownership.
+                          // WebView sits above native layers in FrameLayout z-order so it must be
+                          // INVISIBLE while native video/image is the active renderer.
+                          runOnUiThread(() -> {
+                              try {
+                                  if (webView != null) {
+                                      webView.setAlpha(0f);
+                                      webView.setVisibility(View.INVISIBLE);
+                                      webView.pauseTimers();
+                                      android.util.Log.d("RendererOwner", "owner=native webView hidden");
+                                  }
+                              } catch (Throwable ignored) {}
+                          });
                       }
                       @Override public void schedulerStopVideo() {
                           runOnUiThread(() -> {
@@ -2333,17 +2347,17 @@ import android.os.Looper;
         webView.loadUrl(playerUrl);
     }
 
-    /** One-shot listener: when a looping video restarts naturally, advance the scheduler immediately. */
+    /** One-shot listener: advance the scheduler when the video reaches its natural end.
+     *  Uses STATE_ENDED (REPEAT_MODE_OFF) instead of DISCONTINUITY_REASON_AUTO_TRANSITION
+     *  (REPEAT_MODE_ONE) so the video stops cleanly with no first-frame replay. */
       private void attachLoopAdvanceListener(androidx.media3.exoplayer.ExoPlayer player, String slideId) {
           if (player == null) return;
           player.addListener(new androidx.media3.common.Player.Listener() {
               @Override
-              public void onPositionDiscontinuity(
-                      androidx.media3.common.Player.PositionInfo oldPos,
-                      androidx.media3.common.Player.PositionInfo newPos,
-                      @androidx.media3.common.Player.DiscontinuityReason int reason) {
-                  if (reason == androidx.media3.common.Player.DISCONTINUITY_REASON_AUTO_TRANSITION) {
+              public void onPlaybackStateChanged(int playbackState) {
+                  if (playbackState == androidx.media3.common.Player.STATE_ENDED) {
                       player.removeListener(this);
+                      android.util.Log.i("VideoLoop", "[naturalEnd] slideId=" + slideId);
                       if (exoPlayer == player && playlistScheduler != null)
                           playlistScheduler.onSlideNaturalEnd(slideId);
                   }
@@ -2743,7 +2757,7 @@ import android.os.Looper;
                   // 5 DPAD presses: toggle video renderer (TextureView ↔ SurfaceView) + restart pipeline
                   dpadPressCount = 0;
                   android.content.SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-                  String cur = prefs.getString(PREF_VIDEO_RENDERER, isFireTv() ? "texture" : "surface");
+                  String cur = prefs.getString(PREF_VIDEO_RENDERER, "texture" /* TextureView for all Android TV — avoids SurfaceView z-order issues on Android box */);
                   String next = "texture".equals(cur) ? "surface" : "texture";
                   prefs.edit().putString(PREF_VIDEO_RENDERER, next).apply();
                   android.util.Log.i("DigipalVideo", "[DPAD5] renderer toggled: " + cur + " -> " + next);
@@ -2907,7 +2921,7 @@ import android.os.Looper;
                 String ver = "?";
                 try { ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Throwable ignored) {}
                 final String curRenderer = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                    .getString(PREF_VIDEO_RENDERER, isFireTv() ? "texture" : "surface");
+                    .getString(PREF_VIDEO_RENDERER, "texture" /* TextureView for all Android TV — avoids SurfaceView z-order issues on Android box */);
 
                 // Container — vertical LinearLayout so we can stack info + renderer buttons
                 android.widget.LinearLayout container = new android.widget.LinearLayout(this);
