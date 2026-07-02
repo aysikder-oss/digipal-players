@@ -19,6 +19,9 @@ import android.webkit.WebView;
  */
 public class WebViewPolicy {
 
+    /** Human-readable policy identifier reported in telemetry (renderer observability task). */
+    public String name = "default";
+
     /** True = brand-new WebView instance per slide (never reused); false = reuse allowed. */
     public boolean freshWebView = false;
 
@@ -78,6 +81,8 @@ public class WebViewPolicy {
             p.rendererPriorityImportant = true;
             p.requiresTouch = slideType == PlaylistScheduler.SlideType.WEBVIEW_KIOSK;
             p.freshWebView = slideType == PlaylistScheduler.SlideType.WEBVIEW_KIOSK;
+            p.name = slideType == PlaylistScheduler.SlideType.WEBVIEW_KIOSK
+                    ? "kiosk_permissive_fresh" : "design_permissive";
         } else {
             p.allowFileAccess = false;
             p.allowFileAccessFromFileUrls = false;
@@ -85,6 +90,7 @@ public class WebViewPolicy {
             p.databaseEnabled = false;
             p.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE;
             p.rendererPriorityImportant = false;
+            p.name = "url_restrictive";
         }
         return p;
     }
