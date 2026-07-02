@@ -107,4 +107,11 @@ sentry {
     projectName = "android"
     authToken = sentryToken
     telemetry = false
+    // We only use manual Sentry.captureException()/breadcrumbs — disable ASM bytecode
+    // auto-instrumentation (OkHttp/Compose/FileIO tracing) to avoid corrupting unrelated
+    // classes it can't fully resolve (seen as "ASM Instrumentation... wasn't able to
+    // resolve some classes" in build output).
+    tracingInstrumentation {
+        enabled = false
+    }
 }
