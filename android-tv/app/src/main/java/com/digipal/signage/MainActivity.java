@@ -52,6 +52,11 @@ import android.os.Looper;
     private static final String KEY_SERVER_MODE = "server_mode";
     private static final String KEY_AUTO_RELAUNCH = "auto_relaunch";
     private static final String KEY_CHECK_SEC = "relaunch_check_sec";
+    /** Screen pairing code, reported once by the JS player via Android.reportPairingCode()
+     *  (task #1875) — used to build the isolated-renderer /tv/render/:pairingCode/:contentId URL. */
+    private static final String KEY_PAIRING_CODE = "pairing_code";
+    private volatile String cachedPairingCode = null;
+    private IsolatedWebRenderer isolatedWebRenderer;
     /** "texture" or "surface" — defaults to "texture" on Fire TV, "surface" elsewhere */
     private static final String PREF_VIDEO_RENDERER = "pref_video_renderer";
     private boolean isUserClosing = false;
@@ -207,6 +212,11 @@ import android.os.Looper;
         FrameLayout root = new FrameLayout(this);
         rootLayout = root;
         root.setBackgroundColor(Color.parseColor("#0a0e1a"));
+
+        // Restore cached pairing code (task #1875) so the isolated renderer can build
+        // /tv/render/:pairingCode/:contentId URLs before the JS player re-reports it.
+        cachedPairingCode = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getString(KEY_PAIRING_CODE, null);
 
         try {
               webView = new WebView(this);
@@ -552,6 +562,22 @@ import android.os.Looper;
             lastHeartbeatMs = System.currentTimeMillis();
             heartbeatReceived = true;
             if (healthMonitor != null) healthMonitor.onHeartbeatReceived();
+        }
+
+        /**
+         * Reported once by the JS player when its pairing code is known (task #1875).
+         * Cached in-memory + SharedPreferences so the isolated per-slide renderer can
+         * build /tv/render/:pairingCode/:contentId URLs without depending on the
+         * (potentially unhealthy) main WebView at slide-dispatch time.
+         */
+        @JavascriptInterface
+        public void reportPairingCode(String code) {
+            if (code == null || code.isEmpty()) return;
+            if (code.equals(cachedPairingCode)) return;
+            cachedPairingCode = code;
+            getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                    .edit().putString(KEY_PAIRING_CODE, code).apply();
+            android.util.Log.d("DigipalNative", "[pairingCode] cached " + code);
         }
 
         @JavascriptInterface
@@ -2209,6 +2235,60 @@ import android.os.Looper;
                                         }
                                     }
                                 } catch (Throwable ignored) {}
+                          });
+                      }
+                      @Override public void schedulerActivateIsolatedRenderer(PlaylistScheduler.SlidePlan s) {
+                          // Isolated per-slide WebView renderer (task #1875), behind
+                          // FEATURE_ISOLATED_WEB_RENDERER. Loads the standalone
+                          // /tv/render/:pairingCode/:contentId route in a WebView that is
+                          // never shared across slides, so a crash/hang on one design cannot
+                          // take down subsequent slides. Falls back to the legacy shared
+                          // WebView flow (via onIsolatedRendererFailed) on any timeout/error.
+                          runOnUiThread(() -> {
+                              try {
+                                  if (healthMonitor != null) healthMonitor.setRendererTypeWeb();
+                                  hideNativeVideoSurfaces();
+                                  hideNativeImagesForVideo();
+                                  final String code = cachedPairingCode;
+                                  if (code == null || code.isEmpty()) {
+                                      android.util.Log.w("DigipalNative",
+                                          "[isolatedRenderer] no pairing code cached — falling back for slide " + s.slideId);
+                                      if (playlistScheduler != null) {
+                                          playlistScheduler.onIsolatedRendererFailed(s.slideId, "no_pairing_code");
+                                      }
+                                      return;
+                                  }
+                                  if (isolatedWebRenderer == null) {
+                                      isolatedWebRenderer = new IsolatedWebRenderer(
+                                          MainActivity.this, rootLayout,
+                                          new IsolatedWebRenderer.Listener() {
+                                              @Override public void onRendererReady(String slideId) {
+                                                  if (playlistScheduler != null) playlistScheduler.onRendererReady(slideId);
+                                              }
+                                              @Override public void onRendererFailed(String slideId, String reason) {
+                                                  if (isolatedWebRenderer != null) isolatedWebRenderer.hide();
+                                                  if (playlistScheduler != null) {
+                                                      playlistScheduler.onIsolatedRendererFailed(slideId, reason);
+                                                  }
+                                              }
+                                          });
+                                  }
+                                  String base = getServerUrl();
+                                  if (base.endsWith("/")) base = base.substring(0, base.length() - 1);
+                                  String url = base + "/tv/render/" + code + "/" + s.contentId;
+                                  isolatedWebRenderer.prepare(s.slideId, url);
+                              } catch (Throwable ignored) {
+                                  if (playlistScheduler != null) {
+                                      playlistScheduler.onIsolatedRendererFailed(s.slideId, "activate_exception");
+                                  }
+                              }
+                          });
+                      }
+                      @Override public void schedulerDeactivateIsolatedRenderer() {
+                          runOnUiThread(() -> {
+                              try {
+                                  if (isolatedWebRenderer != null) isolatedWebRenderer.hide();
+                              } catch (Throwable ignored) {}
                           });
                       }
                       @Override public void schedulerStopVideo() {
