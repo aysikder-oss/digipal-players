@@ -1944,6 +1944,11 @@ import android.os.Looper;
               telemetryManager   = new TelemetryManager(this, playlistRepository, getServerUrl());
               telemetryManager.start();
 
+                // Per-asset WebView policy task: track the Android System WebView
+                // package/version for diagnostics — surfaced in logs/telemetry, not a
+                // new dashboard.
+                android.util.Log.i("DigipalWebView", "system webview = " + WebViewPolicy.currentWebViewPackageInfo());
+
                 // ---- MemoryBudgetManager: 5-second memory tier poller ----
                 memoryBudgetManager = new MemoryBudgetManager(
                     getApplicationContext(),
@@ -2322,7 +2327,11 @@ import android.os.Looper;
                                   String base = getServerUrl();
                                   if (base.endsWith("/")) base = base.substring(0, base.length() - 1);
                                   String url = base + "/tv/render/" + code + "/" + s.contentId;
-                                  isolatedWebRenderer.prepare(s.slideId, url);
+                                  // Per-asset WebView policy: safe default reproduces the old
+                                  // applyWebViewProfile(slideType) two-bucket behavior exactly;
+                                  // future per-content overrides can be layered on here.
+                                  WebViewPolicy policy = WebViewPolicy.forSlideType(s.type);
+                                  isolatedWebRenderer.prepare(s.slideId, url, policy);
                               } catch (Throwable ignored) {
                                   if (playlistScheduler != null) {
                                       playlistScheduler.onIsolatedRendererFailed(s.slideId, "activate_exception");
