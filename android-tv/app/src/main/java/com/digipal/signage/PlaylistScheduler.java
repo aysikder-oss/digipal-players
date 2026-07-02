@@ -499,6 +499,48 @@ public class PlaylistScheduler {
             dispatch = slide;
         }
 
+        // Compute slide duration first — needed before arming the renderer-ready gate
+        // so pendingAdvanceDurationMs is correct if onRendererReady fires synchronously.
+        final long dur;
+        if (firstSlideRemainingMs > 0) {
+            dur = firstSlideRemainingMs;
+            firstSlideRemainingMs = -1L;
+            Log.d(TAG, "[showCurrent] wall-clock resume: advance in " + dur
+                    + "ms (slide " + currentIndex + ")");
+        } else {
+            dur = Math.max(1_000L, slide.durationMs);
+            if (slide.durationMs <= 0) {
+                Log.w(TAG, "[showCurrent] zero/negative durationMs=" + slide.durationMs
+                        + " for slide=" + slide.slideId + " — clamped to 1000ms");
+            }
+        }
+
+        // Bug 2 fix: arm rendererReadyTimeoutGen and pendingAdvanceDurationMs BEFORE
+        // dispatching to the renderer.  For preloaded videos that are already buffered,
+        // schedulerPlayVideo() calls onRendererReady() synchronously on the same thread.
+        // If rendererReadyTimeoutGen were still -1 when onRendererReady() ran, the
+        // generation check would fail and the 3-second RENDERER_READY_TIMEOUT_MS
+        // fallback would fire instead — stalling every preloaded slide by 3 seconds.
+        final boolean isNativeSlide = (eff == SlideType.VIDEO || eff == SlideType.IMAGE);
+        if (isNativeSlide) {
+            pendingAdvanceDurationMs = dur;
+            rendererReadyTimeoutGen = generation;
+            final int myGen = generation;
+            final String mySlideId = slide.slideId;
+            if (rendererReadyTimeout != null) handler.removeCallbacks(rendererReadyTimeout);
+            rendererReadyTimeout = () -> {
+                if (generation != myGen) return;
+                Log.w(TAG, "[renderer_ready_timeout] no first-frame for slide " + mySlideId
+                        + " after " + RENDERER_READY_TIMEOUT_MS + "ms — starting timer anyway");
+                if (telemetry != null) telemetry.logEvent("renderer_timeout", mySlideId,
+                        "{\"pendingMs\":" + pendingAdvanceDurationMs + "}");
+                rendererReadyTimeout = null; rendererReadyTimeoutGen = -1;
+                toState(State.PLAYING, mySlideId);
+                startAdvanceTimer(myGen, pendingAdvanceDurationMs);
+            };
+            handler.postDelayed(rendererReadyTimeout, RENDERER_READY_TIMEOUT_MS);
+        }
+
         // Renderer ownership contract:
           //  VIDEO / IMAGE  → native renderers (ExoPlayer / Glide via Delegate).
           //                   Scheduler enters PREPARING_CURRENT and waits for onRendererReady().
@@ -533,43 +575,12 @@ public class PlaylistScheduler {
 
         schedulePreload(eff);
 
-        // Compute slide duration: wall-clock resume for boot-restore, full otherwise.
-        final long dur;
-        if (firstSlideRemainingMs > 0) {
-            dur = firstSlideRemainingMs;
-            firstSlideRemainingMs = -1L;
-            Log.d(TAG, "[showCurrent] wall-clock resume: advance in " + dur
-                    + "ms (slide " + currentIndex + ")");
-        } else {
-            dur = Math.max(1_000L, slide.durationMs);
-        }
-
         // Web slides: advance timer starts immediately (WebView has no first-frame callback).
-        // Native slides: enter PREPARING_CURRENT and wait for onRendererReady() so the full
-        // configured duration is preserved even on slow-decode devices.
-        // A safety timeout starts the clock after RENDERER_READY_TIMEOUT_MS if no signal.
-        if (eff == SlideType.WEBVIEW_DESIGN || eff == SlideType.WEBVIEW_KIOSK
-                || eff == SlideType.WEBVIEW_URL) {
+        // Native slides: advance timer is started by onRendererReady() or the
+        // RENDERER_READY_TIMEOUT_MS safety runnable armed above (before dispatch).
+        if (!isNativeSlide) {
             toState(State.PLAYING, slide.slideId);
             startAdvanceTimer(generation, dur);
-        } else {
-            toState(State.PREPARING_CURRENT, slide.slideId);
-            pendingAdvanceDurationMs = dur;
-            rendererReadyTimeoutGen = generation;
-            final int myGen = generation;
-            final String mySlideId = slide.slideId;
-            if (rendererReadyTimeout != null) handler.removeCallbacks(rendererReadyTimeout);
-            rendererReadyTimeout = () -> {
-                if (generation != myGen) return;
-                Log.w(TAG, "[renderer_ready_timeout] no first-frame for slide " + mySlideId
-                        + " after " + RENDERER_READY_TIMEOUT_MS + "ms — starting timer anyway");
-                if (telemetry != null) telemetry.logEvent("renderer_timeout", mySlideId,
-                        "{\"pendingMs\":" + pendingAdvanceDurationMs + "}");
-                rendererReadyTimeout = null; rendererReadyTimeoutGen = -1;
-                toState(State.PLAYING, mySlideId);
-                startAdvanceTimer(myGen, pendingAdvanceDurationMs);
-            };
-            handler.postDelayed(rendererReadyTimeout, RENDERER_READY_TIMEOUT_MS);
         }
     }
 
@@ -765,3 +776,4 @@ public class PlaylistScheduler {
     }
 
 }
+
