@@ -63,6 +63,10 @@ public class PlaylistScheduler {
         public float volume = 0f;
         public String scaleType = "contain";
         public String fallbackUrl = "";
+        /** "native" / "pre-rendered" / "webview" — set by the client for design content
+         *  (renderer observability task); only the client knows whether an IMAGE slide is
+         *  a real image or a pre-rendered design snapshot (task #1879). Empty for non-design slides. */
+        public String renderMode = "";
     }
 
     public interface AssetResolver {
@@ -129,6 +133,20 @@ public class PlaylistScheduler {
     /** Renderer kind used for the currently dispatched slide — one of "native_video",
      *  "native_image", "isolated_webview", "main_webview" (baseline renderer diagnostics task). */
     private String currentRendererKind = "";
+
+    // ── Full renderer observability (renderer observability & telemetry task) ──────────
+    /** Name of the WebViewPolicy applied to the current/last WebView-based slide.
+     *  Set by MainActivity right after it computes the policy (per-asset WebView policy
+     *  task); "" for native slides where no WebView policy applies. */
+    private volatile String lastWebViewPolicy = "";
+    public void setLastWebViewPolicy(String name) { lastWebViewPolicy = name == null ? "" : name; }
+    /** "local" or "remote" — which player shell served this boot. Set once by MainActivity
+     *  from PlayerShellManager.getLastBootSource() after the boot decision is made. */
+    private volatile String shellSource = "unknown";
+    public void setShellSource(String source) { shellSource = source == null ? "unknown" : source; }
+    /** True if the current slide dispatch fell back away from its primary renderer
+     *  (isolated-webview failure, degraded playback). Reset at the top of every showCurrent(). */
+    private boolean lastFallbackUsed = false;
 
       /** Pass MediaDownloadManager to repository for the atomic revision pipeline. */
       public void setMediaDownloadManager(MediaDownloadManager mdm) { repository.setMediaDownloadManager(mdm); }
@@ -392,8 +410,12 @@ public class PlaylistScheduler {
         if (telemetry != null) telemetry.logEvent("slide_ready", slideId,
                 "{\"readyMs\":" + readyMs
                 + ",\"readyLatencyMs\":" + readyMs
+                + ",\"firstFrameLatencyMs\":" + readyMs
                 + ",\"rendererKind\":\"" + currentRendererKind + "\""
                 + ",\"memoryTier\":\"" + currentMemoryTier() + "\""
+                + ",\"webViewPolicy\":\"" + lastWebViewPolicy + "\""
+                + ",\"shellSource\":\"" + shellSource + "\""
+                + ",\"fallbackUsed\":" + lastFallbackUsed
                 + ",\"loadTimeout\":false"
                 + ",\"rendererCrash\":false}");
         // Cancel the safety timeout and start the advance timer — renderer confirmed
@@ -439,6 +461,9 @@ public class PlaylistScheduler {
                 + ",\"slideRetry\":" + slideRetryCount
                 + ",\"rendererKind\":\"" + currentRendererKind + "\""
                 + ",\"memoryTier\":\"" + currentMemoryTier() + "\""
+                + ",\"webViewPolicy\":\"" + lastWebViewPolicy + "\""
+                + ",\"shellSource\":\"" + shellSource + "\""
+                + ",\"fallbackUsed\":" + lastFallbackUsed
                 + ",\"loadTimeout\":false"
                 + ",\"rendererCrash\":true"
                 + ",\"rendererCrashReason\":" + JSONObject.quote(error) + "}");
@@ -478,8 +503,12 @@ public class PlaylistScheduler {
     public void onIsolatedRendererFailed(String slideId, String reason) {
         Log.w(TAG, "[isolated_renderer_failed] " + slideId + ": " + reason + " — falling back to legacy WebView");
         isolatedRendererFallbackSlides.add(slideId);
+        lastFallbackUsed = true;
         if (telemetry != null) telemetry.logEvent("isolated_renderer_fallback", slideId,
-                "{\"reason\":" + JSONObject.quote(reason) + "}");
+                "{\"reason\":" + JSONObject.quote(reason)
+                + ",\"fallbackUsed\":true"
+                + ",\"webViewPolicy\":\"" + lastWebViewPolicy + "\""
+                + ",\"shellSource\":\"" + shellSource + "\"}");
         onRendererError(slideId, "isolated_fallback: " + reason);
     }
 
@@ -517,6 +546,8 @@ public class PlaylistScheduler {
         assetGraceRetries = 0; // URL present — reset grace counter
 
         slideRetryCount = 0;
+        lastFallbackUsed = false; // reset per-slide; set true if isolated renderer/degraded fallback fires
+        final long memoryBeforeMb = telemetry != null ? telemetry.currentMemMb() : -1;
         slideStartMs = SystemClock.elapsedRealtime(); // Fix 13: monotonic
         toState(State.PREPARING_CURRENT, slide.slideId);
 
@@ -590,8 +621,12 @@ public class PlaylistScheduler {
                 if (telemetry != null) telemetry.logEvent("renderer_timeout", mySlideId,
                         "{\"pendingMs\":" + pendingAdvanceDurationMs
                         + ",\"readyLatencyMs\":" + RENDERER_READY_TIMEOUT_MS
+                        + ",\"firstFrameLatencyMs\":" + RENDERER_READY_TIMEOUT_MS
                         + ",\"rendererKind\":\"" + currentRendererKind + "\""
                         + ",\"memoryTier\":\"" + currentMemoryTier() + "\""
+                        + ",\"webViewPolicy\":\"" + lastWebViewPolicy + "\""
+                        + ",\"shellSource\":\"" + shellSource + "\""
+                        + ",\"fallbackUsed\":" + lastFallbackUsed
                         + ",\"loadTimeout\":true"
                         + ",\"rendererCrash\":false}");
                 rendererReadyTimeout = null; rendererReadyTimeoutGen = -1;
@@ -669,10 +704,20 @@ public class PlaylistScheduler {
                   break;
           }
 
+        final long memoryAfterMb = telemetry != null ? telemetry.currentMemMb() : -1;
+        final String designRenderMode = !slide.renderMode.isEmpty() ? slide.renderMode
+                : (eff == SlideType.WEBVIEW_DESIGN || eff == SlideType.WEBVIEW_KIOSK) ? "webview"
+                : (eff == SlideType.IMAGE || eff == SlideType.VIDEO) ? "native" : "n/a";
         if (telemetry != null) telemetry.logEvent("slide_shown", slide.slideId,
                 "{\"type\":\"" + eff + "\",\"index\":" + currentIndex
                 + ",\"rendererKind\":\"" + currentRendererKind + "\""
-                + ",\"memoryTier\":\"" + currentMemoryTier() + "\"}");
+                + ",\"memoryTier\":\"" + currentMemoryTier() + "\""
+                + ",\"webViewPolicy\":\"" + lastWebViewPolicy + "\""
+                + ",\"shellSource\":\"" + shellSource + "\""
+                + ",\"designRenderMode\":\"" + designRenderMode + "\""
+                + ",\"fallbackUsed\":" + lastFallbackUsed
+                + ",\"memoryBeforeMb\":" + memoryBeforeMb
+                + ",\"memoryAfterMb\":" + memoryAfterMb + "}");
 
         schedulePreload(eff);
 
@@ -816,6 +861,7 @@ public class PlaylistScheduler {
                 s.volume     = (float) o.optDouble("volume", 0.0);
                 s.scaleType  = o.optString("scaleType", "contain");
                 s.fallbackUrl= o.optString("fallbackUrl", "");
+                s.renderMode = o.optString("renderMode", "");
                 result.add(s);
             }
         } catch (Exception e) { Log.e(TAG, "parseSlides: " + e.getMessage()); }
@@ -837,6 +883,7 @@ public class PlaylistScheduler {
                 s.loop       = cfg.optBoolean("loop", true);
                 s.volume     = (float) cfg.optDouble("volume", 0.0);
                 s.scaleType  = cfg.optString("scaleType", "contain");
+                s.renderMode = cfg.optString("renderMode", "");
                 plans.add(s);
             } catch (Exception ex) { Log.w(TAG, "entitiesToPlans: " + ex.getMessage()); }
         }
