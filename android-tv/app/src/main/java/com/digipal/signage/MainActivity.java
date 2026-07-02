@@ -652,6 +652,39 @@ import android.os.Looper;
             return "";
         }
 
+        /**
+         * Debug-panel status: reports which renderer is actually active (native video/
+         * image, isolated WebView, or legacy shared WebView), current memory tier,
+         * WebView policy, shell source, and whether the isolated-renderer feature flag
+         * is even turned on for this build. Consumed by the JS DebugOverlay so the
+         * on-screen debug panel can show ground truth instead of guessing from appVersion.
+         */
+        @JavascriptInterface
+        public String getRendererStatus() {
+            try {
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("appVersion", BuildConfig.VERSION_NAME);
+                o.put("versionCode", BuildConfig.VERSION_CODE);
+                if (playlistScheduler != null) {
+                    o.put("rendererKind", playlistScheduler.getCurrentRendererKind());
+                    o.put("memoryTier", playlistScheduler.getMemoryTierName());
+                    o.put("webViewPolicy", playlistScheduler.getLastWebViewPolicyName());
+                    o.put("shellSource", playlistScheduler.getShellSourceName());
+                    o.put("fallbackUsed", playlistScheduler.isLastFallbackUsed());
+                } else {
+                    o.put("rendererKind", "unknown");
+                    o.put("memoryTier", "unknown");
+                    o.put("webViewPolicy", "");
+                    o.put("shellSource", "unknown");
+                    o.put("fallbackUsed", false);
+                }
+                o.put("isolatedRendererFeatureEnabled", PlaylistScheduler.isIsolatedRendererFeatureEnabled());
+                return o.toString();
+            } catch (Exception e) {
+                return "{}";
+            }
+        }
+
         @JavascriptInterface
         public boolean deleteMedia(String objectPath) {
             if (mediaDownloadManager != null) {
