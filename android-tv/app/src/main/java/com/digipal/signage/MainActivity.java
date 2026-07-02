@@ -754,6 +754,15 @@ import android.os.Looper;
         }
 
           @JavascriptInterface
+        public void setSentryPlayerId(String playerId) {
+            try {
+                if (playerId != null && !playerId.isEmpty()) {
+                    io.sentry.Sentry.configureScope(scope -> scope.setTag("player_id", playerId));
+                }
+            } catch (Exception ignored) {}
+        }
+
+          @JavascriptInterface
           public void captureScreenshot(String requestId) {
               if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
                   // PixelCopy requires API 26+; signal null so the web side falls back to html2canvas
