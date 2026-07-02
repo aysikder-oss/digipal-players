@@ -595,18 +595,45 @@ public class PlaylistScheduler {
                   // WEBVIEW_DESIGN / WEBVIEW_KIOSK / WEBVIEW_URL: handed to the React TV player,
                   // or (behind FEATURE_ISOLATED_WEB_RENDERER) an isolated per-slide WebView that
                   // is not shared across slides — task #1875.
-                  android.util.Log.i("PlaylistScheduler", "[dispatch] webview type=" + eff
+                  Log.i(TAG, "[dispatch] webview type=" + eff
                           + " slide=" + slide.slideId + " isolated=" + useIsolatedRenderer);
-                  // Release native video/image before handing to WebView — prevents old content
-                  // shadowing the WebView and frees the hardware decoder (critical on Fire TV).
-                  delegate.schedulerStopVideo();
-                  delegate.schedulerHideImage();
-                  if (useIsolatedRenderer) {
-                      delegate.schedulerDeactivateWebView();
-                      delegate.schedulerActivateIsolatedRenderer(slide);
-                  } else {
-                      delegate.schedulerDeactivateIsolatedRenderer();
-                      delegate.schedulerActivateWebView(slide);
+                  // T1d hardening: the legacy shared-WebView path has no ready/error signal of
+                  // its own (advance timer starts immediately below), so any exception thrown by
+                  // a Delegate implementation here would otherwise silently kill the scheduler's
+                  // dispatch loop and freeze the player on the previous slide. Catch, log, and
+                  // fall through to slide_shown/advance-timer bookkeeping so playback continues.
+                  try {
+                      // Release native video/image before handing to WebView — prevents old
+                      // content shadowing the WebView and frees the hardware decoder (critical
+                      // on Fire TV).
+                      delegate.schedulerStopVideo();
+                      delegate.schedulerHideImage();
+                      if (useIsolatedRenderer) {
+                          delegate.schedulerDeactivateWebView();
+                          delegate.schedulerActivateIsolatedRenderer(slide);
+                      } else {
+                          delegate.schedulerDeactivateIsolatedRenderer();
+                          delegate.schedulerActivateWebView(slide);
+                      }
+                  } catch (Exception e) {
+                      Log.e(TAG, "[dispatch] webview activation failed slide=" + slide.slideId
+                              + " isolated=" + useIsolatedRenderer, e);
+                      if (telemetry != null) telemetry.logEvent("webview_dispatch_error",
+                              slide.slideId, "{\"isolated\":" + useIsolatedRenderer
+                                      + ",\"error\":\"" + String.valueOf(e.getMessage()) + "\"}");
+                      if (useIsolatedRenderer) {
+                          // Never let a broken isolated-renderer path strand a slide: fall back
+                          // to the legacy WebView on the same dispatch instead of waiting for the
+                          // RENDERER_READY_TIMEOUT_MS gate to expire.
+                          onIsolatedRendererFailed(slide.slideId, "dispatch_exception");
+                          try {
+                              delegate.schedulerDeactivateIsolatedRenderer();
+                              delegate.schedulerActivateWebView(slide);
+                          } catch (Exception fallbackEx) {
+                              Log.e(TAG, "[dispatch] legacy webview fallback also failed slide="
+                                      + slide.slideId, fallbackEx);
+                          }
+                      }
                   }
                   break;
           }
