@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
     
     steps:
       - uses: actions/checkout@v4
