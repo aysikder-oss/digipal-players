@@ -1929,6 +1929,7 @@ import android.os.Looper;
                                     if (last != null && last.localManifest != null && !last.localManifest.isEmpty()) {
                                         playlistScheduler.setPlaylist(last.localManifest);
                                         android.util.Log.i("DigipalRecovery", "[ROLLBACK] reverted to revision " + last.revisionId);
+                                        try { io.sentry.Sentry.captureMessage("Playlist rollback to revision " + last.revisionId, io.sentry.SentryLevel.WARNING); } catch (Throwable _sbc) {}
                                     }
                                 });
                             }
@@ -1962,7 +1963,8 @@ import android.os.Looper;
                                   if (webView != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                                       try { webView.setRendererPriorityPolicy(android.webkit.WebView.RENDERER_PRIORITY_BOUND, false); } catch (Throwable ignored) {}
                                   }
-                                  playNativeVideoForScheduler(_url, _fit, _loop, _vol, _sid, _contentId);
+                                  try { io.sentry.Breadcrumb _vBc = new io.sentry.Breadcrumb("Slide start: VIDEO"); _vBc.setCategory("playback"); _vBc.setType("info"); _vBc.setLevel(io.sentry.SentryLevel.DEBUG); _vBc.setData("slide_id", _sid); _vBc.setData("content_id", _contentId); _vBc.setData("duration_ms", _dur); io.sentry.Sentry.addBreadcrumb(_vBc); } catch (Throwable _sbc) {}
+                  playNativeVideoForScheduler(_url, _fit, _loop, _vol, _sid, _contentId);
                         MainActivity.this.startStallWatchdog(); // Fix 4
                               } catch (Throwable ignored) {}
                               if (supRef[0] != null) supRef[0].reportSchedulerAdvance();
@@ -1973,6 +1975,7 @@ import android.os.Looper;
                           final String _sid = s.slideId;
                           final long _dur = s.durationMs;
                           if (healthMonitor != null) healthMonitor.setRendererTypeNative();
+                          try { io.sentry.Breadcrumb _iBc = new io.sentry.Breadcrumb("Slide start: IMAGE"); _iBc.setCategory("playback"); _iBc.setType("info"); _iBc.setLevel(io.sentry.SentryLevel.DEBUG); _iBc.setData("slide_id", _sid); _iBc.setData("duration_ms", _dur); io.sentry.Sentry.addBreadcrumb(_iBc); } catch (Throwable _sbc) {}
                           runOnUiThread(() -> {
                               try {
                                   currentNativeSlideDurationMs = _dur;
@@ -2011,6 +2014,7 @@ import android.os.Looper;
                                               @Override public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e,
                                                       Object model, com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target, boolean isFirstResource) {
                                                   android.util.Log.w("DigipalNative", "[schedulerShowImage] Glide failed slide=" + _sid + ": " + (e != null ? e.getMessage() : "null"));
+                                                  try { io.sentry.Sentry.captureMessage("Glide image load failed: slide=" + _sid + " err=" + (e != null ? e.getMessage() : "null"), io.sentry.SentryLevel.WARNING); } catch (Throwable _sbc) {}
                                                   try { io.sentry.Breadcrumb _bc = new io.sentry.Breadcrumb("Glide load failed slide=" + _sid + ": " + (e != null ? e.getMessage() : "null")); _bc.setLevel(io.sentry.SentryLevel.WARNING); _bc.setType("error"); io.sentry.Sentry.addBreadcrumb(_bc); } catch (Throwable ignored) {}
                                                   // Notify scheduler directly — it will retry/skip; no brown square lingers
                                                   if (playlistScheduler != null) playlistScheduler.onRendererError(_sid, "glide_load_failed");
@@ -2109,6 +2113,7 @@ import android.os.Looper;
                           if (healthMonitor != null) healthMonitor.setRendererTypeWeb();
                           currentNativeSlideDurationMs = 0L; // Fix 8: web slide — reset duration guard
                           final int _contentId = s.contentId;
+                          try { io.sentry.Breadcrumb _wBc = new io.sentry.Breadcrumb("Slide start: WEBVIEW"); _wBc.setCategory("playback"); _wBc.setType("info"); _wBc.setLevel(io.sentry.SentryLevel.DEBUG); _wBc.setData("content_id", _contentId); io.sentry.Sentry.addBreadcrumb(_wBc); } catch (Throwable _sbc) {}
                           runOnUiThread(() -> {
                               try {
                                   hideNativeVideoSurfaces(); // ensure no stale TextureView covers WebView
@@ -2294,6 +2299,7 @@ import android.os.Looper;
                       }
                       @Override public void mediumRecover(String reason) {
                           android.util.Log.w("DigipalReliability", "[medium] " + reason);
+                          try { io.sentry.Sentry.captureMessage("Player medium recover: " + reason, io.sentry.SentryLevel.WARNING); } catch (Throwable _sbc) {}
                           // Release all media renderers before re-booting — prevents ExoPlayer leaks on long sessions
                           runOnUiThread(() -> releaseAllRenderers());
                           if (playlistScheduler != null) playlistScheduler.boot();
@@ -2327,8 +2333,27 @@ import android.os.Looper;
                           options.setDsn(BuildConfig.SENTRY_DSN);
                           options.setRelease(BuildConfig.VERSION_NAME);
                           options.setEnvironment("production");
-                          options.setTracesSampleRate(0.0);
+                          options.setTracesSampleRate(0.02); // 2% perf tracing — negligible overhead
+                          options.setAttachAnrs(true);       // capture ANR thread dumps
+                          options.setAttachStacktrace(true); // stack trace on captureMessage() calls
                       });
+                      // Permanent session tags — set once, appear on every event/breadcrumb
+                      io.sentry.Sentry.configureScope(scope -> {
+                          scope.setTag("build_flavor",  BuildConfig.BUILD_FLAVOR);
+                          scope.setTag("app_version",   BuildConfig.VERSION_NAME);
+                          scope.setTag("git_sha",       BuildConfig.GIT_SHA);
+                          scope.setTag("device_model",  android.os.Build.MODEL);
+                          scope.setTag("android_sdk",   String.valueOf(android.os.Build.VERSION.SDK_INT));
+                      });
+                      // App start / restart breadcrumb
+                      io.sentry.Breadcrumb _restartBc = new io.sentry.Breadcrumb("Player process started");
+                      _restartBc.setCategory("lifecycle");
+                      _restartBc.setType("info");
+                      _restartBc.setLevel(io.sentry.SentryLevel.INFO);
+                      _restartBc.setData("version",    BuildConfig.VERSION_NAME);
+                      _restartBc.setData("git_sha",    BuildConfig.GIT_SHA);
+                      _restartBc.setData("build_flavor", BuildConfig.BUILD_FLAVOR);
+                      io.sentry.Sentry.addBreadcrumb(_restartBc);
                   } catch (Throwable ignored) {}
               }
 
@@ -2846,6 +2871,7 @@ import android.os.Looper;
     }
 
     private void forcePlayerReload() {
+        try { io.sentry.Breadcrumb _frBc = new io.sentry.Breadcrumb("Player page forced reload"); _frBc.setCategory("lifecycle"); _frBc.setType("info"); _frBc.setLevel(io.sentry.SentryLevel.WARNING); io.sentry.Sentry.addBreadcrumb(_frBc); } catch (Throwable _sbc) {}
         runOnUiThread(() -> {
             try {
                 if (errorContainer != null) errorContainer.setVisibility(View.GONE);
