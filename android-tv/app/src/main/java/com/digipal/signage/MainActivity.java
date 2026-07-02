@@ -322,6 +322,13 @@ import android.os.Looper;
             bootedFromLocalShell = false;
             loadPlayerUrl(serverUrl);
         }
+        // Renderer observability: report which shell (local cached vs. remote network
+        // load) actually served this boot, so field telemetry can distinguish the two.
+        try {
+            String source = playerShellManager != null ? playerShellManager.getLastBootSource() : "remote";
+            if (telemetryManager != null) telemetryManager.setShellSource(source);
+            if (playlistScheduler != null) playlistScheduler.setShellSource(source);
+        } catch (Throwable ignored) {}
         // Opportunistically refresh the local shell cache in the background so the next boot
         // (or a rollback) has an up-to-date, health-checked snapshot (local player shell hardening task).
         try {
@@ -2244,6 +2251,10 @@ import android.os.Looper;
                                       }
                                   }
                                   applyWebViewProfile(s.type);
+                                  if (playlistScheduler != null) {
+                                      playlistScheduler.setLastWebViewPolicy(
+                                          WebViewPolicy.forSlideType(s.type).name);
+                                  }
                               } catch (Throwable ignored) {}
                           });
                       }
@@ -2331,6 +2342,7 @@ import android.os.Looper;
                                   // applyWebViewProfile(slideType) two-bucket behavior exactly;
                                   // future per-content overrides can be layered on here.
                                   WebViewPolicy policy = WebViewPolicy.forSlideType(s.type);
+                                  if (playlistScheduler != null) playlistScheduler.setLastWebViewPolicy(policy.name);
                                   isolatedWebRenderer.prepare(s.slideId, url, policy);
                               } catch (Throwable ignored) {
                                   if (playlistScheduler != null) {
