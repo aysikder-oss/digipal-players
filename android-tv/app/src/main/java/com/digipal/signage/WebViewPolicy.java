@@ -1,0 +1,133 @@
+package com.digipal.signage;
+
+import android.os.Build;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+
+/**
+ * WebViewPolicy — per-asset WebView configuration model (task: Per-Asset WebView
+ * Policy). Extends the previous coarse two-bucket switch in
+ * {@code MainActivity#applyWebViewProfile} (design/kiosk vs. plain URL) into a
+ * tunable-per-slide policy. {@link #forSlideType} reproduces exactly what
+ * {@code applyWebViewProfile} already did, so any slide with no explicit policy
+ * (the overwhelming majority today) behaves identically to before this task.
+ *
+ * Fields not yet wired to a config source (cacheMode, cookies, desktop UA,
+ * custom JS, offline flag, ready timeout) default to safe no-op values and are
+ * consumed by {@link IsolatedWebRenderer} — server/UI exposure to set them
+ * per-content is a follow-up once this plumbing lands.
+ */
+public class WebViewPolicy {
+
+    /** True = brand-new WebView instance per slide (never reused); false = reuse allowed. */
+    public boolean freshWebView = false;
+
+    /** One of WebSettings.LOAD_DEFAULT / LOAD_NO_CACHE / LOAD_CACHE_ELSE_NETWORK / LOAD_CACHE_ONLY. */
+    public int cacheMode = WebSettings.LOAD_DEFAULT;
+
+    /** Clear cookies for this WebView's origin when the slide finishes. */
+    public boolean clearCookiesOnExit = false;
+
+    /** Allow third-party cookies (e.g. embedded widgets/analytics inside a design). */
+    public boolean allowThirdPartyCookies = true;
+
+    /** Force a desktop User-Agent string (useful for external URL slides built for desktop). */
+    public boolean desktopUserAgent = false;
+
+    /** Optional periodic reload interval in seconds; 0 = never auto-refresh. */
+    public int refreshIntervalSec = 0;
+
+    /** Optional JS to inject via evaluateJavascript once the page has loaded. */
+    public String customJs = null;
+
+    /** Max retries for injecting customJs if the initial injection fails/no-ops. */
+    public int customJsMaxRetries = 0;
+
+    /** Whether this slide's content is expected to work fully offline (affects cache preference). */
+    public boolean canOffline = false;
+
+    /** Whether the rendered content expects touch input (kiosk interactive designs). */
+    public boolean requiresTouch = false;
+
+    /** Ready-gate timeout in ms before falling back — 0 means "use IsolatedWebRenderer's default". */
+    public long readyTimeoutMs = 0;
+
+    // ---- WebSettings fields carried over 1:1 from applyWebViewProfile ----
+    public boolean allowFileAccess;
+    public boolean allowFileAccessFromFileUrls;
+    public boolean allowUniversalFileAccess;
+    public boolean databaseEnabled;
+    public int mixedContentMode;
+    public boolean rendererPriorityImportant;
+
+    /**
+     * Safe default policy matching today's applyWebViewProfile(slideType) exactly.
+     * Design/Kiosk = permissive (file access on, mixed content always allow).
+     * Everything else (plain URL) = restrictive (file access off, compatibility mode).
+     */
+    public static WebViewPolicy forSlideType(PlaylistScheduler.SlideType slideType) {
+        WebViewPolicy p = new WebViewPolicy();
+        boolean isDesignKiosk = slideType == PlaylistScheduler.SlideType.WEBVIEW_DESIGN
+                || slideType == PlaylistScheduler.SlideType.WEBVIEW_KIOSK;
+        if (isDesignKiosk) {
+            p.allowFileAccess = true;
+            p.allowFileAccessFromFileUrls = true;
+            p.allowUniversalFileAccess = true;
+            p.databaseEnabled = true;
+            p.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW;
+            p.rendererPriorityImportant = true;
+            p.requiresTouch = slideType == PlaylistScheduler.SlideType.WEBVIEW_KIOSK;
+            p.freshWebView = slideType == PlaylistScheduler.SlideType.WEBVIEW_KIOSK;
+        } else {
+            p.allowFileAccess = false;
+            p.allowFileAccessFromFileUrls = false;
+            p.allowUniversalFileAccess = false;
+            p.databaseEnabled = false;
+            p.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE;
+            p.rendererPriorityImportant = false;
+        }
+        return p;
+    }
+
+    /** Applies this policy's WebSettings-backed fields to the given WebView. */
+    public void applyTo(WebView webView) {
+        if (webView == null) return;
+        WebSettings settings = webView.getSettings();
+        settings.setAllowFileAccess(allowFileAccess);
+        settings.setAllowFileAccessFromFileURLs(allowFileAccessFromFileUrls);
+        settings.setAllowUniversalAccessFromFileURLs(allowUniversalFileAccess);
+        settings.setDatabaseEnabled(databaseEnabled);
+        settings.setMixedContentMode(mixedContentMode);
+        settings.setCacheMode(cacheMode);
+        if (desktopUserAgent) {
+            settings.setUserAgentString(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                + "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            webView.setRendererPriorityPolicy(
+                rendererPriorityImportant ? WebView.RENDERER_PRIORITY_IMPORTANT : WebView.RENDERER_PRIORITY_BOUND,
+                true);
+        }
+        try {
+            android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                cm.setAcceptThirdPartyCookies(webView, allowThirdPartyCookies);
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * Returns "package@version" for the Android System WebView implementation currently
+     * in use, or "unknown" if it cannot be determined. Exposed for diagnostics/telemetry.
+     */
+    public static String currentWebViewPackageInfo() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                android.content.pm.PackageInfo info = WebView.getCurrentWebViewPackage();
+                if (info != null) return info.packageName + "@" + info.versionName;
+            }
+        } catch (Throwable ignored) {}
+        return "unknown";
+    }
+}
