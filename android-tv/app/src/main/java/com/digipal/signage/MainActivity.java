@@ -1643,7 +1643,7 @@ import android.os.Looper;
                       android.util.Log.d("DigipalVideo", "[cold2] SurfaceView path alpha=0");
                   }
                   coldPlayer.setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.parse(url)));
-                  coldPlayer.setRepeatMode(loop ? androidx.media3.common.Player.REPEAT_MODE_ONE : androidx.media3.common.Player.REPEAT_MODE_OFF);
+                  coldPlayer.setRepeatMode(androidx.media3.common.Player.REPEAT_MODE_OFF); // scheduler owns loop via natural-end listener (attachLoopAdvanceListener); REPEAT_MODE_ONE caused 1-frame replay on single-video loops
                   coldPlayer.setVolume(volume); coldPlayer.prepare(); coldPlayer.play();
                   android.util.Log.d("DigipalVideo", "[cold-load diag] pvVisibility=" + (preloadView != null ? preloadView.getVisibility() : -1) + " pvAlpha=" + (preloadView != null ? preloadView.getAlpha() : -1f) + " state=" + coldPlayer.getPlaybackState() + " url_scheme=" + (url.contains("://") ? url.substring(0, url.indexOf("://")) : "?"));
                   coldPlayer.addAnalyticsListener(new androidx.media3.exoplayer.analytics.AnalyticsListener() {
@@ -3122,3 +3122,4 @@ import android.os.Looper;
       }
   
 }
+
