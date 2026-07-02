@@ -2344,7 +2344,6 @@ import android.os.Looper;
                           options.setRelease(BuildConfig.VERSION_NAME);
                           options.setEnvironment("production");
                           options.setTracesSampleRate(0.02); // 2% perf tracing — negligible overhead
-                          options.setAttachAnrs(true);       // capture ANR thread dumps
                           options.setAttachStacktrace(true); // stack trace on captureMessage() calls
                       });
                       // Permanent session tags — set once, appear on every event/breadcrumb
