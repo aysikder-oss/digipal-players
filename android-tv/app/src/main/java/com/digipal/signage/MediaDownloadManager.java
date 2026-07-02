@@ -50,7 +50,7 @@ package com.digipal.signage;
       public MediaDownloadManager(Context context) {
           this.context = context;
           this.prefs = context.getSharedPreferences(MANIFEST_PREFS, Context.MODE_PRIVATE);
-          this.executor = Executors.newFixedThreadPool(4);
+          this.executor = Executors.newFixedThreadPool(2); // Fix 11: 2 threads avoid bandwidth saturation during ExoPlayer streaming
           this.mainHandler = new Handler(Looper.getMainLooper());
           this.activeDownloads = new HashSet<>();
           this.pendingCallbacks = new ConcurrentHashMap<>();
@@ -123,7 +123,12 @@ package com.digipal.signage;
           String lastError = "Unknown error";
           for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
               if (attempt > 1) {
-                  try { Thread.sleep(2000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+                  // Exponential backoff with jitter: 2s, 4s, 8s + random 0-1s, capped at 30s (Fix 1).
+                  long backoffMs = Math.min(30_000L, (long)(Math.pow(2, attempt - 1) * 2_000L));
+                  long jitterMs  = (long)(Math.random() * 1_000L);
+                  android.util.Log.d("MediaDownload", "[performDownload] retry attempt=" + attempt
+                          + " backoff=" + backoffMs + "ms jitter=" + jitterMs + "ms obj=" + objectPath);
+                  try { Thread.sleep(backoffMs + jitterMs); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
               }
               try {
               File mediaDir = getMediaDir();
@@ -191,6 +196,22 @@ package com.digipal.signage;
                   return;
               }
 
+              // Fix 3: integrity check — verify file is non-empty and size approximates Content-Length.
+              if (totalRead == 0 || !outputFile.exists() || outputFile.length() == 0) {
+                  outputFile.delete();
+                  lastError = "Zero-byte file after download";
+                  android.util.Log.w("MediaDownload", "[integrity] zero-byte file: " + objectPath);
+                  continue; // retry
+              }
+              if (contentLength > 0) {
+                  double ratio = (double) outputFile.length() / contentLength;
+                  if (ratio < 0.95 || ratio > 1.05) {
+                      outputFile.delete();
+                      lastError = "File size mismatch: got " + outputFile.length() + " expected " + contentLength;
+                      android.util.Log.w("MediaDownload", "[integrity] size mismatch: " + lastError + " obj=" + objectPath);
+                      continue; // retry
+                  }
+              }
               addToManifest(objectPath, outputFile.getAbsolutePath(), totalRead);
               notifyDownloadComplete(objectPath, "file://" + outputFile.getAbsolutePath());
 
