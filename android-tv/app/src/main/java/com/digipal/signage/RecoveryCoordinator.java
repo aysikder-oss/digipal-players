@@ -5,6 +5,7 @@ package com.digipal.signage;
   import android.os.Looper;
   import android.util.Log;
   import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
   import java.util.Map;
 
   /**
@@ -60,7 +61,7 @@ package com.digipal.signage;
       private final JsBridge           jsBridge;
       private final Handler            handler = new Handler(Looper.getMainLooper());
 
-      private final Map<String, Integer> slideFailures = new HashMap<>();
+      private final Map<String, Integer> slideFailures = new ConcurrentHashMap<>(); // Fix 12: thread-safe
       private int  globalFailures       = 0;
       private int  webViewCrashCount    = 0;
       private long firstWebViewCrashMs  = 0;
