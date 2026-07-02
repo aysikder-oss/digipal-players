@@ -1958,6 +1958,13 @@ import android.os.Looper;
                                         try { preloadPlayer.release(); } catch (Throwable ignored) {}
                                         preloadPlayer = null; preloadedVideoUrl = null; preloadVideoReady = false;
                                     }
+                                    // Low-memory WebView policy: on CRITICAL, aggressively destroy the
+                                    // isolated WebView renderer if it is not the one currently on screen
+                                    // — CRITICAL means "one renderer only, no idle WebView".
+                                    if (isolatedWebRenderer != null && !isolatedWebRenderer.isShowing()) {
+                                        try { isolatedWebRenderer.destroy(); isolatedWebRenderer = null; } catch (Throwable ignored) {}
+                                        android.util.Log.w("DigipalMemory", "[CRITICAL] idle isolated WebView destroyed");
+                                    }
                                     try { com.bumptech.glide.Glide.get(MainActivity.this).clearMemory();
                                     } catch (Throwable ignored) {}
                                     android.util.Log.w("DigipalMemory", "[CRITICAL] preloads cancelled, Glide cleared");
@@ -2326,7 +2333,17 @@ import android.os.Looper;
                       @Override public void schedulerDeactivateIsolatedRenderer() {
                           runOnUiThread(() -> {
                               try {
-                                  if (isolatedWebRenderer != null) isolatedWebRenderer.hide();
+                                  if (isolatedWebRenderer != null) {
+                                      isolatedWebRenderer.hide();
+                                      // Low-memory WebView policy: on CRITICAL tier, reuse of a hidden
+                                      // WebView is disallowed — destroy it immediately so no idle WebView
+                                      // is ever held. NORMAL/LOW keep the instance alive for reuse.
+                                      if (memoryBudgetManager != null
+                                              && memoryBudgetManager.getCurrentTier() == MemoryBudgetManager.Tier.CRITICAL) {
+                                          isolatedWebRenderer.destroy();
+                                          isolatedWebRenderer = null;
+                                      }
+                                  }
                               } catch (Throwable ignored) {}
                           });
                       }
@@ -2923,6 +2940,24 @@ import android.os.Looper;
      * and schedule a clean reload (debounced) so the OS does not kill us first.
      */
     private void handleMemoryPressure(int level) {
+        // Low-memory WebView policy backstop: Android's own low-memory signal (not just
+        // MemoryBudgetManager's 5s poll) should immediately kill an idle isolated WebView
+        // and trim Glide, regardless of the current tier reading.
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL
+                || level == android.content.ComponentCallbacks2.TRIM_MEMORY_COMPLETE) {
+            try {
+                if (isolatedWebRenderer != null && !isolatedWebRenderer.isShowing()) {
+                    isolatedWebRenderer.destroy();
+                    isolatedWebRenderer = null;
+                    android.util.Log.w("DigipalMemory", "[onTrimMemory] idle isolated WebView destroyed");
+                }
+                if (preloadPlayer != null) {
+                    try { preloadPlayer.release(); } catch (Throwable ignored) {}
+                    preloadPlayer = null; preloadedVideoUrl = null; preloadVideoReady = false;
+                }
+                com.bumptech.glide.Glide.get(MainActivity.this).clearMemory();
+            } catch (Throwable ignored) {}
+        }
         try {
             if (webView == null) return;
             if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL
