@@ -1933,9 +1933,11 @@ import android.os.Looper;
                           final String _url = s.url; final String _fit = s.objectFit;
                           final boolean _loop = s.loop; final float _vol = s.volume;
                           final String _sid = s.slideId; final int _contentId = s.contentId;
+                          final long _dur = s.durationMs;
                           if (healthMonitor != null) healthMonitor.setRendererTypeNative();
                           runOnUiThread(() -> {
                               try {
+                                  currentNativeSlideDurationMs = _dur;
                                   // Set WebView dormant directly — no evaluateJavascript round-trip
                                   if (webView != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                                       try { webView.setRendererPriorityPolicy(android.webkit.WebView.RENDERER_PRIORITY_BOUND, false); } catch (Throwable ignored) {}
@@ -1949,9 +1951,11 @@ import android.os.Looper;
                       @Override public void schedulerShowImage(PlaylistScheduler.SlidePlan s) {
                           final String _url = s.url; final String _sc = s.scaleType;
                           final String _sid = s.slideId;
+                          final long _dur = s.durationMs;
                           if (healthMonitor != null) healthMonitor.setRendererTypeNative();
                           runOnUiThread(() -> {
                               try {
+                                  currentNativeSlideDurationMs = _dur;
                                   // Set WebView dormant directly — no evaluateJavascript round-trip
                                   if (webView != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                                       try { webView.setRendererPriorityPolicy(android.webkit.WebView.RENDERER_PRIORITY_BOUND, false); } catch (Throwable ignored) {}
