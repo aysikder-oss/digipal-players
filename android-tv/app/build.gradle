@@ -99,12 +99,12 @@ dependencies {
 }
 
 sentry {
-    autoUploadProguardMapping = true
+    // Only upload ProGuard mapping when SENTRY_AUTH_TOKEN is available in CI
+    def sentryToken = System.getenv("SENTRY_AUTH_TOKEN") ?: ""
+    autoUploadProguardMapping = !sentryToken.isEmpty()
     includeNativeSources = false
     org = "digipal-signage"
     projectName = "android"
-    authToken = System.getenv("SENTRY_AUTH_TOKEN") ?: ""
+    authToken = sentryToken
     telemetry = false
-    // Don't fail the build if the auth token isn't available yet — APK still ships
-    failOnError = false
 }
