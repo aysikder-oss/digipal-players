@@ -57,6 +57,10 @@ import android.os.Looper;
     private static final String KEY_PAIRING_CODE = "pairing_code";
     private volatile String cachedPairingCode = null;
     private IsolatedWebRenderer isolatedWebRenderer;
+    /** Local versioned player shell cache (local player shell hardening task) — lets the app
+     *  boot from a last-known-good shell snapshot when the configured server is unreachable. */
+    private PlayerShellManager playerShellManager;
+    private boolean bootedFromLocalShell = false;
     /** "texture" or "surface" — defaults to "texture" on Fire TV, "surface" elsewhere */
     private static final String PREF_VIDEO_RENDERER = "pref_video_renderer";
     private boolean isUserClosing = false;
@@ -218,6 +222,8 @@ import android.os.Looper;
         cachedPairingCode = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getString(KEY_PAIRING_CODE, null);
 
+        if (playerShellManager == null) playerShellManager = new PlayerShellManager(this);
+
         try {
               webView = new WebView(this);
           } catch (Throwable e) {
@@ -304,7 +310,23 @@ import android.os.Looper;
           }
   
         String serverUrl = getServerUrl();
-        loadPlayerUrl(serverUrl);
+        String localBootUrl = null;
+        try {
+            if (playerShellManager != null) localBootUrl = playerShellManager.getBootUrl(serverUrl);
+        } catch (Throwable ignored) {}
+        if (localBootUrl != null) {
+            bootedFromLocalShell = true;
+            currentPlayerUrl = localBootUrl;
+            webView.loadUrl(localBootUrl);
+        } else {
+            bootedFromLocalShell = false;
+            loadPlayerUrl(serverUrl);
+        }
+        // Opportunistically refresh the local shell cache in the background so the next boot
+        // (or a rollback) has an up-to-date, health-checked snapshot (local player shell hardening task).
+        try {
+            if (playerShellManager != null) playerShellManager.downloadShellAsync(serverUrl, null);
+        } catch (Throwable ignored) {}
 
         startAnrWatchdog();
         initNativeComponents();
@@ -367,6 +389,17 @@ import android.os.Looper;
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
+            public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                if (playerShellManager != null
+                        && "appassets.androidplatform.net".equals(request.getUrl().getHost())) {
+                    android.webkit.WebResourceResponse r =
+                            playerShellManager.buildAssetLoader().shouldInterceptRequest(request.getUrl());
+                    if (r != null) return r;
+                }
+                return super.shouldInterceptRequest(view, request);
+            }
+
+            @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 super.onPageStarted(view, url, favicon);
                 hasHttpError = false;
@@ -376,6 +409,10 @@ import android.os.Looper;
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 if (!hasHttpError) {
+                    // Local shell (or server-loaded shell) rendered without an HTTP/network error —
+                    // promote whatever is currently "current" to last_good so a future boot can
+                    // trust it as a rollback target (local player shell hardening task).
+                    if (playerShellManager != null) playerShellManager.markCurrentAsGood();
                     errorContainer.setVisibility(View.GONE);
                     webView.setVisibility(View.VISIBLE);
                     // Suppress webkit media controls and the native video
@@ -446,6 +483,7 @@ import android.os.Looper;
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame()) {
                     hasHttpError = true;
+                    if (maybeRollbackLocalShell()) return;
                     showError("Connection Lost", "Unable to reach the server. Retrying...");
                     retryConnection();
                 }
@@ -457,6 +495,7 @@ import android.os.Looper;
                     int statusCode = errorResponse.getStatusCode();
                     if (statusCode >= 500) {
                         hasHttpError = true;
+                        if (maybeRollbackLocalShell()) return;
                         showError("Connecting...", "Server is starting up. Retrying...");
                         retryConnection();
                     }
@@ -2747,6 +2786,27 @@ import android.os.Looper;
             String serverUrl = getServerUrl();
             loadPlayerUrl(serverUrl);
         }, 5000);
+    }
+
+    /** If the app booted from the local versioned player shell and it just failed to render,
+     *  roll back to the last-known-good local snapshot instead of retrying the same broken
+     *  version forever (local player shell hardening task). Returns true if a rollback load
+     *  was issued (caller should skip its normal error/retry handling). */
+    private boolean maybeRollbackLocalShell() {
+        if (!bootedFromLocalShell || playerShellManager == null) return false;
+        bootedFromLocalShell = false;
+        try {
+            String rollbackUrl = playerShellManager.rollbackToLastGood(getServerUrl());
+            if (rollbackUrl != null) {
+                hasHttpError = false;
+                webView.postDelayed(() -> {
+                    currentPlayerUrl = rollbackUrl;
+                    webView.loadUrl(rollbackUrl);
+                }, 300);
+                return true;
+            }
+        } catch (Throwable ignored) {}
+        return false;
     }
 
     // ---- Crash resilience: renderer recovery, memory pressure, ANR watchdog ----
