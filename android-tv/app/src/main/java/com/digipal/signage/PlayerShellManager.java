@@ -60,11 +60,20 @@ public class PlayerShellManager {
     private final Context ctx;
     private final File rootDir;
 
+    /** "local" or "remote" — updated by getBootUrl()/rollbackToLastGood() so callers
+     *  (telemetry, renderer observability task) can report which shell is currently
+     *  active without duplicating the boot-decision logic. */
+    private volatile String lastBootSource = "remote";
+
     public PlayerShellManager(Context ctx) {
         this.ctx = ctx.getApplicationContext();
         this.rootDir = new File(this.ctx.getFilesDir(), ROOT_DIR_NAME);
         if (!rootDir.exists()) rootDir.mkdirs();
     }
+
+    /** "local" if the app most recently booted (or rolled back) into a locally cached
+     *  shell snapshot, "remote" if it loaded serverUrl directly over the network. */
+    public String getLastBootSource() { return lastBootSource; }
 
     /** Returns the WebViewAssetLoader wired to serve /player_shell/** from local storage. */
     public WebViewAssetLoader buildAssetLoader() {
@@ -82,10 +91,11 @@ public class PlayerShellManager {
      */
     public String getBootUrl(String serverUrl) {
         JsonRecord current = readRecord(CURRENT_JSON);
-        if (current == null) return null;
-        if (!serverUrl.equals(current.serverUrl)) return null;
+        if (current == null) { lastBootSource = "remote"; return null; }
+        if (!serverUrl.equals(current.serverUrl)) { lastBootSource = "remote"; return null; }
         File indexHtml = new File(new File(rootDir, current.version), "index.html");
-        if (!indexHtml.exists() || indexHtml.length() == 0) return null;
+        if (!indexHtml.exists() || indexHtml.length() == 0) { lastBootSource = "remote"; return null; }
+        lastBootSource = "local";
         return "https://" + ASSET_LOADER_DOMAIN + ASSET_LOADER_HTTP_PATH + current.version + "/index.html";
     }
 
@@ -112,6 +122,7 @@ public class PlayerShellManager {
         }
         writeRecord(CURRENT_JSON, lastGood);
         Log.w(TAG, "[rollback] restored current -> last_good version=" + lastGood.version);
+        lastBootSource = "local";
         return "https://" + ASSET_LOADER_DOMAIN + ASSET_LOADER_HTTP_PATH + lastGood.version + "/index.html";
     }
 
