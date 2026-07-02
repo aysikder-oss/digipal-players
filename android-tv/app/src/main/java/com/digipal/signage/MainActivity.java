@@ -2403,6 +2403,11 @@ import android.os.Looper;
               // safe to call on the main thread from showCurrent().
               playlistScheduler.setAssetResolver(url -> localPathCache.get(url));
 
+              // Wire MemoryBudgetManager so baseline renderer diagnostics telemetry
+              // (slide_shown/slide_ready/renderer_timeout/slide_failed) can report the
+              // active memory tier alongside renderer kind and ready latency.
+              playlistScheduler.setMemoryBudgetManager(memoryBudgetManager);
+
               // Pre-populate from Room: assets downloaded in previous sessions are
               // immediately available for local-first playback after a reboot.
               final PlaylistRepository _repo = playlistRepository;
