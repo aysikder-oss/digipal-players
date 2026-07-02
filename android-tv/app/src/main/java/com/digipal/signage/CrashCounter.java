@@ -19,7 +19,7 @@ package com.digipal.signage;
       static final String KEY_MAX_EXCEEDED       = "crash_counter_max_exceeded";
 
       /** Sliding window duration: 100 seconds. */
-      private static final long CRASH_WINDOW_MS = 100_000L;
+      private static final long CRASH_WINDOW_MS = 300_000L; // Fix 10: widened from 100s to avoid false positives on slow-boot devices
       /** Crashes within the window that trigger max-exceeded state. */
       private static final int MAX_CRASHES = 5;
 
