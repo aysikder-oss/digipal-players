@@ -68,6 +68,15 @@ public class IsolatedWebRenderer {
     public void show() { if (webView != null) webView.setVisibility(View.VISIBLE); }
     public void hide() { if (webView != null) webView.setVisibility(View.INVISIBLE); }
 
+    /** True while a WebView instance is allocated (visible or hidden-but-alive). Used by
+     *  the low-memory WebView policy (task) to decide whether an aggressive destroy is
+     *  needed on CRITICAL tier vs. reuse on NORMAL/LOW tier. */
+    public boolean isAlive() { return webView != null; }
+
+    /** True only while the renderer is the one currently on screen. Used to avoid
+     *  destroying a WebView that is actively showing content. */
+    public boolean isShowing() { return webView != null && webView.getVisibility() == View.VISIBLE; }
+
     public void destroy() {
         cancelTimers();
         if (webView != null) {
