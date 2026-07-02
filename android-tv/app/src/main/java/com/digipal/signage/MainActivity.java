@@ -1481,6 +1481,7 @@ import android.os.Looper;
                     if (playlistScheduler != null) {
                         playlistScheduler.setPlaylist(json);
                         android.util.Log.i("DigipalNative", "[nativeLoop] setNativePlaylist → PlaylistScheduler");
+                        try { io.sentry.Breadcrumb _plBc = new io.sentry.Breadcrumb("Playlist loaded"); _plBc.setCategory("playlist"); _plBc.setType("info"); _plBc.setLevel(io.sentry.SentryLevel.INFO); try { org.json.JSONArray _slides = new org.json.JSONArray(json); _plBc.setData("slide_count", _slides.length()); } catch (Throwable _pe) {} io.sentry.Sentry.addBreadcrumb(_plBc); } catch (Throwable ignored) {}
                         if (assetCacheManager != null) {
                             // Asset downloads handled exclusively by PlaylistRepository.startRevisionPipeline()
                             // via MediaDownloadManager — do NOT download here to avoid duplicate work.
