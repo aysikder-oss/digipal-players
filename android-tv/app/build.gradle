@@ -105,4 +105,6 @@ sentry {
     projectName = "android"
     authToken = System.getenv("SENTRY_AUTH_TOKEN") ?: ""
     telemetry = false
+    // Don't fail the build if the auth token isn't available yet — APK still ships
+    failOnError = false
 }
