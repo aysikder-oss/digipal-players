@@ -1,6 +1,7 @@
 package com.digipal.signage;
 
 import android.os.Handler;
+import android.os.SystemClock;
 import android.os.Looper;
 import android.util.Log;
 import android.webkit.WebView;
@@ -331,7 +332,7 @@ public class PlaylistScheduler {
      */
     public synchronized void pause() {
         if (!running || pausedAt >= 0) return;
-        pausedAt = System.currentTimeMillis();
+        pausedAt = SystemClock.elapsedRealtime(); // Fix 13: monotonic — safe across DST changes
         long elapsed = pausedAt - slideStartMs;
         SlidePlan cur = (currentIndex < slides.size()) ? slides.get(currentIndex) : null;
         long dur = (cur != null) ? Math.max(1_000L, cur.durationMs) : 10_000L;
@@ -361,7 +362,7 @@ public class PlaylistScheduler {
 
     /** Called when a renderer signals it is ready (first frame decoded). */
     public void onRendererReady(String slideId) {
-        long readyMs = System.currentTimeMillis() - slideStartMs;
+        long readyMs = SystemClock.elapsedRealtime() - slideStartMs; // Fix 13: monotonic
         Log.d(TAG, "[ready] " + slideId + " in " + readyMs + "ms");
         if (telemetry != null) telemetry.logEvent("slide_ready", slideId,
                 "{\"readyMs\":" + readyMs + "}");
@@ -466,7 +467,7 @@ public class PlaylistScheduler {
         assetGraceRetries = 0; // URL present — reset grace counter
 
         slideRetryCount = 0;
-        slideStartMs = System.currentTimeMillis();
+        slideStartMs = SystemClock.elapsedRealtime(); // Fix 13: monotonic
         toState(State.PREPARING_CURRENT, slide.slideId);
 
         SlideType eff = slide.type;
