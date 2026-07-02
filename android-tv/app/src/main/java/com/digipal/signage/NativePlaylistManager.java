@@ -37,7 +37,7 @@ package com.digipal.signage;
 
         private final Handler handler = new Handler(Looper.getMainLooper());
         private final Delegate delegate;
-        private List<NativeSlide> slides = new ArrayList<>();
+        private volatile List<NativeSlide> slides = new ArrayList<>();
         private int currentIndex = 0;
         private boolean running = false;
         private Runnable advanceRunnable;
@@ -95,7 +95,7 @@ package com.digipal.signage;
             }
         }
 
-        private void showCurrentSlide() {
+        private synchronized void showCurrentSlide() {
             if (!running || slides.isEmpty()) return;
             if (currentIndex >= slides.size()) currentIndex = 0;
             final NativeSlide slide = slides.get(currentIndex);
