@@ -1015,7 +1015,13 @@ import android.os.Looper;
                               }
                               preloadView.setLayoutParams(lp);
                               coldPlayer.setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.parse(url)));
-                              coldPlayer.setRepeatMode(androidx.media3.common.Player.REPEAT_MODE_OFF); // scheduler owns loop via natural-end listener
+                              // Only the PlaylistScheduler-driven path (playNativeVideoForScheduler) owns
+                              // loop restart via its own natural-end listener. This generic bridge method
+                              // is also used directly for standalone single-content screens (no playlist,
+                              // no scheduler running) via NativeTvVideoOverlay — for those, REPEAT_MODE_OFF
+                              // left the video frozen/black after one play since nothing else restarts it.
+                              // Respect the caller's `loop` flag here, matching the fromPreload branch above.
+                              coldPlayer.setRepeatMode(loop ? androidx.media3.common.Player.REPEAT_MODE_ONE : androidx.media3.common.Player.REPEAT_MODE_OFF);
                               coldPlayer.setVolume(volume);
                               coldPlayer.prepare();
                               coldPlayer.play();
