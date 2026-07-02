@@ -48,6 +48,9 @@ public class TelemetryManager {
       // Renderer state — updated by MainActivity via setters below
       private volatile int     activeRendererCount = 0;
       private volatile boolean webViewActive       = false;
+      // Renderer observability (full telemetry task): which player shell is currently
+      // active ("local" vs "remote") — set once at boot from PlayerShellManager.
+      private volatile String  shellSource         = "unknown";
   
 
     // Heartbeat scheduling — Handler on the main Looper (no extra OS thread).
@@ -128,7 +131,24 @@ public class TelemetryManager {
     public void setLastError(String err) { lastError = err; }
       public void setActiveRendererCount(int count) { activeRendererCount = count; }
       public void setWebViewActive(boolean active) { webViewActive = active; }
+      public void setShellSource(String source) { shellSource = source; }
+      public String getShellSource() { return shellSource; }
     public void setCacheReadyPercent(int pct) { cacheReadyPercent = pct; }
+
+    /** Current process memory usage in MB (ActivityManager.MemoryInfo). Used to bracket
+     *  slide dispatches with before/after snapshots (renderer observability task). Returns
+     *  -1 if unavailable rather than throwing, since this is purely diagnostic. */
+    public long currentMemMb() {
+        try {
+            ActivityManager am = (ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
+            if (am == null) return -1;
+            ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
+            am.getMemoryInfo(mi);
+            return (mi.totalMem - mi.availMem) / (1024L * 1024L);
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
 
     private void sendHeartbeat() {
         try {
@@ -188,6 +208,7 @@ public class TelemetryManager {
         o.put("lastError", lastError);
         o.put("transitionGapMs", transitionGapMs.get());
         o.put("heartbeatIntervalMs", currentHeartbeatIntervalMs);
+        o.put("shellSource", shellSource);
         return o;
     }
 
@@ -207,3 +228,4 @@ public class TelemetryManager {
         conn.disconnect();
     }
 }
+
