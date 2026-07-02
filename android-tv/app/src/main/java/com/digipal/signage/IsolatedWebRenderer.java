@@ -47,20 +47,39 @@ public class IsolatedWebRenderer {
         this.listener = listener;
     }
 
+    private WebViewPolicy currentPolicy;
+
     public void prepare(String slideId, String url) {
+        prepare(slideId, url, null);
+    }
+
+    /**
+     * Prepares this renderer for a slide with an explicit {@link WebViewPolicy}. Pass
+     * {@code null} to fall back to the safe default (equivalent to the old two-bucket
+     * applyWebViewProfile behavior) — task: Per-Asset WebView Policy.
+     */
+    public void prepare(String slideId, String url, WebViewPolicy policy) {
         this.currentSlideId = slideId;
+        this.currentPolicy = policy;
         this.ready.set(false);
+        if (policy != null && policy.freshWebView) {
+            // Per-asset policy demands a brand-new WebView instance (e.g. interactive
+            // kiosk content) rather than reusing whatever instance is already alive.
+            destroy();
+        }
         ensureWebView();
+        if (policy != null) policy.applyTo(webView);
         hide();
         cancelTimers();
 
+        long timeoutMs = (policy != null && policy.readyTimeoutMs > 0) ? policy.readyTimeoutMs : LOAD_TIMEOUT_MS;
         timeoutRunnable = () -> {
             if (!ready.get()) {
                 Log.w(TAG, "[timeout] " + slideId + " url=" + url);
                 listener.onRendererFailed(slideId, "load_timeout");
             }
         };
-        handler.postDelayed(timeoutRunnable, LOAD_TIMEOUT_MS);
+        handler.postDelayed(timeoutRunnable, timeoutMs);
 
         webView.loadUrl(url);
     }
@@ -79,6 +98,9 @@ public class IsolatedWebRenderer {
 
     public void destroy() {
         cancelTimers();
+        if (currentPolicy != null && currentPolicy.clearCookiesOnExit) {
+            try { android.webkit.CookieManager.getInstance().removeAllCookies(null); } catch (Throwable ignored) {}
+        }
         if (webView != null) {
             container.removeView(webView);
             webView.destroy();
@@ -116,6 +138,17 @@ public class IsolatedWebRenderer {
         handler.postDelayed(heartbeatRunnable, HEARTBEAT_TIMEOUT_MS);
     }
 
+    private void injectCustomJsWithRetries(int attemptsLeft) {
+        if (webView == null || currentPolicy == null || currentPolicy.customJs == null) return;
+        try {
+            webView.evaluateJavascript(currentPolicy.customJs, result -> {
+                if ((result == null || result.equals("null")) && attemptsLeft > 0) {
+                    handler.postDelayed(() -> injectCustomJsWithRetries(attemptsLeft - 1), 500);
+                }
+            });
+        } catch (Throwable ignored) {}
+    }
+
     private class RenderBridge {
         @JavascriptInterface public void ready(String slideId) {
             handler.post(() -> {
@@ -123,6 +156,9 @@ public class IsolatedWebRenderer {
                 ready.set(true);
                 show();
                 resetHeartbeatTimer();
+                if (currentPolicy != null && currentPolicy.customJs != null) {
+                    injectCustomJsWithRetries(currentPolicy.customJsMaxRetries);
+                }
                 listener.onRendererReady(slideId);
             });
         }
