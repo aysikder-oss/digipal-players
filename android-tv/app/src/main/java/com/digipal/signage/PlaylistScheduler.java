@@ -117,6 +117,19 @@ public class PlaylistScheduler {
     private AssetResolver assetResolver;
     public void setAssetResolver(AssetResolver r) { this.assetResolver = r; }
 
+    /** Optional — set by MainActivity after init so baseline renderer diagnostics can
+     *  report which memory tier was active for a given slide dispatch (baseline renderer
+     *  diagnostics task). Purely observational; never gates renderer decisions itself. */
+    private MemoryBudgetManager memoryBudgetManager;
+    public void setMemoryBudgetManager(MemoryBudgetManager m) { this.memoryBudgetManager = m; }
+    private String currentMemoryTier() {
+        return memoryBudgetManager != null ? memoryBudgetManager.getCurrentTier().name() : "unknown";
+    }
+
+    /** Renderer kind used for the currently dispatched slide — one of "native_video",
+     *  "native_image", "isolated_webview", "main_webview" (baseline renderer diagnostics task). */
+    private String currentRendererKind = "";
+
       /** Pass MediaDownloadManager to repository for the atomic revision pipeline. */
       public void setMediaDownloadManager(MediaDownloadManager mdm) { repository.setMediaDownloadManager(mdm); }
 
@@ -377,7 +390,12 @@ public class PlaylistScheduler {
         long readyMs = SystemClock.elapsedRealtime() - slideStartMs; // Fix 13: monotonic
         Log.d(TAG, "[ready] " + slideId + " in " + readyMs + "ms");
         if (telemetry != null) telemetry.logEvent("slide_ready", slideId,
-                "{\"readyMs\":" + readyMs + "}");
+                "{\"readyMs\":" + readyMs
+                + ",\"readyLatencyMs\":" + readyMs
+                + ",\"rendererKind\":\"" + currentRendererKind + "\""
+                + ",\"memoryTier\":\"" + currentMemoryTier() + "\""
+                + ",\"loadTimeout\":false"
+                + ",\"rendererCrash\":false}");
         // Cancel the safety timeout and start the advance timer — renderer confirmed
         // first-frame so the full configured slide duration is preserved.
         if (state == State.PREPARING_CURRENT && rendererReadyTimeoutGen == generation) {
@@ -418,7 +436,12 @@ public class PlaylistScheduler {
         consecutiveFailures++;
         if (telemetry != null) telemetry.logEvent("slide_failed", slideId,
                 "{\"error\":" + JSONObject.quote(error)
-                + ",\"slideRetry\":" + slideRetryCount + "}");
+                + ",\"slideRetry\":" + slideRetryCount
+                + ",\"rendererKind\":\"" + currentRendererKind + "\""
+                + ",\"memoryTier\":\"" + currentMemoryTier() + "\""
+                + ",\"loadTimeout\":false"
+                + ",\"rendererCrash\":true"
+                + ",\"rendererCrashReason\":" + JSONObject.quote(error) + "}");
 
         if (consecutiveFailures >= MAX_FAILURES) {
             degraded(slideId);
@@ -565,7 +588,12 @@ public class PlaylistScheduler {
                 Log.w(TAG, "[renderer_ready_timeout] no first-frame for slide " + mySlideId
                         + " after " + RENDERER_READY_TIMEOUT_MS + "ms — starting timer anyway");
                 if (telemetry != null) telemetry.logEvent("renderer_timeout", mySlideId,
-                        "{\"pendingMs\":" + pendingAdvanceDurationMs + "}");
+                        "{\"pendingMs\":" + pendingAdvanceDurationMs
+                        + ",\"readyLatencyMs\":" + RENDERER_READY_TIMEOUT_MS
+                        + ",\"rendererKind\":\"" + currentRendererKind + "\""
+                        + ",\"memoryTier\":\"" + currentMemoryTier() + "\""
+                        + ",\"loadTimeout\":true"
+                        + ",\"rendererCrash\":false}");
                 rendererReadyTimeout = null; rendererReadyTimeoutGen = -1;
                 toState(State.PLAYING, mySlideId);
                 startAdvanceTimer(myGen, pendingAdvanceDurationMs);
@@ -584,10 +612,12 @@ public class PlaylistScheduler {
           //                    — never instantiated — and have been deleted.)
           switch (eff) {
               case VIDEO:
+                  currentRendererKind = "native_video";
                   delegate.schedulerDeactivateWebView();
                   delegate.schedulerPlayVideo(dispatch);
                   break;
               case IMAGE:
+                  currentRendererKind = "native_image";
                   delegate.schedulerDeactivateWebView();
                   delegate.schedulerShowImage(dispatch);
                   break;
@@ -602,6 +632,7 @@ public class PlaylistScheduler {
                   // a Delegate implementation here would otherwise silently kill the scheduler's
                   // dispatch loop and freeze the player on the previous slide. Catch, log, and
                   // fall through to slide_shown/advance-timer bookkeeping so playback continues.
+                  currentRendererKind = useIsolatedRenderer ? "isolated_webview" : "main_webview";
                   try {
                       // Release native video/image before handing to WebView — prevents old
                       // content shadowing the WebView and frees the hardware decoder (critical
@@ -639,7 +670,9 @@ public class PlaylistScheduler {
           }
 
         if (telemetry != null) telemetry.logEvent("slide_shown", slide.slideId,
-                "{\"type\":\"" + eff + "\",\"index\":" + currentIndex + "}");
+                "{\"type\":\"" + eff + "\",\"index\":" + currentIndex
+                + ",\"rendererKind\":\"" + currentRendererKind + "\""
+                + ",\"memoryTier\":\"" + currentMemoryTier() + "\"}");
 
         schedulePreload(eff);
 
