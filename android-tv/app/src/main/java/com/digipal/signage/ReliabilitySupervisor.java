@@ -40,7 +40,7 @@ public class ReliabilitySupervisor {
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private final AtomicLong lastSchedulerAdvanceMs = new AtomicLong(System.currentTimeMillis());
-    private final AtomicLong lastHeartbeatMs        = new AtomicLong(System.currentTimeMillis());
+    private final AtomicLong lastHeartbeatMs        = new AtomicLong(android.os.SystemClock.elapsedRealtime()); // Fix 9: monotonic
     private final AtomicInteger softCount           = new AtomicInteger(0);
     private final AtomicInteger mediumCount         = new AtomicInteger(0);
 
@@ -92,7 +92,7 @@ public class ReliabilitySupervisor {
     }
 
     /** Call on WebView heartbeat bridge callback. */
-    public void reportHeartbeat() { lastHeartbeatMs.set(System.currentTimeMillis()); }
+    public void reportHeartbeat() { lastHeartbeatMs.set(android.os.SystemClock.elapsedRealtime()); } // Fix 9: monotonic
 
     /** Update the known scheduler state so stall detection can skip idle/booting states. */
     public void setSchedulerState(PlaylistScheduler.State state) {
