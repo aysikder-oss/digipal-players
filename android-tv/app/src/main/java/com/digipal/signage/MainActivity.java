@@ -611,6 +611,17 @@ import android.os.Looper;
         }
 
         /**
+         * Reports the real native APK version (versionName) so the JS player's
+         * detectAppVersion() no longer silently falls back to "web" — the WS
+         * identify payload's appVersion field then shows the true build number
+         * (e.g. "3.16.27") on the admin/customer dashboard instead of "web".
+         */
+        @JavascriptInterface
+        public String getAppVersion() {
+            return BuildConfig.VERSION_NAME;
+        }
+
+        /**
          * Reported once by the JS player when its pairing code is known (task #1875).
          * Cached in-memory + SharedPreferences so the isolated per-slide renderer can
          * build /tv/render/:pairingCode/:contentId URLs without depending on the
