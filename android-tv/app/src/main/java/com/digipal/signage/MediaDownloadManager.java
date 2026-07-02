@@ -43,6 +43,9 @@ package com.digipal.signage;
       private final Set<String> activeDownloads;
       private final ConcurrentHashMap<String, List<DownloadCallback>> pendingCallbacks;
       private WebView webView;
+      /** Last time updateLastUsed() flushed to SharedPreferences. Throttled to once per 60 s to avoid
+       *  writing the full manifest JSON on every cache hit (Fix 2). */
+      private long lastManifestWriteMs = 0L;
 
       public MediaDownloadManager(Context context) {
           this.context = context;
@@ -116,7 +119,13 @@ package com.digipal.signage;
       // ─────────────────────────────────────────────────────────────────────────
 
       private void performDownload(String objectPath, String signedUrl) {
-          try {
+          final int MAX_ATTEMPTS = 3;
+          String lastError = "Unknown error";
+          for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+              if (attempt > 1) {
+                  try { Thread.sleep(2000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+              }
+              try {
               File mediaDir = getMediaDir();
               if (mediaDir == null) {
                   notifyDownloadFailed(objectPath, "Storage not available");
@@ -146,9 +155,12 @@ package com.digipal.signage;
               }
 
               long contentLength = conn.getContentLength();
-              if (contentLength > 0) {
+              // GCS signed URLs sometimes return -1 for Content-Length; in that case
+              // assume up to 100 MB and check only that much headroom is available (Fix 3).
+              long reserveBytes = contentLength > 0 ? contentLength : 100 * 1024 * 1024L;
+              {
                   long freeSpace = mediaDir.getFreeSpace();
-                  if (freeSpace - contentLength < LOW_STORAGE_THRESHOLD) {
+                  if (freeSpace - reserveBytes < LOW_STORAGE_THRESHOLD) {
                       conn.disconnect();
                       notifyDownloadFailed(objectPath, "Insufficient storage");
                       return;
@@ -182,11 +194,18 @@ package com.digipal.signage;
               addToManifest(objectPath, outputFile.getAbsolutePath(), totalRead);
               notifyDownloadComplete(objectPath, "file://" + outputFile.getAbsolutePath());
 
-          } catch (Exception e) {
-              notifyDownloadFailed(objectPath, e.getMessage());
-          } finally {
-              synchronized (activeDownloads) { activeDownloads.remove(objectPath); }
-          }
+              } catch (Exception e) {
+                  lastError = e.getMessage() != null ? e.getMessage() : "IOException";
+                  // Retry on network errors; continue for loop to next attempt
+                  continue;
+              } finally {
+                  // activeDownloads cleaned up only on final exit, not mid-retry
+              }
+              return; // success — exit retry loop
+          } // end retry loop
+          // All attempts exhausted
+          notifyDownloadFailed(objectPath, lastError);
+          synchronized (activeDownloads) { activeDownloads.remove(objectPath); }
       }
 
       // ─────────────────────────────────────────────────────────────────────────
@@ -358,13 +377,18 @@ package com.digipal.signage;
       }
 
       private void updateLastUsed(String objectPath) {
+          long now = System.currentTimeMillis();
+          // Throttle: only flush manifest to SharedPreferences once per 60 s to avoid
+          // rewriting the entire JSON blob on every cache-hit (Fix 2).
+          if (now - lastManifestWriteMs < 60_000L) return;
           JSONObject manifest = getManifest();
           JSONObject entry = manifest.optJSONObject(objectPath);
           if (entry != null) {
               try {
-                  entry.put("lastUsed", System.currentTimeMillis());
+                  entry.put("lastUsed", now);
                   manifest.put(objectPath, entry);
                   prefs.edit().putString(KEY_MANIFEST, manifest.toString()).apply();
+                  lastManifestWriteMs = now;
               } catch (JSONException ignored) {}
           }
       }
