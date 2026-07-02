@@ -108,6 +108,14 @@ import android.os.Looper;
     private static final long STALL_CHECK_MS = 5_000L;
     private final android.os.Handler stallHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private Runnable stallRunnable;
+    // Fix 2: buffering watchdog — detects STATE_BUFFERING stall where bufferedPosition does not advance
+    private final android.os.Handler bufWatchdogHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable bufWatchdogRunnable;
+    private String  bufWatchdogSlideId;
+    private long    bufWatchdogLastBufferedMs = -1L;
+    private int     bufWatchdogStallChecks   = 0;
+    private static final long   BUF_WATCHDOG_INTERVAL_MS = 5_000L;   // check every 5s
+    private static final int    BUF_WATCHDOG_STALL_TICKS = 3;        // 3 × 5s = 15s threshold
     // Native content loop — drives video/image slides via NativePlaylistManager without WebView
     private NativePlaylistManager nativePlaylistManager;
       // Native heartbeat for Fire TV: when WebView is paused (timers frozen), a Java
@@ -1553,15 +1561,20 @@ import android.os.Looper;
               final boolean useTexture = useTextureViewRenderer();
               final android.view.TextureView activeTexView  = activeVideoViewIsA ? nativeTexViewA : nativeTexViewB;
               final android.view.TextureView incomingTexView = activeVideoViewIsA ? nativeTexViewB : nativeTexViewA;
-              if (pendingOldPlayer != null) { try { pendingOldPlayer.stop(); pendingOldPlayer.release(); } catch (Throwable ignored) {} pendingOldPlayer = null; }
+              if (pendingOldPlayer != null) {
+                  android.util.Log.w("DigipalNative", "[Fix4] pendingOldPlayer non-null at playNativeVideoForScheduler start — prior swap incomplete for slide=" + slideId);
+                  try { pendingOldPlayer.stop(); pendingOldPlayer.release(); } catch (Throwable ignored) {} pendingOldPlayer = null;
+              }
               if (fromPreload) {
                   final androidx.media3.exoplayer.ExoPlayer oldPlayer = exoPlayer;
                   pendingOldPlayer = oldPlayer;
                   exoPlayer = preloadPlayer; preloadPlayer = null; preloadedVideoUrl = null;
                   exoPlayer.setRepeatMode(androidx.media3.common.Player.REPEAT_MODE_OFF); // scheduler owns loop via natural-end listener
                   exoPlayer.setVolume(volume); exoPlayer.play();
+                  startBufferWatchdog(slideId); // Fix 2: detect STATE_BUFFERING stall
                   preloadView.setResizeMode(resizeMode); preloadView.setLayoutParams(lp);
                   if (preloadVideoReady) {
+                      stopBufferWatchdog(); // Fix 2: already ready — no stall risk
                       // Alpha swap — incoming becomes visible, outgoing fades out (fixes Fire TV blank SurfaceView)
                       if (useTexture) { incomingTexView.setAlpha(1f); incomingTexView.setVisibility(View.VISIBLE); activeTexView.setAlpha(0f); activeTexView.setVisibility(View.INVISIBLE); }
                       else { preloadView.setAlpha(1f); preloadView.setVisibility(View.VISIBLE); activeView.setAlpha(0f); activeView.setVisibility(View.INVISIBLE); }
@@ -1577,6 +1590,7 @@ import android.os.Looper;
                       nativeVideoListener = new androidx.media3.common.Player.Listener() {
                           @Override public void onRenderedFirstFrame() {
                               if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
+                              stopBufferWatchdog(); // Fix 2
                               if (done[0]) return; done[0] = true;
                               runOnUiThread(() -> {
                                   if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
@@ -1597,6 +1611,7 @@ import android.os.Looper;
                               try { if (!(error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException)) { io.sentry.Sentry.captureException(error); } } catch (Throwable ignored) {}
                               if (error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException) return; // silence + let 2.5s fallback handle
                               if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
+                              stopBufferWatchdog(); // Fix 2
                               if (done[0]) return; done[0] = true;
                               if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
                               pendingOldPlayer = null;
@@ -1610,6 +1625,7 @@ import android.os.Looper;
                       final Runnable rc = new Runnable() {
                           @Override public void run() {
                               videoReadyHandler = null; videoReadyRunnable = null; nativeVideoListener = null;
+                              stopBufferWatchdog(); // Fix 2
                               if (done[0]) return; done[0] = true;
                               // Alpha swap — incoming becomes visible, outgoing fades out (fixes Fire TV blank SurfaceView)
                               if (useTexture) { incomingTexView.setAlpha(1f); incomingTexView.setVisibility(View.VISIBLE); activeTexView.setAlpha(0f); activeTexView.setVisibility(View.INVISIBLE); }
@@ -1645,6 +1661,7 @@ import android.os.Looper;
                   coldPlayer.setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.parse(url)));
                   coldPlayer.setRepeatMode(androidx.media3.common.Player.REPEAT_MODE_OFF); // scheduler owns loop via natural-end listener (attachLoopAdvanceListener); REPEAT_MODE_ONE caused 1-frame replay on single-video loops
                   coldPlayer.setVolume(volume); coldPlayer.prepare(); coldPlayer.play();
+                  startBufferWatchdog(slideId); // Fix 2: detect STATE_BUFFERING stall
                   android.util.Log.d("DigipalVideo", "[cold-load diag] pvVisibility=" + (preloadView != null ? preloadView.getVisibility() : -1) + " pvAlpha=" + (preloadView != null ? preloadView.getAlpha() : -1f) + " state=" + coldPlayer.getPlaybackState() + " url_scheme=" + (url.contains("://") ? url.substring(0, url.indexOf("://")) : "?"));
                   coldPlayer.addAnalyticsListener(new androidx.media3.exoplayer.analytics.AnalyticsListener() {
                       @Override public void onVideoSizeChanged(androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime t, androidx.media3.common.VideoSize vs) {
@@ -1671,6 +1688,7 @@ import android.os.Looper;
                           videoReadyHandler = null; videoReadyRunnable = null;
                           android.util.Log.w("DigipalMetrics",
                               "[sched 8s timeout] cold-load slide=" + slideId + " — no first-frame; falling back to WebView");
+                          stopBufferWatchdog(); // Fix 2
                           // Release failed player and hide all native surfaces before WebView takes over
                           final androidx.media3.exoplayer.ExoPlayer _timedOut = exoPlayer;
                           if (_timedOut != null) {
@@ -1699,6 +1717,7 @@ import android.os.Looper;
                   nativeVideoListener = new androidx.media3.common.Player.Listener() {
                       @Override public void onRenderedFirstFrame() {
                           if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
+                          stopBufferWatchdog(); // Fix 2
                           if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
                           runOnUiThread(() -> {
                               // Alpha swap — incoming becomes visible, outgoing fades out (fixes Fire TV blank SurfaceView)
@@ -1717,6 +1736,7 @@ import android.os.Looper;
                           android.util.Log.w("DigipalMetrics", "[sched cold onPlayerError] slide=" + slideId + " " + error.getMessage());
                           try { if (!(error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException)) { io.sentry.Sentry.captureException(error); } } catch (Throwable ignored) {}
                           if (error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException) return; // silence + let 8s fallback handle
+                          stopBufferWatchdog(); // Fix 2
                           if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
                           if (videoReadyHandler != null) { videoReadyHandler.removeCallbacks(videoReadyRunnable); videoReadyHandler = null; videoReadyRunnable = null; }
                           // Failed cold-load: release player, hide native surfaces, activate WebView
@@ -2442,6 +2462,52 @@ import android.os.Looper;
     private void stopStallWatchdog() {
         if (stallRunnable != null) { stallHandler.removeCallbacks(stallRunnable); stallRunnable = null; }
         stallLastPositionMs = -1L;
+    }
+
+    // Fix 2: start a 5s repeating check; if STATE_BUFFERING and bufferedPosition unchanged for 3 ticks (15s), signal error.
+    private void startBufferWatchdog(String slideId) {
+        stopBufferWatchdog();
+        bufWatchdogSlideId        = slideId;
+        bufWatchdogLastBufferedMs = -1L;
+        bufWatchdogStallChecks    = 0;
+        bufWatchdogRunnable = new Runnable() {
+            @Override public void run() {
+                try {
+                    final androidx.media3.exoplayer.ExoPlayer ep = exoPlayer;
+                    if (ep == null) return; // player released
+                    if (ep.getPlaybackState() == androidx.media3.common.Player.STATE_BUFFERING) {
+                        long buf = ep.getBufferedPosition();
+                        if (bufWatchdogLastBufferedMs < 0 || buf > bufWatchdogLastBufferedMs) {
+                            bufWatchdogLastBufferedMs = buf;
+                            bufWatchdogStallChecks = 0; // progress — reset counter
+                        } else {
+                            bufWatchdogStallChecks++;
+                            android.util.Log.w("DigipalBufWatchdog",
+                                "[bufStall] tick=" + bufWatchdogStallChecks + "/" + BUF_WATCHDOG_STALL_TICKS
+                                + " bufferedMs=" + buf + " slide=" + bufWatchdogSlideId);
+                            if (bufWatchdogStallChecks >= BUF_WATCHDOG_STALL_TICKS) {
+                                android.util.Log.e("DigipalBufWatchdog",
+                                    "[bufStall] 15s buffering stall — signalling error for slide=" + bufWatchdogSlideId);
+                                stopBufferWatchdog();
+                                if (playlistScheduler != null) playlistScheduler.onRendererError(bufWatchdogSlideId, "buffering_stall");
+                                return;
+                            }
+                        }
+                    } else {
+                        // Not buffering — reset stall counter; watchdog keeps running until cancelled
+                        bufWatchdogStallChecks = 0;
+                    }
+                } catch (Throwable ignored) {}
+                bufWatchdogHandler.postDelayed(this, BUF_WATCHDOG_INTERVAL_MS);
+            }
+        };
+        bufWatchdogHandler.postDelayed(bufWatchdogRunnable, BUF_WATCHDOG_INTERVAL_MS);
+    }
+
+    private void stopBufferWatchdog() {
+        if (bufWatchdogRunnable != null) { bufWatchdogHandler.removeCallbacks(bufWatchdogRunnable); bufWatchdogRunnable = null; }
+        bufWatchdogLastBufferedMs = -1L;
+        bufWatchdogStallChecks    = 0;
     }
 
     private void loadPlayerUrl(String baseUrl) {
