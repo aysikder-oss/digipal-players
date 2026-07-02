@@ -148,6 +148,14 @@ public class PlaylistScheduler {
      *  (isolated-webview failure, degraded playback). Reset at the top of every showCurrent(). */
     private boolean lastFallbackUsed = false;
 
+    // ── Debug status panel getters (surfaced to JS via WebAppInterface.getRendererStatus) ──
+    public String getCurrentRendererKind() { return currentRendererKind; }
+    public String getLastWebViewPolicyName() { return lastWebViewPolicy; }
+    public String getShellSourceName() { return shellSource; }
+    public boolean isLastFallbackUsed() { return lastFallbackUsed; }
+    public String getMemoryTierName() { return currentMemoryTier(); }
+    public static boolean isIsolatedRendererFeatureEnabled() { return FEATURE_ISOLATED_WEB_RENDERER; }
+
       /** Pass MediaDownloadManager to repository for the atomic revision pipeline. */
       public void setMediaDownloadManager(MediaDownloadManager mdm) { repository.setMediaDownloadManager(mdm); }
 
