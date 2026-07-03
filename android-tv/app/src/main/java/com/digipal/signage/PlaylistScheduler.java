@@ -80,9 +80,9 @@ public class PlaylistScheduler {
         void schedulerShowImage(SlidePlan slide);
         void schedulerPreloadVideo(SlidePlan slide);
         void schedulerPreloadImage(SlidePlan slide);
-        void schedulerActivateWebView(SlidePlan slide);
         void schedulerDeactivateWebView();
-        // Isolated per-slide WebView renderer (task #1875), behind FEATURE_ISOLATED_WEB_RENDERER.
+        // Isolated per-slide WebView renderer (task #1875) is the only WebView-delegated
+        // rendering path for WEBVIEW_DESIGN/WEBVIEW_KIOSK/WEBVIEW_URL slides (task #1886).
         void schedulerActivateIsolatedRenderer(SlidePlan slide);
         void schedulerDeactivateIsolatedRenderer();
         void schedulerStopVideo();
@@ -90,14 +90,9 @@ public class PlaylistScheduler {
         void schedulerOnStateChanged(State state, String slideId);
     }
 
-    /** Feature flag: isolated per-slide WebView renderer (task #1875). Default OFF —
-     *  the legacy long-lived WebView (__digipalGotoSlide) remains the production path
-     *  until the isolated path is validated in the field. */
-    private static final boolean FEATURE_ISOLATED_WEB_RENDERER = false;
-
-    /** Slides that failed in the isolated renderer at least once this session — routed
-     *  to the legacy WebView on retry instead of infinitely retrying isolation. */
-    private final java.util.Set<String> isolatedRendererFallbackSlides = new java.util.HashSet<>();
+    /** Isolated per-slide WebView renderer (task #1875) is now the only WebView-delegated
+     *  rendering path for WEBVIEW_DESIGN/WEBVIEW_KIOSK/WEBVIEW_URL slides. The legacy
+     *  shared long-lived WebView (__digipalGotoSlide) path was retired in task #1886. */
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Delegate delegate;
@@ -154,7 +149,8 @@ public class PlaylistScheduler {
     public String getShellSourceName() { return shellSource; }
     public boolean isLastFallbackUsed() { return lastFallbackUsed; }
     public String getMemoryTierName() { return currentMemoryTier(); }
-    public static boolean isIsolatedRendererFeatureEnabled() { return FEATURE_ISOLATED_WEB_RENDERER; }
+    /** Isolated renderer is now the only WebView-delegated rendering path (task #1886). */
+    public static boolean isIsolatedRendererFeatureEnabled() { return true; }
 
       /** Pass MediaDownloadManager to repository for the atomic revision pipeline. */
       public void setMediaDownloadManager(MediaDownloadManager mdm) { repository.setMediaDownloadManager(mdm); }
@@ -503,21 +499,18 @@ public class PlaylistScheduler {
 
     /**
      * Called by the isolated WebView renderer (task #1875) when it fails to load,
-     * times out, or errors for a given slide. Marks the slide to fall back to the
-     * legacy long-lived WebView (__digipalGotoSlide) flow on retry — isolated
-     * rendering is opt-in per FEATURE_ISOLATED_WEB_RENDERER and must never be a
-     * hard failure path for live signage screens.
+     * times out, or errors for a given slide. There is no legacy WebView fallback
+     * (retired task #1886) — onRendererError() retries the same slide (which
+     * recreates a fresh isolated WebView) up to MAX_SLIDE_RETRIES before skipping,
+     * so a single isolated-renderer crash never becomes a hard failure for the screen.
      */
     public void onIsolatedRendererFailed(String slideId, String reason) {
-        Log.w(TAG, "[isolated_renderer_failed] " + slideId + ": " + reason + " — falling back to legacy WebView");
-        isolatedRendererFallbackSlides.add(slideId);
-        lastFallbackUsed = true;
-        if (telemetry != null) telemetry.logEvent("isolated_renderer_fallback", slideId,
+        Log.w(TAG, "[isolated_renderer_failed] " + slideId + ": " + reason);
+        if (telemetry != null) telemetry.logEvent("isolated_renderer_failed", slideId,
                 "{\"reason\":" + JSONObject.quote(reason)
-                + ",\"fallbackUsed\":true"
                 + ",\"webViewPolicy\":\"" + lastWebViewPolicy + "\""
                 + ",\"shellSource\":\"" + shellSource + "\"}");
-        onRendererError(slideId, "isolated_fallback: " + reason);
+        onRendererError(slideId, "isolated_renderer_failed: " + reason);
     }
 
     private void showCurrent() {
@@ -612,10 +605,8 @@ public class PlaylistScheduler {
         // generation check would fail and the 3-second RENDERER_READY_TIMEOUT_MS
         // fallback would fire instead — stalling every preloaded slide by 3 seconds.
         final boolean isNativeSlide = (eff == SlideType.VIDEO || eff == SlideType.IMAGE);
-        final boolean useIsolatedRenderer = FEATURE_ISOLATED_WEB_RENDERER
-                && (eff == SlideType.WEBVIEW_DESIGN || eff == SlideType.WEBVIEW_KIOSK || eff == SlideType.WEBVIEW_URL)
-                && !isolatedRendererFallbackSlides.contains(slide.slideId);
-        final boolean needsReadyGate = isNativeSlide || useIsolatedRenderer;
+        final boolean isWebviewSlide = (eff == SlideType.WEBVIEW_DESIGN || eff == SlideType.WEBVIEW_KIOSK || eff == SlideType.WEBVIEW_URL);
+        final boolean needsReadyGate = isNativeSlide || isWebviewSlide;
         if (needsReadyGate) {
             pendingAdvanceDurationMs = dur;
             rendererReadyTimeoutGen = generation;
@@ -665,49 +656,28 @@ public class PlaylistScheduler {
                   delegate.schedulerShowImage(dispatch);
                   break;
               default:
-                  // WEBVIEW_DESIGN / WEBVIEW_KIOSK / WEBVIEW_URL: handed to the React TV player,
-                  // or (behind FEATURE_ISOLATED_WEB_RENDERER) an isolated per-slide WebView that
-                  // is not shared across slides — task #1875.
-                  Log.i(TAG, "[dispatch] webview type=" + eff
-                          + " slide=" + slide.slideId + " isolated=" + useIsolatedRenderer);
-                  // T1d hardening: the legacy shared-WebView path has no ready/error signal of
-                  // its own (advance timer starts immediately below), so any exception thrown by
-                  // a Delegate implementation here would otherwise silently kill the scheduler's
-                  // dispatch loop and freeze the player on the previous slide. Catch, log, and
-                  // fall through to slide_shown/advance-timer bookkeeping so playback continues.
-                  currentRendererKind = useIsolatedRenderer ? "isolated_webview" : "main_webview";
+                  // WEBVIEW_DESIGN / WEBVIEW_KIOSK / WEBVIEW_URL: handed to an isolated
+                  // per-slide WebView that is not shared across slides — task #1875.
+                  Log.i(TAG, "[dispatch] webview type=" + eff + " slide=" + slide.slideId);
+                  // Isolated per-slide WebView renderer (task #1875) is the only WebView-delegated
+                  // rendering path (legacy shared long-lived WebView retired task #1886). Any
+                  // exception thrown here is caught and routed through onIsolatedRendererFailed,
+                  // which retries the same slide via the generic renderer-error path instead of
+                  // silently killing the scheduler's dispatch loop.
+                  currentRendererKind = "isolated_webview";
                   try {
-                      // Release native video/image before handing to WebView — prevents old
-                      // content shadowing the WebView and frees the hardware decoder (critical
-                      // on Fire TV).
+                      // Release native video/image before handing to the isolated WebView —
+                      // prevents old content shadowing the WebView and frees the hardware
+                      // decoder (critical on Fire TV).
                       delegate.schedulerStopVideo();
                       delegate.schedulerHideImage();
-                      if (useIsolatedRenderer) {
-                          delegate.schedulerDeactivateWebView();
-                          delegate.schedulerActivateIsolatedRenderer(slide);
-                      } else {
-                          delegate.schedulerDeactivateIsolatedRenderer();
-                          delegate.schedulerActivateWebView(slide);
-                      }
+                      delegate.schedulerDeactivateWebView();
+                      delegate.schedulerActivateIsolatedRenderer(slide);
                   } catch (Exception e) {
-                      Log.e(TAG, "[dispatch] webview activation failed slide=" + slide.slideId
-                              + " isolated=" + useIsolatedRenderer, e);
+                      Log.e(TAG, "[dispatch] isolated webview activation failed slide=" + slide.slideId, e);
                       if (telemetry != null) telemetry.logEvent("webview_dispatch_error",
-                              slide.slideId, "{\"isolated\":" + useIsolatedRenderer
-                                      + ",\"error\":\"" + String.valueOf(e.getMessage()) + "\"}");
-                      if (useIsolatedRenderer) {
-                          // Never let a broken isolated-renderer path strand a slide: fall back
-                          // to the legacy WebView on the same dispatch instead of waiting for the
-                          // RENDERER_READY_TIMEOUT_MS gate to expire.
-                          onIsolatedRendererFailed(slide.slideId, "dispatch_exception");
-                          try {
-                              delegate.schedulerDeactivateIsolatedRenderer();
-                              delegate.schedulerActivateWebView(slide);
-                          } catch (Exception fallbackEx) {
-                              Log.e(TAG, "[dispatch] legacy webview fallback also failed slide="
-                                      + slide.slideId, fallbackEx);
-                          }
-                      }
+                              slide.slideId, "{\"error\":\"" + String.valueOf(e.getMessage()) + "\"}");
+                      onIsolatedRendererFailed(slide.slideId, "dispatch_exception");
                   }
                   break;
           }
