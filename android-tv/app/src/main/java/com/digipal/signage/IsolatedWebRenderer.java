@@ -119,11 +119,33 @@ public class IsolatedWebRenderer {
         webView.setVisibility(View.INVISIBLE);
         webView.addJavascriptInterface(new RenderBridge(), "Digipal");
         webView.setWebViewClient(new WebViewClient() {
-            @Override public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError err) {
-                if (req.isForMainFrame()) listener.onRendererFailed(currentSlideId, "page_error");
-            }
-        });
-        container.addView(webView, new ViewGroup.LayoutParams(
+              @Override public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError err) {
+                  if (req.isForMainFrame()) listener.onRendererFailed(currentSlideId, "page_error");
+              }
+              // Without this override, Android's default behavior when a WebView's
+              // renderer process dies (OOM kill, GPU crash, etc.) is to call
+              // finish() on the whole Activity — killing the app instead of just
+              // this slide. That produced a crash/reboot loop on low-RAM Fire TV
+              // devices with no caught exception (so no crash report was ever
+              // recorded). Handling it here destroys only the dead WebView and
+              // routes back to the legacy renderer via onRendererFailed(),
+              // matching how MainActivity's own long-lived WebView already
+              // recovers from the same condition.
+              @android.annotation.TargetApi(android.os.Build.VERSION_CODES.O)
+              @Override public boolean onRenderProcessGone(WebView v, android.webkit.RenderProcessGoneDetail detail) {
+                  Log.w(TAG, "[render_process_gone] slide=" + currentSlideId
+                      + " didCrash=" + (detail != null && detail.didCrash()));
+                  if (v != webView) {
+                      try { v.destroy(); } catch (Throwable ignored) {}
+                      return true;
+                  }
+                  final String failedSlideId = currentSlideId;
+                  try { destroy(); } catch (Throwable ignored) {}
+                  handler.post(() -> listener.onRendererFailed(failedSlideId, "render_process_gone"));
+                  return true;
+              }
+          });
+          container.addView(webView, new ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
