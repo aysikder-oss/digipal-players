@@ -612,8 +612,15 @@ public class PlaylistScheduler {
         // generation check would fail and the 3-second RENDERER_READY_TIMEOUT_MS
         // fallback would fire instead — stalling every preloaded slide by 3 seconds.
         final boolean isNativeSlide = (eff == SlideType.VIDEO || eff == SlideType.IMAGE);
+        // Task #1882: WEBVIEW_URL is intentionally excluded from isolation. The isolated
+        // renderer loads /tv/render/:pairingCode/:contentId, which only knows how to render
+        // design/kiosk content (structured JSON the web player controls) — it has no support
+        // for embedding an arbitrary external URL, and many real-world sites block iframe
+        // embedding via X-Frame-Options/CSP anyway, so an iframe-based isolated URL renderer
+        // would fail for a large fraction of real content. Raw web-URL slides always use the
+        // legacy shared WebView, which navigates directly instead of embedding.
         final boolean useIsolatedRenderer = FEATURE_ISOLATED_WEB_RENDERER
-                && (eff == SlideType.WEBVIEW_DESIGN || eff == SlideType.WEBVIEW_KIOSK || eff == SlideType.WEBVIEW_URL)
+                && (eff == SlideType.WEBVIEW_DESIGN || eff == SlideType.WEBVIEW_KIOSK)
                 && !isolatedRendererFallbackSlides.contains(slide.slideId);
         final boolean needsReadyGate = isNativeSlide || useIsolatedRenderer;
         if (needsReadyGate) {
@@ -647,7 +654,10 @@ public class PlaylistScheduler {
         // Renderer ownership contract:
           //  VIDEO / IMAGE  → native renderers (ExoPlayer / Glide via Delegate).
           //                   Scheduler enters PREPARING_CURRENT and waits for onRendererReady().
-          //  WEBVIEW_DESIGN / WEBVIEW_KIOSK / WEBVIEW_URL → React TV player (main WebView).
+          //  WEBVIEW_DESIGN / WEBVIEW_KIOSK → React TV player (main WebView), or (behind
+          //                   FEATURE_ISOLATED_WEB_RENDERER) an isolated per-slide WebView.
+          //  WEBVIEW_URL    → always the React TV player (main WebView) — never isolated,
+          //                   see the useIsolatedRenderer comment above (task #1882).
           //                   Scheduler enters PLAYING immediately; advance timer drives the slide.
           //                   Only one path is active at a time: deactivateWebView is called before
           //                   any native render; activateWebView pauses native-loop playback.
@@ -665,9 +675,10 @@ public class PlaylistScheduler {
                   delegate.schedulerShowImage(dispatch);
                   break;
               default:
-                  // WEBVIEW_DESIGN / WEBVIEW_KIOSK / WEBVIEW_URL: handed to the React TV player,
-                  // or (behind FEATURE_ISOLATED_WEB_RENDERER) an isolated per-slide WebView that
-                  // is not shared across slides — task #1875.
+                  // WEBVIEW_DESIGN / WEBVIEW_KIOSK: handed to the React TV player, or (behind
+                  // FEATURE_ISOLATED_WEB_RENDERER) an isolated per-slide WebView that is not
+                  // shared across slides — task #1875. WEBVIEW_URL always uses the React TV
+                  // player's main WebView — see useIsolatedRenderer above (task #1882).
                   Log.i(TAG, "[dispatch] webview type=" + eff
                           + " slide=" + slide.slideId + " isolated=" + useIsolatedRenderer);
                   // T1d hardening: the legacy shared-WebView path has no ready/error signal of
