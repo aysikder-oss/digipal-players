@@ -80,9 +80,15 @@ public class WebViewPolicy {
             p.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW;
             p.rendererPriorityImportant = true;
             p.requiresTouch = slideType == PlaylistScheduler.SlideType.WEBVIEW_KIOSK;
-            p.freshWebView = slideType == PlaylistScheduler.SlideType.WEBVIEW_KIOSK;
+            // Fresh WebView per slide for BOTH design and kiosk: reusing a hidden
+            // WebView across different Design Studio projects/kiosk instances left
+            // stale JS globals, timers, and DOM state from the previous design alive
+            // in the background, which could fire late Digipal.ready()/error() calls
+            // for a slideId that is no longer current (see stale-callback guards in
+            // PlaylistScheduler). Only plain WEBVIEW_URL content is safe to reuse.
+            p.freshWebView = true;
             p.name = slideType == PlaylistScheduler.SlideType.WEBVIEW_KIOSK
-                    ? "kiosk_permissive_fresh" : "design_permissive";
+                    ? "kiosk_permissive_fresh" : "design_permissive_fresh";
         } else {
             p.allowFileAccess = false;
             p.allowFileAccessFromFileUrls = false;
