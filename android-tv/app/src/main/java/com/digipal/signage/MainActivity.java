@@ -2253,55 +2253,12 @@ import android.os.Looper;
                               } catch (Throwable ignored) {}
                           });
                       }
-                      @Override public void schedulerActivateWebView(PlaylistScheduler.SlidePlan s) {
-                          if (healthMonitor != null) healthMonitor.setRendererTypeWeb();
-                          currentNativeSlideDurationMs = 0L; // Fix 8: web slide — reset duration guard
-                          final int _contentId = s.contentId;
-                          try { io.sentry.Breadcrumb _wBc = new io.sentry.Breadcrumb("Slide start: WEBVIEW"); _wBc.setCategory("playback"); _wBc.setType("info"); _wBc.setLevel(io.sentry.SentryLevel.DEBUG); _wBc.setData("content_id", _contentId); io.sentry.Sentry.addBreadcrumb(_wBc); } catch (Throwable _sbc) {}
-                          runOnUiThread(() -> {
-                              try {
-                                  hideNativeVideoSurfaces(); // ensure no stale TextureView covers WebView
-                                   hideNativeImagesForVideo(); // owner=webview — clear native image layered above WebView
-                                  if (webView != null) {
-                                      webView.setAlpha(1f);
-                                      webView.setVisibility(View.VISIBLE);
-                                      webView.resumeTimers();
-                                      android.util.Log.d("RendererOwner", "owner=webview webView visible");
-                                      // Sync React playlist index to the WebView slide PlaylistScheduler intends.
-                                      // The JS advance timer is suspended when nativeSchedulerActive; this keeps
-                                      // WebView content in lock-step with the native state machine so two
-                                      // playlists cannot play simultaneously on mixed-content playlists.
-                                      //
-                                      // Fire TV: Amazon WebView JS engine takes ~300 ms to unfreeze after
-                                      // resumeTimers() — delay the gotoSlide command so React is ready to
-                                      // receive it, preventing blank/wrong-content design slides.
-                                      if (isFireTv()) {
-                                          final WebView _wv = webView;
-                                          webView.postDelayed(() -> {
-                                              try {
-                                                  _wv.evaluateJavascript(
-                                                      "try{window.__digipalGotoSlide&&window.__digipalGotoSlide("
-                                                      + _contentId + ");}catch(e){}",
-                                                      null
-                                                  );
-                                              } catch (Throwable ignored2) {}
-                                          }, 350);
-                                      } else {
-                                          webView.evaluateJavascript(
-                                              "try{window.__digipalGotoSlide&&window.__digipalGotoSlide("
-                                              + _contentId + ");}catch(e){}",
-                                              null
-                                          );
-                                      }
-                                  }
-                                  applyWebViewProfile(s.type);
-                                  if (playlistScheduler != null) {
-                                      playlistScheduler.setLastWebViewPolicy(
-                                          WebViewPolicy.forSlideType(s.type).name);
-                                  }
-                              } catch (Throwable ignored) {}
-                          });
-                      }
+                      // schedulerActivateWebView removed (task #1886) — the legacy shared
+                      // long-lived WebView (__digipalGotoSlide) activation path was retired;
+                      // WEBVIEW_DESIGN/KIOSK/URL slides now always dispatch through
+                      // schedulerActivateIsolatedRenderer(). schedulerDeactivateWebView() is kept
+                      // because it's still used before native VIDEO/IMAGE dispatch and before
+                      // isolated-renderer activation.
                       @Override public void schedulerDeactivateWebView() {
                           // Hide WebView + pause timers — enforces single renderer ownership.
                           // WebView sits above native layers in FrameLayout z-order so it must be
@@ -2344,12 +2301,14 @@ import android.os.Looper;
                           });
                       }
                       @Override public void schedulerActivateIsolatedRenderer(PlaylistScheduler.SlidePlan s) {
-                          // Isolated per-slide WebView renderer (task #1875), behind
-                          // FEATURE_ISOLATED_WEB_RENDERER. Loads the standalone
-                          // /tv/render/:pairingCode/:contentId route in a WebView that is
-                          // never shared across slides, so a crash/hang on one design cannot
-                          // take down subsequent slides. Falls back to the legacy shared
-                          // WebView flow (via onIsolatedRendererFailed) on any timeout/error.
+                          // Isolated per-slide WebView renderer (task #1875) — the only
+                          // WebView-delegated rendering path for WEBVIEW_DESIGN/KIOSK/URL slides
+                          // (legacy shared long-lived WebView retired task #1886). Loads the
+                          // standalone /tv/render/:pairingCode/:contentId route in a WebView that
+                          // is never shared across slides, so a crash/hang on one design cannot
+                          // take down subsequent slides. Reports failures via
+                          // onIsolatedRendererFailed(), which retries the same slide instead of
+                          // falling back to any legacy WebView path.
                           runOnUiThread(() -> {
                               try {
                                   if (healthMonitor != null) healthMonitor.setRendererTypeWeb();
