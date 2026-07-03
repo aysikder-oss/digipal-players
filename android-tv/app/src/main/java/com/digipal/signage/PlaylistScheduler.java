@@ -409,6 +409,17 @@ public class PlaylistScheduler {
 
     /** Called when a renderer signals it is ready (first frame decoded). */
     public void onRendererReady(String slideId) {
+        // Stale-callback guard: a renderer (isolated WebView, ExoPlayer) can report
+        // ready asynchronously after the scheduler has already advanced past the
+        // slide that requested it (fast user-triggered skip, rapid playlist swap).
+        // Without this check a late callback can incorrectly force State.PLAYING /
+        // restart the advance timer for a slide that is no longer current.
+        if (!slides.isEmpty() && currentIndex < slides.size()
+                && !slides.get(currentIndex).slideId.equals(slideId)) {
+            Log.d(TAG, "[ready] ignoring stale callback for " + slideId
+                    + " (current=" + slides.get(currentIndex).slideId + ")");
+            return;
+        }
         long readyMs = SystemClock.elapsedRealtime() - slideStartMs; // Fix 13: monotonic
         Log.d(TAG, "[ready] " + slideId + " in " + readyMs + "ms");
         if (telemetry != null) telemetry.logEvent("slide_ready", slideId,
@@ -457,6 +468,16 @@ public class PlaylistScheduler {
      * Goes DEGRADED only after MAX_FAILURES consecutive failures.
      */
     public void onRendererError(String slideId, String error) {
+        // Stale-callback guard: mirrors onRendererReady() -- ignore errors reported
+        // for a slide that is no longer the one the scheduler is currently showing
+        // (e.g. a superseded isolated WebView that keeps loading in the background
+        // after the scheduler already advanced past it).
+        if (!slides.isEmpty() && currentIndex < slides.size()
+                && !slides.get(currentIndex).slideId.equals(slideId)) {
+            Log.d(TAG, "[error] ignoring stale callback for " + slideId
+                    + " (current=" + slides.get(currentIndex).slideId + "): " + error);
+            return;
+        }
         Log.w(TAG, "[error] " + slideId + ": " + error + " (slideRetry=" + slideRetryCount + ")");
         slideRetryCount++;
         consecutiveFailures++;
@@ -648,11 +669,16 @@ public class PlaylistScheduler {
               case VIDEO:
                   currentRendererKind = "native_video";
                   delegate.schedulerDeactivateWebView();
+                  // Release any isolated per-slide WebView left active from a prior
+                  // WEBVIEW_DESIGN/KIOSK/URL slide -- without this it stays alive
+                  // (and visible on some z-order paths) behind the native video.
+                  delegate.schedulerDeactivateIsolatedRenderer();
                   delegate.schedulerPlayVideo(dispatch);
                   break;
               case IMAGE:
                   currentRendererKind = "native_image";
                   delegate.schedulerDeactivateWebView();
+                  delegate.schedulerDeactivateIsolatedRenderer();
                   delegate.schedulerShowImage(dispatch);
                   break;
               default:
