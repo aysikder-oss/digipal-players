@@ -93,7 +93,7 @@ public class PlaylistScheduler {
     /** Feature flag: isolated per-slide WebView renderer (task #1875). Default OFF —
      *  the legacy long-lived WebView (__digipalGotoSlide) remains the production path
      *  until the isolated path is validated in the field. */
-    private static final boolean FEATURE_ISOLATED_WEB_RENDERER = false;
+    private static final boolean FEATURE_ISOLATED_WEB_RENDERER = true;
 
     /** Slides that failed in the isolated renderer at least once this session — routed
      *  to the legacy WebView on retry instead of infinitely retrying isolation. */
