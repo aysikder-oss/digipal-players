@@ -11,14 +11,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * IsolatedWebRenderer — per-slide isolated WebView for design/kiosk/url content
- * (task #1875). Unlike the legacy long-lived WebView (which drives the whole
- * playlist via __digipalGotoSlide), this loads exactly one slide per WebView
- * instance from the standalone /tv/render/:pairingCode/:contentId route (or a
- * raw URL for WEBVIEW_URL slides), so a crash/hang on one design cannot take
- * down subsequent slides. Hidden until Digipal.ready(slideId) fires from JS.
- * Behind FEATURE_ISOLATED_WEB_RENDERER (default OFF in PlaylistScheduler) —
- * any timeout/error routes back to the legacy WebView flow via
- * PlaylistScheduler.onIsolatedRendererFailed().
+ * (task #1875). Unlike the old shared long-lived WebView (which used to drive
+ * the whole playlist via __digipalGotoSlide, retired task #1886 — WebDesign/
+ * WebKiosk/WebSlideRenderer were deleted as dead code), this loads exactly one
+ * slide per WebView instance from the standalone /tv/render/:pairingCode/
+ * :contentId route (or a raw URL for WEBVIEW_URL slides), so a crash/hang on
+ * one design cannot take down subsequent slides. Hidden until
+ * Digipal.ready(slideId) fires from JS. This is now the only WebView-delegated
+ * render path (task P7 legacy cleanup: the FEATURE_ISOLATED_WEB_RENDERER flag
+ * this comment used to reference has been removed — PlaylistScheduler always
+ * dispatches WEBVIEW_DESIGN/KIOSK/URL here unconditionally); any timeout/error
+ * still routes to a retry via PlaylistScheduler.onIsolatedRendererFailed().
  */
 public class IsolatedWebRenderer {
 
