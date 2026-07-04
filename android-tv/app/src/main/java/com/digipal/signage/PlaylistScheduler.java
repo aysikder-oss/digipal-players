@@ -514,6 +514,17 @@ public class PlaylistScheduler {
             return;
         }
         Log.w(TAG, "[error] " + slideId + ": " + error + " (slideRetry=" + slideRetryCount + ")");
+        // Bug fix (task P3): a failure that arrives while still PREPARING_CURRENT (i.e.
+        // before onRendererReady() ever fired) leaves the 3s RENDERER_READY_TIMEOUT_MS
+        // safety runnable armed. Without cancelling it here, that stale timeout can fire
+        // mid-retry/mid-degraded-recovery and force State.PLAYING + start a *second*,
+        // competing advance timer for the slide that just failed -- corrupting the
+        // TRANSITIONING/DEGRADED_PLAYBACK state machine and double-advancing the playlist.
+        if (rendererReadyTimeout != null) {
+            handler.removeCallbacks(rendererReadyTimeout);
+            rendererReadyTimeout = null;
+        }
+        rendererReadyTimeoutGen = -1;
         slideRetryCount++;
         consecutiveFailures++;
         if (telemetry != null) telemetry.logEvent("slide_failed", slideId,
