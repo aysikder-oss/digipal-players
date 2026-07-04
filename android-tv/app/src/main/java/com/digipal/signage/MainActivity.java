@@ -2308,7 +2308,12 @@ import android.os.Looper;
                                       webView.setAlpha(0f);
                                       webView.setVisibility(View.INVISIBLE);
                                       webView.pauseTimers();
-                                        android.util.Log.d("RendererOwner", "owner=native webView hidden");
+                                        // v59 Fix 11: proof-of-pairing log. Every pauseTimers() call here
+                                        // MUST be matched by a resumeTimers() call in
+                                        // schedulerActivateIsolatedRenderer() before that WebView is asked
+                                        // to run JS again -- grep logcat for "timers=paused"/"timers=resumed"
+                                        // to confirm no slide is left with frozen JS.
+                                        android.util.Log.d("RendererOwner", "owner=native webView hidden timers=paused");
                                         // Fire TV: keep WebSocket alive while JS timers are paused.
                                         // pauseTimers() freezes setInterval so the WS heartbeat stops —
                                         // a Java Handler fires evaluateJavascript every 25s instead.
@@ -2378,7 +2383,12 @@ import android.os.Looper;
                                   // path), resume them before loading isolated-renderer content --
                                   // otherwise the freshly-loaded design/kiosk JS would never get a
                                   // running timer loop to send ready() or run its own animations.
-                                  if (webView != null) webView.resumeTimers();
+                                  if (webView != null) {
+                                      webView.resumeTimers();
+                                      // v59 Fix 11: proof-of-pairing log -- pairs with
+                                      // "owner=native webView hidden timers=paused" above.
+                                      android.util.Log.d("RendererOwner", "owner=isolated webView timers=resumed");
+                                  }
                                   if (healthMonitor != null) healthMonitor.setRendererTypeWeb();
                                   hideNativeVideoSurfaces();
                                   hideNativeImagesForVideo();
