@@ -2339,7 +2339,30 @@ import android.os.Looper;
                                 } catch (Throwable ignored) {}
                           });
                       }
-                      @Override public void schedulerActivateIsolatedRenderer(PlaylistScheduler.SlidePlan s) {
+                      @Override public void schedulerDeactivateWebViewForIsolatedRenderer() {
+                            // Codex P0 Fix 1: WebView.pauseTimers() is PROCESS-WIDE — it freezes
+                            // JS timers in every WebView instance in the app, not just the one
+                            // being hidden. schedulerDeactivateWebView() (above) calls pauseTimers()
+                            // and that is fine before native VIDEO/IMAGE dispatch (no WebView needs
+                            // to run JS afterwards). But dispatch() was also calling it immediately
+                            // before schedulerActivateIsolatedRenderer(), which froze the brand-new
+                            // isolated renderer WebView's timers before its React/design/kiosk JS
+                            // even had a chance to run — causing design and kiosk slides to never
+                            // send ready() (blank/stuck slides, especially after Fire TV heartbeat
+                            // handling suspended real JS timers). This variant just hides the main
+                            // WebView WITHOUT touching timers, and does not start the Fire TV
+                            // Java-heartbeat workaround (unnecessary since nothing is paused).
+                            runOnUiThread(() -> {
+                                try {
+                                    if (webView != null) {
+                                        webView.setAlpha(0f);
+                                        webView.setVisibility(View.INVISIBLE);
+                                        android.util.Log.d("RendererOwner", "owner=isolated webView hidden (timers not paused)");
+                                    }
+                                } catch (Throwable ignored) {}
+                            });
+                        }
+                        @Override public void schedulerActivateIsolatedRenderer(PlaylistScheduler.SlidePlan s) {
                           // Isolated per-slide WebView renderer (task #1875) — the only
                           // WebView-delegated rendering path for WEBVIEW_DESIGN/KIOSK/URL slides
                           // (legacy shared long-lived WebView retired task #1886). Loads the
@@ -2350,6 +2373,12 @@ import android.os.Looper;
                           // falling back to any legacy WebView path.
                           runOnUiThread(() -> {
                               try {
+                                  // Codex P0 Fix 1 (defensive): if this WebView's timers were
+                                  // ever paused by schedulerDeactivateWebView() (native VIDEO/IMAGE
+                                  // path), resume them before loading isolated-renderer content --
+                                  // otherwise the freshly-loaded design/kiosk JS would never get a
+                                  // running timer loop to send ready() or run its own animations.
+                                  if (webView != null) webView.resumeTimers();
                                   if (healthMonitor != null) healthMonitor.setRendererTypeWeb();
                                   hideNativeVideoSurfaces();
                                   hideNativeImagesForVideo();
