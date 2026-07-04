@@ -7,7 +7,9 @@ import android.util.Log;
 import android.webkit.WebView;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import java.io.File;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -76,6 +78,9 @@ public class PlaylistScheduler {
          *  (renderer observability task); only the client knows whether an IMAGE slide is
          *  a real image or a pre-rendered design snapshot (task #1879). Empty for non-design slides. */
         public String renderMode = "";
+        /** PDF-only: per-page duration in ms sent by the client (contentSettings.pdfPageDuration).
+         *  -1 means unset -- expandPdfIfPrerendered() falls back to durationMs per page. */
+        public long pdfPageDurationMs = -1;
     }
 
     public interface AssetResolver {
@@ -881,13 +886,62 @@ public class PlaylistScheduler {
                 s.scaleType  = o.optString("scaleType", "contain");
                 s.fallbackUrl= o.optString("fallbackUrl", "");
                 s.renderMode = o.optString("renderMode", "");
-                result.add(s);
+                double pdfPageDur = o.optDouble("pdfPageDuration", -1);
+                s.pdfPageDurationMs = pdfPageDur >= 0 ? (long) (pdfPageDur * 1000) : -1;
+                result.addAll(expandPdfIfPrerendered(s));
             }
         } catch (Exception e) { Log.e(TAG, "parseSlides: " + e.getMessage()); }
         return result;
     }
 
-    private List<SlidePlan> entitiesToPlans(List<PlaylistDatabase.SlideEntity> ents) {
+    /**
+       * Task #1891: WEBVIEW_PDF slides whose PDF has been downloaded + prerendered to
+       * page JPEGs (PdfPrerenderer, triggered from PlaylistRepository right after download)
+       * are expanded here into one native IMAGE SlidePlan per page -- eliminating the
+       * isolated WebView PDF viewer entirely for the common case. Falls back to the
+       * original single WEBVIEW_PDF slide (isolated-WebView PDF path) when the PDF hasn't
+       * been downloaded yet, prerendering failed, or the on-device JPEGs were pruned.
+       * Called from both parseSlides() (fresh playlist from server) and entitiesToPlans()
+       * (boot-time Room restore) so the expansion is applied consistently either way.
+       */
+      private List<SlidePlan> expandPdfIfPrerendered(SlidePlan pdfSlide) {
+          if (pdfSlide.type != SlideType.WEBVIEW_PDF) return Collections.singletonList(pdfSlide);
+          try {
+              String assetId = "native_asset_" + pdfSlide.contentId + "_pdf";
+              PlaylistDatabase.AssetEntity ae = repository.getAsset(assetId);
+              if (ae == null || ae.prerenderedPages == null || ae.prerenderedPages.isEmpty()) {
+                  return Collections.singletonList(pdfSlide);
+              }
+              JSONArray pages = new JSONArray(ae.prerenderedPages);
+              List<SlidePlan> expanded = new ArrayList<>();
+              long pageDurationMs = pdfSlide.pdfPageDurationMs >= 0 ? pdfSlide.pdfPageDurationMs : pdfSlide.durationMs;
+              for (int i = 0; i < pages.length(); i++) {
+                  String path = pages.optString(i, "");
+                  if (path.isEmpty() || !new File(path).exists()) continue;
+                  SlidePlan page = new SlidePlan();
+                  page.slideId    = pdfSlide.slideId + "_p" + i;
+                  page.type       = SlideType.IMAGE;
+                  page.url        = "file://" + path;
+                  page.durationMs = pageDurationMs;
+                  page.contentId  = pdfSlide.contentId;
+                  page.scaleType  = "contain";
+                  page.objectFit  = "contain";
+                  page.renderMode = "pdf-native";
+                  expanded.add(page);
+              }
+              if (expanded.isEmpty()) {
+                  Log.w(TAG, "[pdf-native] all prerendered pages missing on disk for " + assetId + " -- falling back to webview");
+                  return Collections.singletonList(pdfSlide);
+              }
+              Log.i(TAG, "[pdf-native] expanded " + assetId + " into " + expanded.size() + " native IMAGE slides");
+              return expanded;
+          } catch (Exception e) {
+              Log.e(TAG, "[pdf-native] expansion failed for slide=" + pdfSlide.slideId + ": " + e.getMessage());
+              return Collections.singletonList(pdfSlide);
+          }
+      }
+
+      private List<SlidePlan> entitiesToPlans(List<PlaylistDatabase.SlideEntity> ents) {
         List<SlidePlan> plans = new ArrayList<>();
         for (PlaylistDatabase.SlideEntity e : ents) {
             try {
@@ -903,7 +957,9 @@ public class PlaylistScheduler {
                 s.volume     = (float) cfg.optDouble("volume", 0.0);
                 s.scaleType  = cfg.optString("scaleType", "contain");
                 s.renderMode = cfg.optString("renderMode", "");
-                plans.add(s);
+                double pdfPageDur = cfg.optDouble("pdfPageDuration", -1);
+                s.pdfPageDurationMs = pdfPageDur >= 0 ? (long) (pdfPageDur * 1000) : -1;
+                plans.addAll(expandPdfIfPrerendered(s));
             } catch (Exception ex) { Log.w(TAG, "entitiesToPlans: " + ex.getMessage()); }
         }
         return plans;
