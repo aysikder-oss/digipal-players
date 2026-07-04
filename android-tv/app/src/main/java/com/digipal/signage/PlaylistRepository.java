@@ -328,27 +328,32 @@ package com.digipal.signage;
        * Adds a boolean isLocal=true flag so the scheduler knows the URL is already cached.
        */
       private String rewriteManifestUrls(String json, ConcurrentHashMap<String, String> paths) {
-          try {
-              JSONArray arr = new JSONArray(json);
-              for (int i = 0; i < arr.length(); i++) {
-                  JSONObject obj = arr.getJSONObject(i);
-                  String type = obj.optString("type", "");
-                  if (!"VIDEO".equals(type) && !"IMAGE".equals(type)) continue;
-                  String contentId = obj.optString("contentId", String.valueOf(i));
-                  String objectPath = "native_asset_" + contentId + "_" + type.toLowerCase();
-                  String localPath = paths.get(objectPath);
-                  if (localPath != null && !localPath.isEmpty()) {
-                      obj.put("url", localPath);
-                      obj.put("localUrl", localPath);
-                      obj.put("isLocal", true);
-                  }
-              }
-              return arr.toString();
-          } catch (Exception ex) {
-              Log.e(TAG, "rewriteManifestUrls: " + ex.getMessage());
-              return json;
-          }
-      }
+            try {
+                JSONArray arr = new JSONArray(json);
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject obj = arr.getJSONObject(i);
+                    String type = obj.optString("type", "");
+                    boolean isPdf = "WEBVIEW_PDF".equals(type);
+                    if (!"VIDEO".equals(type) && !"IMAGE".equals(type) && !isPdf) continue;
+                    String contentId = obj.optString("contentId", String.valueOf(i));
+                    // PDFs are downloaded under a fixed "_pdf" suffix key (task #1891, mirrors
+                    // extractMediaAssets()) so the isolated-WebView PDF fallback still opens the
+                    // locally-cached file (task P4) instead of a possibly-expired/offline-
+                    // unreachable remote signed URL when native prerendering hasn't completed yet.
+                    String objectPath = "native_asset_" + contentId + "_" + (isPdf ? "pdf" : type.toLowerCase());
+                    String localPath = paths.get(objectPath);
+                    if (localPath != null && !localPath.isEmpty()) {
+                        obj.put("url", localPath);
+                        obj.put("localUrl", localPath);
+                        obj.put("isLocal", true);
+                    }
+                }
+                return arr.toString();
+            } catch (Exception ex) {
+                Log.e(TAG, "rewriteManifestUrls: " + ex.getMessage());
+                return json;
+            }
+        }
 
       private static String escapeJson(String s) {
           if (s == null) return "";
