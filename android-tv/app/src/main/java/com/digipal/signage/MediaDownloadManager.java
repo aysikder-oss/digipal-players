@@ -119,6 +119,14 @@ package com.digipal.signage;
       // ─────────────────────────────────────────────────────────────────────────
 
       private void performDownload(String objectPath, String signedUrl) {
+          // Task P6: activeDownloads must be released on EVERY exit path, not just the
+          // final-retry-exhausted path below -- the early returns for missing storage dir,
+          // non-200 responses, insufficient disk space, and file-move failure all used to
+          // return directly from this method without going through the removal at the end,
+          // permanently leaking objectPath in this in-memory Set for the rest of the process
+          // lifetime (a 24/7 kiosk player never restarts, so this leaked without bound).
+          try {
+
           final int MAX_ATTEMPTS = 3;
           String lastError = "Unknown error";
           for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -219,14 +227,15 @@ package com.digipal.signage;
                   lastError = e.getMessage() != null ? e.getMessage() : "IOException";
                   // Retry on network errors; continue for loop to next attempt
                   continue;
-              } finally {
-                  // activeDownloads cleaned up only on final exit, not mid-retry
               }
               return; // success — exit retry loop
           } // end retry loop
           // All attempts exhausted
           notifyDownloadFailed(objectPath, lastError);
-          synchronized (activeDownloads) { activeDownloads.remove(objectPath); }
+      
+          } finally {
+              synchronized (activeDownloads) { activeDownloads.remove(objectPath); }
+          }
       }
 
       // ─────────────────────────────────────────────────────────────────────────
