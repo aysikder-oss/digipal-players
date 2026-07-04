@@ -143,6 +143,18 @@ public class PlaylistScheduler {
      *  "native_image", "isolated_webview", "main_webview" (baseline renderer diagnostics task). */
     private String currentRendererKind = "";
 
+    /** Slide id / content id / render mode of the currently dispatched slide, kept in
+     *  sync with currentRendererKind for the debug telemetry panel (debug/telemetry task). */
+    private volatile String currentSlideId = "";
+    private volatile int currentContentId = 0;
+    private volatile String currentRenderMode = "";
+    /** Wall-clock timestamps (System.currentTimeMillis()) of the most recent renderer
+     *  lifecycle events, surfaced via getRendererStatus() so the debug overlay can show
+     *  staleness (e.g. a stuck renderer shows no ready/error signal for a long time). 0 = never. */
+    private volatile long lastReadyAtMs = 0L;
+    private volatile long lastErrorAtMs = 0L;
+    private volatile String lastErrorMessage = "";
+
     // ── Full renderer observability (renderer observability & telemetry task) ──────────
     /** Name of the WebViewPolicy applied to the current/last WebView-based slide.
      *  Set by MainActivity right after it computes the policy (per-asset WebView policy
@@ -163,6 +175,12 @@ public class PlaylistScheduler {
     public String getShellSourceName() { return shellSource; }
     public boolean isLastFallbackUsed() { return lastFallbackUsed; }
     public String getMemoryTierName() { return currentMemoryTier(); }
+    public String getCurrentSlideId() { return currentSlideId; }
+    public int getCurrentContentId() { return currentContentId; }
+    public String getCurrentRenderMode() { return currentRenderMode; }
+    public long getLastReadyAtMs() { return lastReadyAtMs; }
+    public long getLastErrorAtMs() { return lastErrorAtMs; }
+    public String getLastErrorMessage() { return lastErrorMessage; }
     /** Isolated renderer is now the only WebView-delegated rendering path (task #1886). */
     public static boolean isIsolatedRendererFeatureEnabled() { return true; }
 
@@ -423,6 +441,7 @@ public class PlaylistScheduler {
 
     /** Called when a renderer signals it is ready (first frame decoded). */
     public void onRendererReady(String slideId) {
+        lastReadyAtMs = System.currentTimeMillis();
         // Stale-callback guard: a renderer (isolated WebView, ExoPlayer) can report
         // ready asynchronously after the scheduler has already advanced past the
         // slide that requested it (fast user-triggered skip, rapid playlist swap).
@@ -482,6 +501,8 @@ public class PlaylistScheduler {
      * Goes DEGRADED only after MAX_FAILURES consecutive failures.
      */
     public void onRendererError(String slideId, String error) {
+        lastErrorAtMs = System.currentTimeMillis();
+        lastErrorMessage = error == null ? "" : error;
         // Stale-callback guard: mirrors onRendererReady() -- ignore errors reported
         // for a slide that is no longer the one the scheduler is currently showing
         // (e.g. a superseded isolated WebView that keeps loading in the background
@@ -553,6 +574,9 @@ public class PlaylistScheduler {
         if (currentIndex >= slides.size()) currentIndex = 0;
 
         final SlidePlan slide = slides.get(currentIndex);
+        currentSlideId = slide.slideId == null ? "" : slide.slideId;
+        currentContentId = slide.contentId;
+        currentRenderMode = slide.renderMode == null ? "" : slide.renderMode;
 
         // ── Asset readiness gate ─────────────────────────────────────────────
         // If a native slide's URL hasn't arrived yet (empty), wait up to 5 s before
