@@ -973,12 +973,12 @@ public class PlaylistScheduler {
                 JSONObject o = arr.getJSONObject(i);
                 SlidePlan s = new SlidePlan();
                 s.slideId    = o.optString("slideId", String.valueOf(o.optInt("contentId", i)));
-                String t     = o.optString("type", "WEBVIEW_DELEGATED");
+                String t     = o.optString("type", "WEBVIEW_URL");
                 SlideType parsedType;
                   try {
                       parsedType = SlideType.valueOf(t);
                   } catch (IllegalArgumentException ex) {
-                      // Unknown/legacy type string (e.g. old "WEBVIEW_DELEGATED" default,
+                      // Unknown/legacy type string (e.g. a pre-v3.11 "WEBVIEW_DELEGATED" payload,
                       // or a future client-side category this APK build predates) --
                       // fall back to the generic isolated-WebView renderer path rather
                       // than crashing parseSlides for the whole playlist.
