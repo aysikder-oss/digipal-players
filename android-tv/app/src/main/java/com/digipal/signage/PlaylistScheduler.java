@@ -664,7 +664,7 @@ public class PlaylistScheduler {
         // generation check would fail and the 3-second RENDERER_READY_TIMEOUT_MS
         // fallback would fire instead — stalling every preloaded slide by 3 seconds.
         final boolean isNativeSlide = (eff == SlideType.VIDEO || eff == SlideType.IMAGE);
-        final boolean isWebviewSlide = SlideType.isWebviewType(eff);
+        final boolean isWebviewSlide = isWebviewType(eff);
         final boolean needsReadyGate = isNativeSlide || isWebviewSlide;
         if (needsReadyGate) {
             pendingAdvanceDurationMs = dur;
@@ -748,7 +748,7 @@ public class PlaylistScheduler {
 
         final long memoryAfterMb = telemetry != null ? telemetry.currentMemMb() : -1;
         final String designRenderMode = !slide.renderMode.isEmpty() ? slide.renderMode
-                : SlideType.isWebviewType(eff) ? "webview"
+                : isWebviewType(eff) ? "webview"
                 : (eff == SlideType.IMAGE || eff == SlideType.VIDEO) ? "native" : "n/a";
         if (telemetry != null) telemetry.logEvent("slide_shown", slide.slideId,
                 "{\"type\":\"" + eff + "\",\"index\":" + currentIndex
