@@ -635,6 +635,8 @@ import android.os.Looper;
             getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                     .edit().putString(KEY_PAIRING_CODE, code).apply();
             android.util.Log.d("DigipalNative", "[pairingCode] cached " + code);
+        
+            if (telemetryManager != null) telemetryManager.setPairingCode(code);
         }
 
         @JavascriptInterface
@@ -2011,6 +2013,7 @@ import android.os.Looper;
           try {
               playlistRepository = new PlaylistRepository(this);
               telemetryManager   = new TelemetryManager(this, playlistRepository, getServerUrl());
+              if (cachedPairingCode != null) telemetryManager.setPairingCode(cachedPairingCode);
               telemetryManager.start();
 
                 // Per-asset WebView policy task: track the Android System WebView
