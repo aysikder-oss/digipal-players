@@ -103,6 +103,10 @@ public class WebViewPolicy {
               p.name = slideType == PlaylistScheduler.SlideType.WEBVIEW_KIOSK ? "kiosk_permissive_fresh"
                       : slideType == PlaylistScheduler.SlideType.WEBVIEW_DIRECTORY ? "directory_permissive_fresh"
                       : "design_permissive_fresh";
+              // Dynamic design/kiosk/directory content can involve heavy DOM/JS work
+              // (widgets, animations, multi-floor routing) that legitimately needs more
+              // than the 3s native-media ready gate on slow/low-RAM Android devices.
+              p.readyTimeoutMs = 8_000L;
           } else if (isCanva || isWebsite) {
               p.allowFileAccess = false;
               p.allowFileAccessFromFileUrls = false;
@@ -112,6 +116,9 @@ public class WebViewPolicy {
               p.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW;
               p.rendererPriorityImportant = false;
               p.name = isCanva ? "canva_embed" : "website_embed";
+              // Canva/website embeds are arbitrary third-party pages/iframes that can be
+              // slow to first-paint (ad/analytics scripts, large third-party bundles).
+              p.readyTimeoutMs = 10_000L;
           } else {
               // WEBVIEW_WIDGET / WEBVIEW_PDF / WEBVIEW_TEXT / WEBVIEW_AUDIO / WEBVIEW_URL:
               // internally-rendered content served from our own origin -- keep the
@@ -123,6 +130,12 @@ public class WebViewPolicy {
               p.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE;
               p.rendererPriorityImportant = false;
               p.name = "url_restrictive";
+              // TEXT/AUDIO are near-instant internally-rendered pages with no external
+              // network dependency; everything else in this bucket (WIDGET/PDF/URL) is
+              // internally-rendered but may still fetch external widget data/PDF pages.
+              p.readyTimeoutMs = (slideType == PlaylistScheduler.SlideType.WEBVIEW_TEXT
+                      || slideType == PlaylistScheduler.SlideType.WEBVIEW_AUDIO)
+                      ? 1_000L : 8_000L;
           }
           return p;
       }
