@@ -2414,7 +2414,7 @@ import android.os.Looper;
                                                       playlistScheduler.onIsolatedRendererFailed(slideId, reason);
                                                   }
                                               }
-                                          }, telemetryManager);
+                                          }, telemetryManager, mediaDownloadManager);
                                   }
                                   String base = getServerUrl();
                                     if (base.endsWith("/")) base = base.substring(0, base.length() - 1);
