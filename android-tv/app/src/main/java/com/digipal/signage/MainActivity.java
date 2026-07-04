@@ -666,19 +666,35 @@ import android.os.Looper;
                 o.put("appVersion", BuildConfig.VERSION_NAME);
                 o.put("versionCode", BuildConfig.VERSION_CODE);
                 if (playlistScheduler != null) {
-                    o.put("rendererKind", playlistScheduler.getCurrentRendererKind());
-                    o.put("memoryTier", playlistScheduler.getMemoryTierName());
-                    o.put("webViewPolicy", playlistScheduler.getLastWebViewPolicyName());
-                    o.put("shellSource", playlistScheduler.getShellSourceName());
-                    o.put("fallbackUsed", playlistScheduler.isLastFallbackUsed());
-                } else {
-                    o.put("rendererKind", "unknown");
-                    o.put("memoryTier", "unknown");
-                    o.put("webViewPolicy", "");
-                    o.put("shellSource", "unknown");
-                    o.put("fallbackUsed", false);
-                }
-                o.put("isolatedRendererFeatureEnabled", PlaylistScheduler.isIsolatedRendererFeatureEnabled());
+                      o.put("rendererKind", playlistScheduler.getCurrentRendererKind());
+                      o.put("memoryTier", playlistScheduler.getMemoryTierName());
+                      o.put("webViewPolicy", playlistScheduler.getLastWebViewPolicyName());
+                      o.put("shellSource", playlistScheduler.getShellSourceName());
+                      o.put("fallbackUsed", playlistScheduler.isLastFallbackUsed());
+                      o.put("slideId", playlistScheduler.getCurrentSlideId());
+                      o.put("contentId", playlistScheduler.getCurrentContentId());
+                      o.put("renderMode", playlistScheduler.getCurrentRenderMode());
+                      o.put("lastReadyAtMs", playlistScheduler.getLastReadyAtMs());
+                      o.put("lastErrorAtMs", playlistScheduler.getLastErrorAtMs());
+                      o.put("lastErrorMessage", playlistScheduler.getLastErrorMessage());
+                  } else {
+                      o.put("rendererKind", "unknown");
+                      o.put("memoryTier", "unknown");
+                      o.put("webViewPolicy", "");
+                      o.put("shellSource", "unknown");
+                      o.put("fallbackUsed", false);
+                      o.put("slideId", "");
+                      o.put("contentId", 0);
+                      o.put("renderMode", "");
+                      o.put("lastReadyAtMs", 0);
+                      o.put("lastErrorAtMs", 0);
+                      o.put("lastErrorMessage", "");
+                  }
+                  // lastHeartbeatMs is a MainActivity-level field (set from the JS heartbeat()
+                  // bridge call), not scheduler-scoped -- always available once the WebView has
+                  // called heartbeat() at least once (debug/telemetry task).
+                  o.put("lastHeartbeatAtMs", lastHeartbeatMs);
+                  o.put("isolatedRendererFeatureEnabled", PlaylistScheduler.isIsolatedRendererFeatureEnabled());
                 return o.toString();
             } catch (Exception e) {
                 return "{}";
