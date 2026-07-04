@@ -7,6 +7,7 @@ import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.*;
+import java.io.File;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -72,18 +73,32 @@ public class IsolatedWebRenderer {
             return isCurrentSlide(slideId) && renderToken == currentRenderToken;
         }
     private Runnable timeoutRunnable;
-    private Runnable heartbeatRunnable;
+      private Runnable heartbeatRunnable;
+      /** Unified Design Studio Renderer stabilization (Step 3): optional, null-safe.
+       *  Backs window.DigipalMedia (see DigipalMediaBridge) and shouldInterceptRequest()'s
+       *  virtual media-URL resolution for locally-cached design/kiosk media. */
+      private final MediaDownloadManager mediaDownloadManager;
 
-    public IsolatedWebRenderer(Context ctx, ViewGroup container, Listener listener) {
-          this(ctx, container, listener, null);
-      }
+      public IsolatedWebRenderer(Context ctx, ViewGroup container, Listener listener) {
+            this(ctx, container, listener, null, null);
+        }
 
-      public IsolatedWebRenderer(Context ctx, ViewGroup container, Listener listener, TelemetryManager telemetry) {
-          this.ctx = ctx;
-          this.container = container;
-          this.listener = listener;
-          this.telemetry = telemetry;
-      }
+        public IsolatedWebRenderer(Context ctx, ViewGroup container, Listener listener, TelemetryManager telemetry) {
+            this(ctx, container, listener, telemetry, null);
+        }
+
+        // Unified Design Studio Renderer stabilization (Step 3): optional MediaDownloadManager
+        // backs the window.DigipalMedia JS bridge (see DigipalMediaBridge below) and
+        // shouldInterceptRequest()'s virtual-media-URL resolution. Null-safe everywhere it's
+        // used, so callers that don't pass one (or run on older call sites) just fall back to
+        // remote-only media loading with no behavior change.
+        public IsolatedWebRenderer(Context ctx, ViewGroup container, Listener listener, TelemetryManager telemetry, MediaDownloadManager mediaDownloadManager) {
+            this.ctx = ctx;
+            this.container = container;
+            this.listener = listener;
+            this.telemetry = telemetry;
+            this.mediaDownloadManager = mediaDownloadManager;
+        }
 
     private WebViewPolicy currentPolicy;
     /** Host of the URL most recently passed to prepare(). The top-level
@@ -245,6 +260,7 @@ public class IsolatedWebRenderer {
         webView.setBackgroundColor(0xFF0a0e1a);
         webView.setVisibility(View.INVISIBLE);
         webView.addJavascriptInterface(new RenderBridge(), "Digipal");
+          webView.addJavascriptInterface(new DigipalMediaBridge(), "DigipalMedia");
         webView.setWebViewClient(new WebViewClient() {
               // Blocks any top-level navigation away from the host we originally
               // loaded (task P5: harden WebView policies). Every slide type is
@@ -258,9 +274,32 @@ public class IsolatedWebRenderer {
                   return blockUntrustedNavigation(req == null ? null : req.getUrl());
               }
               @Override public boolean shouldOverrideUrlLoading(WebView v, String url) {
-                  return blockUntrustedNavigation(url == null ? null : android.net.Uri.parse(url));
-              }
-              @Override public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError err) {
+                    return blockUntrustedNavigation(url == null ? null : android.net.Uri.parse(url));
+                }
+                // Unified Design Studio Renderer stabilization (Step 3): resolves the
+                // virtual https://appassets.androidplatform.net/media/<objectPath>
+                // URLs handed out by MediaDownloadManager.getLocalMediaWebUrl() (see the
+                // window.DigipalMedia JS bridge below) back to locally-cached media
+                // bytes, so a design/kiosk slide can render offline-cached media inside
+                // this WebView without ever touching a raw file:// URL. Any request that
+                // isn't a recognized/cached virtual media URL falls through to normal
+                // network loading (returns null).
+                @Override public android.webkit.WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
+                    try {
+                        android.net.Uri uri = req != null ? req.getUrl() : null;
+                        if (uri != null && "appassets.androidplatform.net".equals(uri.getHost())
+                                && mediaDownloadManager != null) {
+                            File cached = mediaDownloadManager.resolveLocalMediaFile(uri.getPath());
+                            if (cached != null) {
+                                String mime = MediaDownloadManager.guessMimeType(cached);
+                                return new android.webkit.WebResourceResponse(mime, null,
+                                        new java.io.FileInputStream(cached));
+                            }
+                        }
+                    } catch (Throwable ignored) {}
+                    return null;
+                }
+                @Override public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError err) {
                     // P7: only ever fail the active slide for a main-frame error on the
                     // page we are actually showing -- ignore subresource errors (fonts,
                     // images, XHRs inside the page), about:blank (loaded synchronously
@@ -406,4 +445,32 @@ public class IsolatedWebRenderer {
                   });
               }
           }
-}
+        /** Unified Design Studio Renderer stabilization (Step 3): minimal JS bridge for
+         *  locally-cached media, mirroring the pattern used by RenderBridge/"Digipal"
+         *  above. Exposed to the isolated-renderer page as window.DigipalMedia so
+         *  Design Studio/kiosk content can ask "do you already have this media file
+         *  cached locally?" and get back a same-origin-safe web URL to use directly in
+         *  an <img>/<video> src, instead of always hitting the (possibly offline)
+         *  remote signed URL. Both methods are null-safe no-ops when this renderer was
+         *  constructed without a MediaDownloadManager. */
+        private class DigipalMediaBridge {
+            @JavascriptInterface
+            public String getLocalMediaWebUrl(String objectPath) {
+                if (mediaDownloadManager == null || objectPath == null) return "";
+                try {
+                    return mediaDownloadManager.getLocalMediaWebUrl(objectPath);
+                } catch (Throwable ignored) {
+                    return "";
+                }
+            }
+
+            @JavascriptInterface
+            public void downloadMedia(String objectPath, String signedUrl) {
+                if (mediaDownloadManager == null || objectPath == null || signedUrl == null) return;
+                try {
+                    mediaDownloadManager.downloadMedia(objectPath, signedUrl);
+                } catch (Throwable ignored) {}
+            }
+        }
+  }
+  
