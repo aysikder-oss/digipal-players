@@ -201,8 +201,11 @@ public class PlaylistScheduler {
       public void setWebView(android.webkit.WebView wv) { repository.setWebView(wv); }
 
   
-    /** Per-slide retry counter; reset in showCurrent(), incremented in onRendererError(). */
-    private int slideRetryCount = 0;
+    /** Per-slide retry counter, scoped by slide id (v59 Fix 10) -- see retrySlideId below. */
+      private String retrySlideId = null;
+      /** Retry attempts made for retrySlideId; incremented in onRendererError(), reset on a
+       *  different slide's first failure, on successful ready, or on a genuine slide advance. */
+      private int retryCountForSlide = 0;
 
     /** Wall-clock time when pause() was called; -1 when not paused. */
     private long pausedAt = -1;
@@ -447,7 +450,7 @@ public class PlaylistScheduler {
         if (prefs != null) {
             prefs.edit().putLong(KEY_PLAYLIST_EPOCH, System.currentTimeMillis()).apply();
         }
-        slideRetryCount = 0; // fresh playlist start -- reset the per-slide retry counter
+        retrySlideId = null; retryCountForSlide = 0; // fresh playlist start -- reset the per-slide retry counter
         firstSlideRemainingMs = -1L; // fresh start — no wall-clock offset
         running = true;
         showCurrent();
@@ -456,7 +459,7 @@ public class PlaylistScheduler {
     /** Force-advance to the next slide immediately (RecoveryCoordinator: SLIDE_SKIP). */
       public synchronized void skipCurrentSlide() {
           if (!running) return;
-          slideRetryCount = 0;
+          retrySlideId = null; retryCountForSlide = 0;
           if (advanceRunnable != null) { handler.removeCallbacks(advanceRunnable); advanceRunnable = null; }
           final int myGen = generation;
           handler.post(() -> { if (generation == myGen && running) advance(); });
@@ -602,7 +605,14 @@ public class PlaylistScheduler {
             return;
         }
         lastErrorAtMs = System.currentTimeMillis(); // Bug fix: moved after the stale-callback guard so ignored/late callbacks for a superseded slide don't corrupt the dashboard's error timestamp.
-        Log.w(TAG, "[error] " + slideId + ": " + error + " (slideRetry=" + slideRetryCount + ")");
+        // v59 Fix 10: retryCountForSlide is scoped to retrySlideId. A different slide's
+        // first failure (or the first failure ever) must start its own counter at 0/1
+        // instead of inheriting whatever count a previous, unrelated slide left behind.
+        if (retrySlideId == null || !retrySlideId.equals(slideId)) {
+            retrySlideId = slideId;
+            retryCountForSlide = 0;
+        }
+        Log.w(TAG, "[error] " + slideId + ": " + error + " (slideRetry=" + retryCountForSlide + ")");
         // Bug fix (task P3): a failure that arrives while still PREPARING_CURRENT (i.e.
         // before onRendererReady() ever fired) leaves the renderer-ready safety timeout
         // safety runnable armed. Without cancelling it here, that stale timeout can fire
@@ -614,11 +624,11 @@ public class PlaylistScheduler {
             rendererReadyTimeout = null;
         }
         rendererReadyTimeoutGen = -1;
-        slideRetryCount++;
+        retryCountForSlide++;
         consecutiveFailures++;
         if (telemetry != null) telemetry.logEvent("slide_failed", slideId,
                 "{\"error\":" + JSONObject.quote(error)
-                + ",\"slideRetry\":" + slideRetryCount
+                + ",\"slideRetry\":" + retryCountForSlide
                 + ",\"rendererKind\":\"" + currentRendererKind + "\""
                 + ",\"memoryTier\":\"" + currentMemoryTier() + "\""
                 + ",\"webViewPolicy\":\"" + lastWebViewPolicy + "\""
@@ -635,8 +645,8 @@ public class PlaylistScheduler {
 
         if (advanceRunnable != null) handler.removeCallbacks(advanceRunnable);
 
-        if (slideRetryCount < MAX_SLIDE_RETRIES) {
-            Log.d(TAG, "[error] retrying slide " + slideId + " in 500ms (attempt " + slideRetryCount + ")");
+        if (retryCountForSlide < MAX_SLIDE_RETRIES) {
+            Log.d(TAG, "[error] retrying slide " + slideId + " in 500ms (attempt " + retryCountForSlide + ")");
             final int myGen = generation;
             handler.postDelayed(() -> {
                 if (generation != myGen || !running) return;
@@ -644,7 +654,7 @@ public class PlaylistScheduler {
             }, 500);
         } else {
             Log.w(TAG, "[error] max retries for " + slideId + " -- skipping");
-            slideRetryCount = 0;
+            retrySlideId = null; retryCountForSlide = 0;
             final int myGen = generation;
             handler.postDelayed(() -> {
                 if (generation != myGen || !running) return;
@@ -705,7 +715,7 @@ public class PlaylistScheduler {
         }
         assetGraceRetries = 0; // URL present — reset grace counter
 
-        // Bug fix (Android review): slideRetryCount must NOT be reset here -- showCurrent()
+        // Bug fix (Android review): retryCountForSlide must NOT be reset here -- showCurrent()
           // is also invoked by onRendererError()'s own retry path (same slideId), so resetting it
           // on every call meant the counter never accumulated past 1 and MAX_SLIDE_RETRIES never
           // actually triggered, causing an infinite 500ms retry loop for a permanently-broken
@@ -944,7 +954,7 @@ public class PlaylistScheduler {
         }
 
         consecutiveFailures = 0;
-        slideRetryCount = 0; // new slide -- reset the per-slide retry counter (see showCurrent())
+        retrySlideId = null; retryCountForSlide = 0; // new slide -- reset the per-slide retry counter (see showCurrent())
         toState(State.TRANSITIONING, next != null ? next.slideId : "");
         currentIndex = nextIdx;
         showCurrent();
@@ -959,7 +969,7 @@ public class PlaylistScheduler {
         advanceRunnable = () -> {
             if (generation != myGen) return;
             consecutiveFailures = 0;
-            slideRetryCount = 0;
+            retrySlideId = null; retryCountForSlide = 0;
             toState(State.RECOVERING_RENDERER, slideId);
             advance();
         };
@@ -979,7 +989,7 @@ public class PlaylistScheduler {
     public int getSlideCount() { return slides.size(); }
     public long getActiveRevisionId() { return activeRevisionId; }
     /** Retry attempts made for the currently active slide (resets to 0 on each new slide). Used by the dashboard telemetry bridge (getRendererStatus). */
-    public int getRetryCountForSlide() { return slideRetryCount; }
+    public int getRetryCountForSlide() { return retryCountForSlide; }
     /** Consecutive slide failures since the last successful render (resets to 0 on success/reload). Used by the dashboard telemetry bridge (getRendererStatus). */
     public int getConsecutiveFailures() { return consecutiveFailures; }
 
