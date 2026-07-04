@@ -36,8 +36,18 @@ public class IsolatedWebRenderer {
     private final Listener listener;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private WebView webView;
-    private String currentSlideId = "";
-    private final AtomicBoolean ready = new AtomicBoolean(false);
+      private String currentSlideId = "";
+      private final AtomicBoolean ready = new AtomicBoolean(false);
+
+      /** True only if {@code slideId} matches the slide this renderer is currently
+       *  showing/loading. RenderBridge callbacks (ready/error/heartbeat/event/
+       *  requestNavigation/requestExit) fire asynchronously from JS and can arrive
+       *  after the scheduler has already moved on to (or reused this WebView for) a
+       *  different slide; acting on a stale callback would show/hide the wrong
+       *  content or reset timers for a slide that is no longer active. */
+      private boolean isCurrentSlide(String slideId) {
+          return slideId != null && slideId.equals(currentSlideId);
+      }
     private Runnable timeoutRunnable;
     private Runnable heartbeatRunnable;
 
@@ -172,32 +182,62 @@ public class IsolatedWebRenderer {
     }
 
     private class RenderBridge {
-        @JavascriptInterface public void ready(String slideId) {
-            handler.post(() -> {
-                cancelTimers();
-                ready.set(true);
-                show();
-                resetHeartbeatTimer();
-                if (currentPolicy != null && currentPolicy.customJs != null) {
-                    injectCustomJsWithRetries(currentPolicy.customJsMaxRetries);
-                }
-                listener.onRendererReady(slideId);
-            });
-        }
-        @JavascriptInterface public void error(String slideId, String code, String message) {
-            handler.post(() -> listener.onRendererFailed(slideId, code + ": " + message));
-        }
-        @JavascriptInterface public void heartbeat(String slideId) {
-            handler.post(() -> resetHeartbeatTimer());
-        }
-        @JavascriptInterface public void event(String slideId, String eventName, String payload) {
-            Log.d(TAG, "[event] " + slideId + " " + eventName);
-        }
-        @JavascriptInterface public void requestNavigation(String slideId, String target) {
-            Log.d(TAG, "[requestNavigation] " + slideId + " -> " + target);
-        }
-        @JavascriptInterface public void requestExit(String slideId) {
-            handler.post(() -> listener.onRendererFailed(slideId, "exit_requested"));
-        }
-    }
+          @JavascriptInterface public void ready(String slideId) {
+              handler.post(() -> {
+                  if (!isCurrentSlide(slideId)) {
+                      Log.w(TAG, "[stale_ready] " + slideId + " current=" + currentSlideId);
+                      return;
+                  }
+                  cancelTimers();
+                  ready.set(true);
+                  show();
+                  resetHeartbeatTimer();
+                  if (currentPolicy != null && currentPolicy.customJs != null) {
+                      injectCustomJsWithRetries(currentPolicy.customJsMaxRetries);
+                  }
+                  listener.onRendererReady(slideId);
+              });
+          }
+          @JavascriptInterface public void error(String slideId, String code, String message) {
+              handler.post(() -> {
+                  if (!isCurrentSlide(slideId)) {
+                      Log.w(TAG, "[stale_error] " + slideId + " current=" + currentSlideId);
+                      return;
+                  }
+                  listener.onRendererFailed(slideId, code + ": " + message);
+              });
+          }
+          @JavascriptInterface public void heartbeat(String slideId) {
+              handler.post(() -> {
+                  if (!isCurrentSlide(slideId)) {
+                      Log.w(TAG, "[stale_heartbeat] " + slideId + " current=" + currentSlideId);
+                      return;
+                  }
+                  resetHeartbeatTimer();
+              });
+          }
+          @JavascriptInterface public void event(String slideId, String eventName, String payload) {
+              if (!isCurrentSlide(slideId)) {
+                  Log.w(TAG, "[stale_event] " + slideId + " current=" + currentSlideId + " event=" + eventName);
+                  return;
+              }
+              Log.d(TAG, "[event] " + slideId + " " + eventName);
+          }
+          @JavascriptInterface public void requestNavigation(String slideId, String target) {
+              if (!isCurrentSlide(slideId)) {
+                  Log.w(TAG, "[stale_requestNavigation] " + slideId + " current=" + currentSlideId);
+                  return;
+              }
+              Log.d(TAG, "[requestNavigation] " + slideId + " -> " + target);
+          }
+          @JavascriptInterface public void requestExit(String slideId) {
+              handler.post(() -> {
+                  if (!isCurrentSlide(slideId)) {
+                      Log.w(TAG, "[stale_requestExit] " + slideId + " current=" + currentSlideId);
+                      return;
+                  }
+                  listener.onRendererFailed(slideId, "exit_requested");
+              });
+          }
+      }
 }
