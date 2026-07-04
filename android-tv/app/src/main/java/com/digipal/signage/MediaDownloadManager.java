@@ -181,21 +181,23 @@ package com.digipal.signage;
               }
 
               File tempFile = new File(mediaDir, sanitizedName + ".tmp");
-              InputStream in = conn.getInputStream();
-              FileOutputStream out = new FileOutputStream(tempFile);
-              byte[] buffer = new byte[BUFFER_SIZE];
-              int bytesRead;
               long totalRead = 0;
-
-              while ((bytesRead = in.read(buffer)) != -1) {
-                  out.write(buffer, 0, bytesRead);
-                  totalRead += bytesRead;
+              // Task P6: try-with-resources guarantees in/out are closed even if read()/write()
+              // throws mid-transfer (e.g. connection reset) -- the previous plain close() calls
+              // right after the loop were never reached on that path, leaking the socket's
+              // InputStream and an open FileOutputStream/file descriptor on every failed transfer.
+              try (InputStream in = conn.getInputStream();
+                   FileOutputStream out = new FileOutputStream(tempFile)) {
+                  byte[] buffer = new byte[BUFFER_SIZE];
+                  int bytesRead;
+                  while ((bytesRead = in.read(buffer)) != -1) {
+                      out.write(buffer, 0, bytesRead);
+                      totalRead += bytesRead;
+                  }
+                  out.flush();
+              } finally {
+                  conn.disconnect();
               }
-
-              out.flush();
-              out.close();
-              in.close();
-              conn.disconnect();
 
               if (outputFile.exists()) outputFile.delete();
               if (!tempFile.renameTo(outputFile)) {
