@@ -142,6 +142,12 @@ package com.nexuscast.player;
           @Query("SELECT * FROM playback_events WHERE synced=0 ORDER BY timestamp LIMIT 100") List<PlaybackEventEntity> getUnsynced();
           @Query("UPDATE playback_events SET synced=1 WHERE id IN (:ids)") void markSynced(List<Long> ids);
           @Query("DELETE FROM playback_events WHERE synced=1 AND timestamp<:before") void pruneOld(long before);
+          // Bounded local queue safeguards: hard-prune ALL events (synced or not) past a
+          // long TTL, and cap total row count, so a persistent server outage or repeated
+          // 4xx/5xx rejection can't grow this table without limit.
+          @Query("DELETE FROM playback_events WHERE timestamp<:before") void pruneAllOlderThan(long before);
+          @Query("SELECT COUNT(*) FROM playback_events") int countAll();
+          @Query("DELETE FROM playback_events WHERE id IN (SELECT id FROM playback_events ORDER BY timestamp ASC LIMIT :n)") void deleteOldest(int n);
       }
 
       @Dao public interface PlayerErrorDao {
