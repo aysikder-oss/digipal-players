@@ -40,12 +40,24 @@ package com.digipal.signage;
           void onFailed(long revisionDbId, String reason);
       }
 
-      private final PlaylistDatabase.AppDatabase db;
+            /** Task #1891 fix: fired when a WEBVIEW_PDF asset finishes native page prerendering
+         *  so PlaylistScheduler can reload the active revision and expand the slide without
+         *  waiting for the next full playlist refresh or a reboot. */
+        public interface PdfPrerenderReadyListener {
+            void onPdfPrerenderReady(String assetId);
+        }
+
+        private final PlaylistDatabase.AppDatabase db;
       private final Handler mainHandler = new Handler(Looper.getMainLooper());
       private PdfPrerenderer pdfPrerenderer;
+        private PdfPrerenderReadyListener pdfPrerenderReadyListener;
 
-      /** Task #1891: wired from MainActivity after both collaborators are constructed. */
-      public void setPdfPrerenderer(PdfPrerenderer p) { this.pdfPrerenderer = p; }
+        /** Task #1891: wired from MainActivity after both collaborators are constructed. */
+        public void setPdfPrerenderer(PdfPrerenderer p) { this.pdfPrerenderer = p; }
+
+        /** Wired from PlaylistScheduler's constructor so it can reload the active
+         *  revision from Room the moment a PDF's pages become ready. */
+        public void setPdfPrerenderReadyListener(PdfPrerenderReadyListener l) { this.pdfPrerenderReadyListener = l; }
 
       // Per-revision pipeline state (keyed by Room row id)
       private final ConcurrentHashMap<Long, AtomicInteger> pendingDownloads  = new ConcurrentHashMap<>();
@@ -145,6 +157,9 @@ package com.digipal.signage;
                     pdfPrerenderer.prerender(objectPath, localPath, new PdfPrerenderer.Callback() {
                         @Override public void onPagesReady(String assetId, List<String> pageLocalPaths) {
                             Log.i(TAG, "[pdf-prerender] " + assetId + " ready, " + pageLocalPaths.size() + " pages");
+                              if (pdfPrerenderReadyListener != null) {
+                                  pdfPrerenderReadyListener.onPdfPrerenderReady(assetId);
+                              }
                         }
                         @Override public void onFailed(String assetId, String error) {
                             Log.w(TAG, "[pdf-prerender] " + assetId + " failed: " + error + " -- keeping WEBVIEW_PDF fallback");
