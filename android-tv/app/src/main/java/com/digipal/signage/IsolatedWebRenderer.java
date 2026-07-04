@@ -118,6 +118,10 @@ public class IsolatedWebRenderer {
             // (see RenderBridge below) -- lets us tell apart two generations of the
             // same slideId, which slideId matching alone cannot do.
             url = url + (url.contains("?") ? "&" : "?") + "renderToken=" + this.currentRenderToken;
+              // javac requires effectively-final captured locals inside the timeoutRunnable
+              // lambda below; url is reassigned above (renderToken append) so it no longer
+              // qualifies -- capture a separate final copy for the lambda to reference.
+              final String urlForTimeoutLog = url;
           if (pendingFreshWebViewTeardown) {
               // Previous slide required a fresh WebView; it must not be handed to this
               // (or any) subsequent slide -- destroy it now, before deciding whether this
@@ -148,7 +152,7 @@ public class IsolatedWebRenderer {
         long timeoutMs = (policy != null && policy.readyTimeoutMs > 0) ? policy.readyTimeoutMs : LOAD_TIMEOUT_MS;
         timeoutRunnable = () -> {
             if (!ready.get()) {
-                Log.w(TAG, "[timeout] " + slideId + " url=" + url);
+                Log.w(TAG, "[timeout] " + slideId + " url=" + urlForTimeoutLog);
                 listener.onRendererFailed(slideId, "load_timeout");
             }
         };
