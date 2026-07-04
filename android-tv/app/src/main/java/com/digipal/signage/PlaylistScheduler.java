@@ -818,8 +818,11 @@ public class PlaylistScheduler {
         // Renderer ownership contract:
           //  VIDEO / IMAGE  → native renderers (ExoPlayer / Glide via Delegate).
           //                   Scheduler enters PREPARING_CURRENT and waits for onRendererReady().
-          //  WEBVIEW_DESIGN / WEBVIEW_KIOSK / WEBVIEW_URL → React TV player (main WebView).
-          //                   Scheduler enters PLAYING immediately; advance timer drives the slide.
+          //  WEBVIEW_DESIGN / WEBVIEW_KIOSK / WEBVIEW_URL → isolated per-slide WebView renderer
+          //                   (IsolatedWebRenderer, task #1875), NOT the main React shell WebView.
+          //                   Scheduler enters PREPARING_CURRENT and waits for onRendererReady()
+          //                   the same way it does for native VIDEO/IMAGE (see needsReadyGate below)
+          //                   -- it does NOT enter PLAYING immediately.
           //                   Only one path is active at a time: deactivateWebView is called before
           //                   any native render; activateWebView pauses native-loop playback.
           //                   (WebDesignRenderer, WebKioskRenderer, WebSlideRenderer were dead code
