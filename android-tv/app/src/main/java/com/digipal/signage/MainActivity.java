@@ -1839,10 +1839,11 @@ import android.os.Looper;
                                 heartbeatRunnable = null;
                                 android.util.Log.d("RendererOwner", "native heartbeat stopped");
                             }
-                            if (webView != null) { try { webView.resumeTimers(); } catch (Throwable ignored) {} }
-                          if (webView != null) webView.evaluateJavascript(
-                              "try{window.__digipalGotoSlide&&window.__digipalGotoSlide(" + contentId + ");}catch(e){}", null);
-                          if (playlistScheduler != null) playlistScheduler.onRendererReady(slideId);
+                            // Failed native video must report failure to the scheduler, not
+                            // pretend to be ready via the retired legacy __digipalGotoSlide WebView
+                            // hop. onRendererError() lets the scheduler retry/skip/advance and
+                            // surfaces the failure in telemetry instead of silently faking success.
+                            if (playlistScheduler != null) playlistScheduler.onRendererError(slideId, "native_video_timeout");
                       }
                   };
                   videoReadyHandler = rh; videoReadyRunnable = rc; rh.postDelayed(rc, 8000);
@@ -1885,10 +1886,11 @@ import android.os.Looper;
                           if (webView != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                               try { webView.setRendererPriorityPolicy(android.webkit.WebView.RENDERER_PRIORITY_IMPORTANT, false); } catch (Throwable ignored) {}
                           }
-                          if (webView != null) { try { webView.resumeTimers(); } catch (Throwable ignored) {} }
-                          if (webView != null) webView.evaluateJavascript(
-                              "try{window.__digipalGotoSlide&&window.__digipalGotoSlide(" + contentId + ");}catch(e){}", null);
-                          if (playlistScheduler != null) playlistScheduler.onRendererReady(slideId);
+                          // Failed native video must report failure to the scheduler, not
+                            // pretend to be ready via the retired legacy __digipalGotoSlide WebView
+                            // hop. onRendererError() lets the scheduler retry/skip/advance and
+                            // surfaces the failure in telemetry instead of silently faking success.
+                            if (playlistScheduler != null) playlistScheduler.onRendererError(slideId, "native_video_error");
                       }
                   };
                   exoPlayer.addListener(nativeVideoListener);
@@ -2339,14 +2341,27 @@ import android.os.Looper;
                                           });
                                   }
                                   String base = getServerUrl();
-                                  if (base.endsWith("/")) base = base.substring(0, base.length() - 1);
-                                  String url = base + "/tv/render/" + code + "/" + s.contentId;
-                                  // Per-asset WebView policy: safe default reproduces the old
-                                  // applyWebViewProfile(slideType) two-bucket behavior exactly;
-                                  // future per-content overrides can be layered on here.
-                                  WebViewPolicy policy = WebViewPolicy.forSlideType(s.type);
-                                  if (playlistScheduler != null) playlistScheduler.setLastWebViewPolicy(policy.name);
-                                  isolatedWebRenderer.prepare(s.slideId, url, policy);
+                                    if (base.endsWith("/")) base = base.substring(0, base.length() - 1);
+                                    // Per-asset WebView policy: safe default reproduces the old
+                                    // applyWebViewProfile(slideType) two-bucket behavior exactly;
+                                    // future per-content overrides can be layered on here.
+                                    WebViewPolicy policy = WebViewPolicy.forSlideType(s.type);
+                                    // slideId (playlist item id), not contentId, must be the query param
+                                    // consumed by /tv/render -- Digipal ready()/error()/heartbeat() calls
+                                    // are keyed by slideId so a superseded slide's stale callbacks can be
+                                    // told apart from the current one (see stale-callback guards in
+                                    // PlaylistScheduler + RenderBridge). Using contentId here caused
+                                    // ready/error callbacks to always be ignored as stale whenever two
+                                    // playlist entries reference the same content.
+                                    String url = base + "/tv/render/"
+                                        + android.net.Uri.encode(code)
+                                        + "/" + s.contentId
+                                        + "?slideId=" + android.net.Uri.encode(s.slideId == null ? "" : s.slideId);
+                                    if (policy.readyTimeoutMs > 0) {
+                                        url += "&readyTimeoutMs=" + policy.readyTimeoutMs;
+                                    }
+                                    if (playlistScheduler != null) playlistScheduler.setLastWebViewPolicy(policy.name);
+                                    isolatedWebRenderer.prepare(s.slideId, url, policy);
                               } catch (Throwable ignored) {
                                   if (playlistScheduler != null) {
                                       playlistScheduler.onIsolatedRendererFailed(s.slideId, "activate_exception");
