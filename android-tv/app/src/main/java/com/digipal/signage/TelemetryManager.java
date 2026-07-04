@@ -33,6 +33,7 @@ public class TelemetryManager {
     private final PlaylistRepository repo;
     private final String serverUrl;
     private final String deviceId;
+    private volatile String pairingCode = "";
     private final String appVersion;
     private final ExecutorService exec = Executors.newSingleThreadExecutor();
 
@@ -129,6 +130,7 @@ public class TelemetryManager {
 
     public void onSlideHidden() { lastSlideHideMs = System.currentTimeMillis(); }
     public void setLastError(String err) { lastError = err; }
+    public void setPairingCode(String code) { pairingCode = code == null ? "" : code; }
       public void setActiveRendererCount(int count) { activeRendererCount = count; }
       public void setWebViewActive(boolean active) { webViewActive = active; }
       public void setShellSource(String source) { shellSource = source; }
@@ -177,6 +179,7 @@ public class TelemetryManager {
                 }
                 JSONObject body = new JSONObject();
                 body.put("deviceId", deviceId);
+                body.put("pairingCode", pairingCode);
                 body.put("events", arr);
                 postJson(serverUrl + "/api/tv/telemetry/events", body.toString());
                 repo.getDb().eventDao().markSynced(ids);
@@ -197,6 +200,7 @@ public class TelemetryManager {
 
         JSONObject o = new JSONObject();
         o.put("deviceId", deviceId);
+        o.put("pairingCode", pairingCode);
         o.put("appVersion", appVersion);
         o.put("uptimeMs", android.os.SystemClock.elapsedRealtime());
         o.put("playlistRevision", currentRevisionId);
