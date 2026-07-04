@@ -28,6 +28,7 @@ public class TelemetryManager {
     private static final long HEARTBEAT_INTERVAL_MS = 30_000;
     private volatile long currentHeartbeatIntervalMs = HEARTBEAT_INTERVAL_MS;
     private static final int MAX_BATCH = 50;
+    private static final int MAX_QUEUED_EVENTS = 5000;
 
     private final Context ctx;
     private final PlaylistRepository repo;
@@ -140,32 +141,51 @@ public class TelemetryManager {
     }
 
     private void syncEvents() {
-        exec.execute(() -> {
-            try {
-                List<PlaylistDatabase.PlaybackEventEntity> events = repo.getDb().eventDao().getUnsynced();
-                if (events.isEmpty()) return;
-                JSONArray arr = new JSONArray();
-                List<Long> ids = new ArrayList<>();
-                for (PlaylistDatabase.PlaybackEventEntity ev : events) {
-                    JSONObject o = new JSONObject();
-                    o.put("timestamp", ev.timestamp); o.put("eventType", ev.eventType);
-                    o.put("slideId", ev.slideId); o.put("revisionId", ev.revisionId);
-                    o.put("rendererType", ev.rendererType);
-                    try { o.put("details", new JSONObject(ev.detailsJson)); } catch (Exception ex) {}
-                    arr.put(o); ids.add(ev.id);
-                    if (ids.size() >= MAX_BATCH) break;
-                }
-                JSONObject body = new JSONObject();
-                body.put("deviceId", deviceId);
-                body.put("events", arr);
-                postJson(serverUrl + "/api/tv/telemetry/events", body.toString());
-                repo.getDb().eventDao().markSynced(ids);
-                repo.getDb().eventDao().pruneOld(System.currentTimeMillis() - 3L * 86400 * 1000);
-            } catch (Exception e) {
-                Log.w(TAG, "syncEvents failed: " + e.getMessage());
-            }
-        });
-    }
+          exec.execute(() -> {
+              try {
+                  List<PlaylistDatabase.PlaybackEventEntity> events = repo.getDb().eventDao().getUnsynced();
+                  if (!events.isEmpty()) {
+                      JSONArray arr = new JSONArray();
+                      List<Long> ids = new ArrayList<>();
+                      for (PlaylistDatabase.PlaybackEventEntity ev : events) {
+                          JSONObject o = new JSONObject();
+                          o.put("timestamp", ev.timestamp); o.put("eventType", ev.eventType);
+                          o.put("slideId", ev.slideId); o.put("revisionId", ev.revisionId);
+                          o.put("rendererType", ev.rendererType);
+                          try { o.put("details", new JSONObject(ev.detailsJson)); } catch (Exception ex) {}
+                          arr.put(o); ids.add(ev.id);
+                          if (ids.size() >= MAX_BATCH) break;
+                      }
+                      JSONObject body = new JSONObject();
+                      body.put("deviceId", deviceId);
+                      body.put("events", arr);
+                      // Only mark these events synced if the server actually persisted them
+                      // (2xx). A 4xx/5xx (e.g. screen not found, DB failure) must leave them
+                      // unsynced so they're retried on the next heartbeat tick.
+                      int code = postJson(serverUrl + "/api/tv/telemetry/events", body.toString());
+                      if (code >= 200 && code < 300) {
+                          repo.getDb().eventDao().markSynced(ids);
+                      } else {
+                          Log.w(TAG, "syncEvents: server rejected batch (" + code + "), leaving " + ids.size() + " unsynced for retry");
+                      }
+                  }
+                  // Bounded local queue: even if the server keeps rejecting/unreachable, cap
+                  // storage growth. Synced events are pruned after 3 days; ALL events
+                  // (synced or not) are hard-pruned after 14 days, and the table is capped
+                  // at MAX_QUEUED_EVENTS rows so a persistent outage can't grow it forever.
+                  long now = System.currentTimeMillis();
+                  repo.getDb().eventDao().pruneOld(now - 3L * 86400 * 1000);
+                  repo.getDb().eventDao().pruneAllOlderThan(now - 14L * 86400 * 1000);
+                  int total = repo.getDb().eventDao().countAll();
+                  if (total > MAX_QUEUED_EVENTS) {
+                      repo.getDb().eventDao().deleteOldest(total - MAX_QUEUED_EVENTS);
+                      Log.w(TAG, "syncEvents: queue exceeded " + MAX_QUEUED_EVENTS + " rows, trimmed oldest " + (total - MAX_QUEUED_EVENTS));
+                  }
+              } catch (Exception e) {
+                  Log.w(TAG, "syncEvents failed: " + e.getMessage());
+              }
+          });
+      }
 
     private JSONObject buildHeartbeat() throws JSONException {
         ActivityManager am = (ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
@@ -191,19 +211,20 @@ public class TelemetryManager {
         return o;
     }
 
-    private void postJson(String urlStr, String body) throws Exception {
-        URL url = new URL(urlStr);
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setRequestMethod("POST");
-        conn.setRequestProperty("Content-Type", "application/json");
-        conn.setDoOutput(true);
-        conn.setConnectTimeout(10000);
-        conn.setReadTimeout(10000);
-        try (OutputStream os = conn.getOutputStream()) {
-            os.write(body.getBytes("UTF-8"));
-        }
-        int code = conn.getResponseCode();
-        if (code >= 400) Log.w(TAG, "POST " + urlStr + " returned " + code);
-        conn.disconnect();
-    }
+    private int postJson(String urlStr, String body) throws Exception {
+          URL url = new URL(urlStr);
+          HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+          conn.setRequestMethod("POST");
+          conn.setRequestProperty("Content-Type", "application/json");
+          conn.setDoOutput(true);
+          conn.setConnectTimeout(10000);
+          conn.setReadTimeout(10000);
+          try (OutputStream os = conn.getOutputStream()) {
+              os.write(body.getBytes("UTF-8"));
+          }
+          int code = conn.getResponseCode();
+          if (code >= 400) Log.w(TAG, "POST " + urlStr + " returned " + code);
+          conn.disconnect();
+          return code;
+      }
 }
