@@ -369,17 +369,28 @@ import android.os.Looper;
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
         settings.setSupportZoom(false);
-        settings.setAllowFileAccess(true);
-        settings.setAllowFileAccessFromFileURLs(true);
-        settings.setAllowUniversalAccessFromFileURLs(true);
-        settings.setDatabaseEnabled(true);
-        settings.setTextZoom(100);
-        settings.setLayoutAlgorithm(WebSettings.LayoutAlgorithm.NORMAL);
-        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        // P6 hardening: the main shell WebView only ever loads the trusted
+          // cloud (https://digipalsignage.com) or a private-network local-hub
+          // origin validated by ServerSetupActivity.isPrivateNetworkUrl() -- it
+          // never loads file:// content, so it should run least-privileged.
+          // Isolated per-slide content (designs/kiosks/urls) is rendered by
+          // IsolatedWebRenderer under its own WebViewPolicy and is unaffected
+          // by these settings.
+          settings.setAllowFileAccess(false);
+          settings.setAllowFileAccessFromFileURLs(false);
+          settings.setAllowUniversalAccessFromFileURLs(false);
+          settings.setDatabaseEnabled(true);
+          settings.setTextZoom(100);
+          settings.setLayoutAlgorithm(WebSettings.LayoutAlgorithm.NORMAL);
+          // COMPATIBILITY_MODE still allows the local-hub HTTP origin (already
+          // gated to private IPs) to load its own same-origin mixed resources,
+          // while blocking active mixed content from being injected into the
+          // trusted cloud/local shell page itself.
+          settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            settings.setSafeBrowsingEnabled(false);
-        }
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+              settings.setSafeBrowsingEnabled(true);
+          }
 
         webView.setBackgroundColor(Color.parseColor("#0a0e1a"));
         webView.setScrollBarStyle(View.SCROLLBARS_INSIDE_OVERLAY);
