@@ -74,6 +74,19 @@ public class IsolatedWebRenderer {
     }
 
     private WebViewPolicy currentPolicy;
+    /** Host of the URL most recently passed to prepare(). The top-level
+ *  frame of an isolated-renderer WebView must never leave this host (task
+ *  P5: harden WebView policies) -- everything we load, including
+ *  third-party Canva/Website/URL content, is served through our own
+ *  /tv/render/:pairingCode/:contentId route, which embeds any external
+ *  content in an iframe rather than navigating the top frame there. If a
+ *  page inside that iframe (or a JS bug) triggers a top-level navigation
+ *  away from our origin, the "Digipal" JavascriptInterface added in
+ *  ensureWebView() would otherwise remain attached and reachable
+ *  by the new, untrusted origin -- a known WebView JS-interface exposure
+ *  class of vulnerability. shouldOverrideUrlLoading below blocks any such
+ *  navigation instead of letting the WebView leave trustedHost. */
+    private String trustedHost;
 
     public void prepare(String slideId, String url) {
         prepare(slideId, url, null);
@@ -138,6 +151,7 @@ public class IsolatedWebRenderer {
         };
         handler.postDelayed(timeoutRunnable, timeoutMs);
 
+        try { trustedHost = android.net.Uri.parse(url).getHost(); } catch (Throwable ignored) { trustedHost = null; }
         webView.loadUrl(url);
     }
 
@@ -165,6 +179,17 @@ public class IsolatedWebRenderer {
         }
     }
 
+    /** Returns true (cancel navigation) if uri's host differs from trustedHost.
+ *  A null/unparsable uri or a null trustedHost (nothing loaded yet) is allowed
+ *  through rather than blocked, since it can't be a cross-origin escape. */
+    private boolean blockUntrustedNavigation(android.net.Uri uri) {
+        if (uri == null || trustedHost == null) return false;
+        String host = uri.getHost();
+        if (host != null && host.equalsIgnoreCase(trustedHost)) return false;
+        Log.w(TAG, "[blocked_cross_origin_navigation] slide=" + currentSlideId + " from=" + trustedHost + " to=" + uri);
+        return true;
+    }
+
     private void ensureWebView() {
         if (webView != null) return;
         webView = new WebView(ctx);
@@ -176,6 +201,20 @@ public class IsolatedWebRenderer {
         webView.setVisibility(View.INVISIBLE);
         webView.addJavascriptInterface(new RenderBridge(), "Digipal");
         webView.setWebViewClient(new WebViewClient() {
+              // Blocks any top-level navigation away from the host we originally
+              // loaded (task P5: harden WebView policies). Every slide type is
+              // loaded via our own /tv/render/... route, which iframes third-party
+              // content rather than top-navigating to it, so a request here for a
+              // different host means either a JS-triggered top-navigation escape
+              // attempt from embedded content or an unexpected redirect -- neither
+              // of which should be allowed to carry the attached "Digipal" JS
+              // interface to an untrusted origin.
+              @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {
+                  return blockUntrustedNavigation(req == null ? null : req.getUrl());
+              }
+              @Override public boolean shouldOverrideUrlLoading(WebView v, String url) {
+                  return blockUntrustedNavigation(url == null ? null : android.net.Uri.parse(url));
+              }
               @Override public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError err) {
                   if (req.isForMainFrame()) listener.onRendererFailed(currentSlideId, "page_error");
               }
