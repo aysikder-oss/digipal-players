@@ -50,7 +50,16 @@ public class PlaylistScheduler {
         DEGRADED_PLAYBACK, RECOVERING_RENDERER
     }
 
-    public enum SlideType { VIDEO, IMAGE, WEBVIEW_DESIGN, WEBVIEW_KIOSK, WEBVIEW_URL }
+    public enum SlideType { VIDEO, IMAGE, WEBVIEW_DESIGN, WEBVIEW_KIOSK, WEBVIEW_WEBSITE, WEBVIEW_WIDGET, WEBVIEW_CANVA, WEBVIEW_PDF, WEBVIEW_TEXT, WEBVIEW_AUDIO, WEBVIEW_DIRECTORY, WEBVIEW_URL }
+
+      /** True for any WEBVIEW_* variant -- all of them are dispatched to the isolated
+       *  per-slide WebView renderer via the same {@code default:} branch in
+       *  {@link #showCurrent}; only VIDEO/IMAGE have a dedicated native path. Kept as a
+       *  single source of truth so adding a new WEBVIEW_* category never requires
+       *  touching every WEBVIEW_DESIGN/WEBVIEW_KIOSK/WEBVIEW_URL enumeration site. */
+      public static boolean isWebviewType(SlideType t) {
+          return t != null && t != SlideType.VIDEO && t != SlideType.IMAGE;
+      }
 
     public static class SlidePlan {
         public String slideId = "";
@@ -626,7 +635,7 @@ public class PlaylistScheduler {
         // generation check would fail and the 3-second RENDERER_READY_TIMEOUT_MS
         // fallback would fire instead — stalling every preloaded slide by 3 seconds.
         final boolean isNativeSlide = (eff == SlideType.VIDEO || eff == SlideType.IMAGE);
-        final boolean isWebviewSlide = (eff == SlideType.WEBVIEW_DESIGN || eff == SlideType.WEBVIEW_KIOSK || eff == SlideType.WEBVIEW_URL);
+        final boolean isWebviewSlide = SlideType.isWebviewType(eff);
         final boolean needsReadyGate = isNativeSlide || isWebviewSlide;
         if (needsReadyGate) {
             pendingAdvanceDurationMs = dur;
@@ -710,7 +719,7 @@ public class PlaylistScheduler {
 
         final long memoryAfterMb = telemetry != null ? telemetry.currentMemMb() : -1;
         final String designRenderMode = !slide.renderMode.isEmpty() ? slide.renderMode
-                : (eff == SlideType.WEBVIEW_DESIGN || eff == SlideType.WEBVIEW_KIOSK) ? "webview"
+                : SlideType.isWebviewType(eff) ? "webview"
                 : (eff == SlideType.IMAGE || eff == SlideType.VIDEO) ? "native" : "n/a";
         if (telemetry != null) telemetry.logEvent("slide_shown", slide.slideId,
                 "{\"type\":\"" + eff + "\",\"index\":" + currentIndex
@@ -852,11 +861,17 @@ public class PlaylistScheduler {
                 SlidePlan s = new SlidePlan();
                 s.slideId    = o.optString("slideId", String.valueOf(o.optInt("contentId", i)));
                 String t     = o.optString("type", "WEBVIEW_DELEGATED");
-                s.type       = "VIDEO".equals(t) ? SlideType.VIDEO
-                             : "IMAGE".equals(t) ? SlideType.IMAGE
-                             : "WEBVIEW_DESIGN".equals(t) ? SlideType.WEBVIEW_DESIGN
-                             : "WEBVIEW_KIOSK".equals(t) ? SlideType.WEBVIEW_KIOSK
-                             : SlideType.WEBVIEW_URL;
+                SlideType parsedType;
+                  try {
+                      parsedType = SlideType.valueOf(t);
+                  } catch (IllegalArgumentException ex) {
+                      // Unknown/legacy type string (e.g. old "WEBVIEW_DELEGATED" default,
+                      // or a future client-side category this APK build predates) --
+                      // fall back to the generic isolated-WebView renderer path rather
+                      // than crashing parseSlides for the whole playlist.
+                      parsedType = SlideType.WEBVIEW_URL;
+                  }
+                  s.type       = parsedType;
                 s.url        = o.optString("url", "");
                 s.durationMs = (long)(o.optDouble("duration", 10) * 1000);
                 s.contentId  = o.optInt("contentId", 0);
