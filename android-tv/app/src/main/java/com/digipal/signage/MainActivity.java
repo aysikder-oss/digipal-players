@@ -679,6 +679,8 @@ import android.os.Looper;
                       o.put("lastReadyAtMs", playlistScheduler.getLastReadyAtMs());
                       o.put("lastErrorAtMs", playlistScheduler.getLastErrorAtMs());
                       o.put("lastErrorMessage", playlistScheduler.getLastErrorMessage());
+                      o.put("retryCount", playlistScheduler.getRetryCountForSlide());
+                      o.put("consecutiveFailures", playlistScheduler.getConsecutiveFailures());
                   } else {
                       o.put("rendererKind", "unknown");
                       o.put("memoryTier", "unknown");
@@ -691,6 +693,8 @@ import android.os.Looper;
                       o.put("lastReadyAtMs", 0);
                       o.put("lastErrorAtMs", 0);
                       o.put("lastErrorMessage", "");
+                      o.put("retryCount", 0);
+                      o.put("consecutiveFailures", 0);
                   }
                   // lastHeartbeatMs is a MainActivity-level field (set from the JS heartbeat()
                   // bridge call), not scheduler-scoped -- always available once the WebView has
