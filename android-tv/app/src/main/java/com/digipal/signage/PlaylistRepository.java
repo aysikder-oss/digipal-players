@@ -412,32 +412,40 @@ package com.digipal.signage;
           return db.slideDao().forRevision(revisionId);
       }
 
-      public void saveSlidesFromJson(long revisionId, String json) {
-          try {
-              JSONArray arr = new JSONArray(json);
-              List<PlaylistDatabase.SlideEntity> entities = new ArrayList<>();
-              for (int i = 0; i < arr.length(); i++) {
-                  JSONObject obj = arr.getJSONObject(i);
-                  PlaylistDatabase.SlideEntity s = new PlaylistDatabase.SlideEntity();
-                  s.revisionId = revisionId;
-                  s.slideId = obj.optString("slideId", String.valueOf(obj.optInt("contentId", i)));
-                  String type = obj.optString("type", "WEBVIEW_URL");
-                  s.type = "VIDEO".equals(type) ? "VIDEO"
-                         : "IMAGE".equals(type) ? "IMAGE"
-                         : "WEBVIEW_DESIGN".equals(type) ? "WEBVIEW_DESIGN"
-                         : "WEBVIEW_KIOSK".equals(type) ? "WEBVIEW_KIOSK"
-                         : "WEBVIEW_URL";
-                  s.durationMs = (long)(obj.optDouble("duration", 10) * 1000);
-                  s.orderIndex = i;
-                  s.configJson = obj.toString();
-                  entities.add(s);
-              }
-              saveSlides(revisionId, entities);
-              Log.d(TAG, "Saved " + entities.size() + " slides for revisionId=" + revisionId);
-          } catch (Exception ex) {
-              Log.e(TAG, "saveSlidesFromJson error: " + ex.getMessage());
-          }
-      }
+      private static String normalizeSlideType(String rawType) {
+            if (rawType == null || rawType.trim().isEmpty()) return "WEBVIEW_URL";
+            String t = rawType.trim();
+            if ("image_url".equalsIgnoreCase(t) || "IMAGE".equalsIgnoreCase(t)) return "IMAGE";
+            if ("video".equalsIgnoreCase(t) || "VIDEO".equalsIgnoreCase(t)) return "VIDEO";
+            try {
+                PlaylistScheduler.SlideType.valueOf(t);
+                return t;
+            } catch (IllegalArgumentException ignored) {
+                return "WEBVIEW_URL";
+            }
+        }
+
+        public void saveSlidesFromJson(long revisionId, String json) {
+            try {
+                JSONArray arr = new JSONArray(json);
+                List<PlaylistDatabase.SlideEntity> entities = new ArrayList<>();
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject obj = arr.getJSONObject(i);
+                    PlaylistDatabase.SlideEntity s = new PlaylistDatabase.SlideEntity();
+                    s.revisionId = revisionId;
+                    s.slideId = obj.optString("slideId", String.valueOf(obj.optInt("contentId", i)));
+                    s.type = normalizeSlideType(obj.optString("type", "WEBVIEW_URL"));
+                    s.durationMs = (long)(obj.optDouble("duration", 10) * 1000);
+                    s.orderIndex = i;
+                    s.configJson = obj.toString();
+                    entities.add(s);
+                }
+                saveSlides(revisionId, entities);
+                Log.d(TAG, "Saved " + entities.size() + " slides for revisionId=" + revisionId);
+            } catch (Exception ex) {
+                Log.e(TAG, "saveSlidesFromJson error: " + ex.getMessage());
+            }
+        }
 
       public PlaylistDatabase.AssetEntity getAsset(String assetId) {
           return db.assetDao().findById(assetId);
