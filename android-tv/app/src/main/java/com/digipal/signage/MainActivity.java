@@ -1674,6 +1674,9 @@ import android.os.Looper;
                 public void reloadNativePlaylist() {
                     // JS will call setNativePlaylist again with refreshed slide data
                     android.util.Log.i("DigipalNative", "[nativeLoop] reloadNativePlaylist signal received");
+                      if (playlistScheduler != null) {
+                          playlistScheduler.reloadActiveRevisionFromRoom();
+                      }
                 }
 
                 @android.webkit.JavascriptInterface
