@@ -259,10 +259,89 @@ package com.digipal.signage;
           }
 
           updateLastUsed(objectPath);
-          return "file://" + localPath;
-      }
+            return "file://" + localPath;
+        }
 
-      public boolean deleteMedia(String objectPath) {
+        /** Unified Design Studio Renderer stabilization (Step 3): returns a web-servable
+         *  URL for locally-cached media, safe to embed directly in an isolated-renderer
+         *  WebView's <img>/<video> src. Raw file:// URLs are unreliable from an https://
+         *  origin WebView even with universal-file-access flags enabled (can be blocked by
+         *  OEM WebView builds), so this returns a same-origin-safe virtual URL under
+         *  https://appassets.androidplatform.net/media/<encoded objectPath> instead, which
+         *  IsolatedWebRenderer's shouldInterceptRequest() resolves back to the cached file
+         *  via resolveLocalMediaFile() below. Returns "" if objectPath is not cached yet --
+         *  callers (window.DigipalMedia.getLocalMediaWebUrl in the JS bridge) should fall
+         *  back to the original signed URL and/or trigger downloadMedia() in that case. */
+        public String getLocalMediaWebUrl(String objectPath) {
+            JSONObject manifest = getManifest();
+            JSONObject entry = manifest.optJSONObject(objectPath);
+            if (entry == null) return "";
+
+            String localPath = entry.optString("localPath", "");
+            if (localPath.isEmpty()) return "";
+
+            File file = new File(localPath);
+            if (!file.exists()) {
+                removeFromManifest(objectPath);
+                return "";
+            }
+
+            updateLastUsed(objectPath);
+            try {
+                String encoded = java.net.URLEncoder.encode(objectPath, "UTF-8");
+                return "https://appassets.androidplatform.net/media/" + encoded;
+            } catch (Exception e) {
+                return "";
+            }
+        }
+
+        /** Resolves a virtual https://appassets.androidplatform.net/media/<encoded
+         *  objectPath> request (see getLocalMediaWebUrl() above) back to the locally
+         *  cached File for that objectPath. Only ever serves a path that is present in the
+         *  manifest and still exists on disk -- never serves an arbitrary filesystem path
+         *  derived directly from the request. Returns null on any mismatch. */
+        public File resolveLocalMediaFile(String virtualPath) {
+            if (virtualPath == null || !virtualPath.startsWith("/media/")) return null;
+
+            String objectPath;
+            try {
+                objectPath = java.net.URLDecoder.decode(virtualPath.substring("/media/".length()), "UTF-8");
+            } catch (Exception e) {
+                return null;
+            }
+
+            JSONObject manifest = getManifest();
+            JSONObject entry = manifest.optJSONObject(objectPath);
+            if (entry == null) return null;
+
+            String localPath = entry.optString("localPath", "");
+            if (localPath.isEmpty()) return null;
+
+            File file = new File(localPath);
+            if (!file.exists()) return null;
+            return file;
+        }
+
+        /** Best-effort MIME type for a cached media file, used when serving it through
+         *  resolveLocalMediaFile()'s virtual URL from IsolatedWebRenderer. */
+        public static String guessMimeType(File file) {
+            String name = file.getName().toLowerCase();
+            if (name.endsWith(".png")) return "image/png";
+            if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+            if (name.endsWith(".gif")) return "image/gif";
+            if (name.endsWith(".webp")) return "image/webp";
+            if (name.endsWith(".svg")) return "image/svg+xml";
+            if (name.endsWith(".mp4")) return "video/mp4";
+            if (name.endsWith(".webm")) return "video/webm";
+            if (name.endsWith(".mov")) return "video/quicktime";
+            if (name.endsWith(".pdf")) return "application/pdf";
+            if (name.endsWith(".mp3")) return "audio/mpeg";
+            if (name.endsWith(".wav")) return "audio/wav";
+            if (name.endsWith(".ogg")) return "audio/ogg";
+            return "application/octet-stream";
+        }
+
+        public boolean deleteMedia(String objectPath) {
           JSONObject manifest = getManifest();
           JSONObject entry = manifest.optJSONObject(objectPath);
           if (entry == null) return false;
