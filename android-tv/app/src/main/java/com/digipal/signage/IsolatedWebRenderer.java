@@ -35,10 +35,14 @@ public class IsolatedWebRenderer {
     }
 
     private final Context ctx;
-    private final ViewGroup container;
-    private final Listener listener;
-    private final Handler handler = new Handler(Looper.getMainLooper());
-    private WebView webView;
+      private final ViewGroup container;
+      private final Listener listener;
+      /** Optional -- used only for P7 diagnostic telemetry (renderer_process_gone,
+       *  stale_*_ignored, subresource/stale page errors). Null-safe: telemetry is
+       *  skipped entirely if not supplied. */
+      private final TelemetryManager telemetry;
+      private final Handler handler = new Handler(Looper.getMainLooper());
+      private WebView webView;
         private String currentSlideId = "";
         /** Monotonically-increasing token minted fresh on every {@code prepare()} call
          *  (task P2: isolated WebView stale events + security token). Guards against
@@ -71,10 +75,15 @@ public class IsolatedWebRenderer {
     private Runnable heartbeatRunnable;
 
     public IsolatedWebRenderer(Context ctx, ViewGroup container, Listener listener) {
-        this.ctx = ctx;
-        this.container = container;
-        this.listener = listener;
-    }
+          this(ctx, container, listener, null);
+      }
+
+      public IsolatedWebRenderer(Context ctx, ViewGroup container, Listener listener, TelemetryManager telemetry) {
+          this.ctx = ctx;
+          this.container = container;
+          this.listener = listener;
+          this.telemetry = telemetry;
+      }
 
     private WebViewPolicy currentPolicy;
     /** Host of the URL most recently passed to prepare(). The top-level
@@ -90,6 +99,33 @@ public class IsolatedWebRenderer {
  *  class of vulnerability. shouldOverrideUrlLoading below blocks any such
  *  navigation instead of letting the WebView leave trustedHost. */
     private String trustedHost;
+
+      /** URL most recently loaded via prepare() (task P7: renderer safety/telemetry) --
+       *  used to tell a genuine load failure of the current slide's own page apart from
+       *  a stray error bubbling up from an already-superseded WebView/request. */
+      private String currentRenderUrl;
+
+      /** Counts diagnostic ("ignored") events logged for the current generation
+       *  (task P7). Kept small and reset on every prepare() so a chatty/broken
+       *  page cannot spam the telemetry server with unbounded stale/ignored events. */
+      private int diagnosticLogCount = 0;
+      private static final int MAX_DIAGNOSTIC_LOGS_PER_GENERATION = 5;
+
+      private void logDiagnostic(String eventType, String slideId, long renderToken, String detail) {
+          if (diagnosticLogCount >= MAX_DIAGNOSTIC_LOGS_PER_GENERATION) return;
+          diagnosticLogCount++;
+          Log.w(TAG, "[" + eventType + "] " + slideId + "/" + renderToken + " current=" + currentSlideId + "/" + currentRenderToken + (detail != null ? " " + detail : ""));
+          if (telemetry != null) {
+              try {
+                  org.json.JSONObject details = new org.json.JSONObject();
+                  details.put("renderToken", renderToken);
+                  details.put("currentSlideId", currentSlideId);
+                  details.put("currentRenderToken", currentRenderToken);
+                  if (detail != null) details.put("detail", detail);
+                  telemetry.logEvent(eventType, slideId, details.toString());
+              } catch (Throwable ignored) {}
+          }
+      }
 
     public void prepare(String slideId, String url) {
         prepare(slideId, url, null);
@@ -159,6 +195,8 @@ public class IsolatedWebRenderer {
         handler.postDelayed(timeoutRunnable, timeoutMs);
 
         try { trustedHost = android.net.Uri.parse(url).getHost(); } catch (Throwable ignored) { trustedHost = null; }
+        currentRenderUrl = url;
+        diagnosticLogCount = 0;
         webView.loadUrl(url);
     }
 
@@ -223,8 +261,34 @@ public class IsolatedWebRenderer {
                   return blockUntrustedNavigation(url == null ? null : android.net.Uri.parse(url));
               }
               @Override public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError err) {
-                  if (req.isForMainFrame()) listener.onRendererFailed(currentSlideId, "page_error");
-              }
+                    // P7: only ever fail the active slide for a main-frame error on the
+                    // page we are actually showing -- ignore subresource errors (fonts,
+                    // images, XHRs inside the page), about:blank (loaded synchronously
+                    // by prepare()/destroy() when swapping slides), and any error whose
+                    // URL/host no longer matches this generation's currentRenderUrl or
+                    // trustedHost (a stray callback from an already-superseded request).
+                    if (req == null) return;
+                    android.net.Uri failingUri = req.getUrl();
+                    String failingUrl = failingUri != null ? failingUri.toString() : null;
+                    if (!req.isForMainFrame()) {
+                        logDiagnostic("subresource_error_ignored", currentSlideId, currentRenderToken, failingUrl);
+                        return;
+                    }
+                    if (failingUrl == null || "about:blank".equals(failingUrl)) {
+                        return;
+                    }
+                    boolean matchesCurrentUrl = failingUrl.equals(currentRenderUrl);
+                    boolean matchesTrustedHost = false;
+                    if (!matchesCurrentUrl && trustedHost != null) {
+                        String failingHost = failingUri != null ? failingUri.getHost() : null;
+                        matchesTrustedHost = failingHost != null && trustedHost.equalsIgnoreCase(failingHost);
+                    }
+                    if (!matchesCurrentUrl && !matchesTrustedHost) {
+                        logDiagnostic("stale_page_error_ignored", currentSlideId, currentRenderToken, failingUrl);
+                        return;
+                    }
+                    listener.onRendererFailed(currentSlideId, "page_error");
+                }
               // Without this override, Android's default behavior when a WebView's
               // renderer process dies (OOM kill, GPU crash, etc.) is to call
               // finish() on the whole Activity — killing the app instead of just
@@ -236,17 +300,26 @@ public class IsolatedWebRenderer {
               // recovers from the same condition.
               @android.annotation.TargetApi(android.os.Build.VERSION_CODES.O)
               @Override public boolean onRenderProcessGone(WebView v, android.webkit.RenderProcessGoneDetail detail) {
-                  Log.w(TAG, "[render_process_gone] slide=" + currentSlideId
-                      + " didCrash=" + (detail != null && detail.didCrash()));
-                  if (v != webView) {
-                      try { v.destroy(); } catch (Throwable ignored) {}
-                      return true;
-                  }
-                  final String failedSlideId = currentSlideId;
-                  try { destroy(); } catch (Throwable ignored) {}
-                  handler.post(() -> listener.onRendererFailed(failedSlideId, "render_process_gone"));
-                  return true;
-              }
+                    boolean didCrash = detail != null && detail.didCrash();
+                    Log.w(TAG, "[render_process_gone] slide=" + currentSlideId
+                        + " didCrash=" + didCrash);
+                    if (telemetry != null) {
+                        try {
+                            org.json.JSONObject details = new org.json.JSONObject();
+                            details.put("renderToken", currentRenderToken);
+                            details.put("didCrash", didCrash);
+                            telemetry.logEvent("renderer_process_gone", currentSlideId, details.toString());
+                        } catch (Throwable ignored) {}
+                    }
+                    if (v != webView) {
+                        try { v.destroy(); } catch (Throwable ignored) {}
+                        return true;
+                    }
+                    final String failedSlideId = currentSlideId;
+                    try { destroy(); } catch (Throwable ignored) {}
+                    handler.post(() -> listener.onRendererFailed(failedSlideId, "render_process_gone"));
+                    return true;
+                }
           });
           container.addView(webView, new ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -275,62 +348,62 @@ public class IsolatedWebRenderer {
     }
 
     private class RenderBridge {
-            @JavascriptInterface public void ready(String slideId, long renderToken) {
-                handler.post(() -> {
-                    if (!isCurrentGeneration(slideId, renderToken)) {
-                        Log.w(TAG, "[stale_ready] " + slideId + "/" + renderToken + " current=" + currentSlideId + "/" + currentRenderToken);
-                        return;
-                    }
-                    cancelTimers();
-                    ready.set(true);
-                    show();
-                    resetHeartbeatTimer();
-                    if (currentPolicy != null && currentPolicy.customJs != null) {
-                        injectCustomJsWithRetries(currentPolicy.customJsMaxRetries);
-                    }
-                    listener.onRendererReady(slideId);
-                });
-            }
-            @JavascriptInterface public void error(String slideId, long renderToken, String code, String message) {
-                handler.post(() -> {
-                    if (!isCurrentGeneration(slideId, renderToken)) {
-                        Log.w(TAG, "[stale_error] " + slideId + "/" + renderToken + " current=" + currentSlideId + "/" + currentRenderToken);
-                        return;
-                    }
-                    listener.onRendererFailed(slideId, code + ": " + message);
-                });
-            }
-            @JavascriptInterface public void heartbeat(String slideId, long renderToken) {
-                handler.post(() -> {
-                    if (!isCurrentGeneration(slideId, renderToken)) {
-                        Log.w(TAG, "[stale_heartbeat] " + slideId + "/" + renderToken + " current=" + currentSlideId + "/" + currentRenderToken);
-                        return;
-                    }
-                    resetHeartbeatTimer();
-                });
-            }
-            @JavascriptInterface public void event(String slideId, long renderToken, String eventName, String payload) {
-                if (!isCurrentGeneration(slideId, renderToken)) {
-                    Log.w(TAG, "[stale_event] " + slideId + "/" + renderToken + " current=" + currentSlideId + "/" + currentRenderToken + " event=" + eventName);
-                    return;
-                }
-                Log.d(TAG, "[event] " + slideId + " " + eventName);
-            }
-            @JavascriptInterface public void requestNavigation(String slideId, long renderToken, String target) {
-                if (!isCurrentGeneration(slideId, renderToken)) {
-                    Log.w(TAG, "[stale_requestNavigation] " + slideId + "/" + renderToken + " current=" + currentSlideId + "/" + currentRenderToken);
-                    return;
-                }
-                Log.d(TAG, "[requestNavigation] " + slideId + " -> " + target);
-            }
-            @JavascriptInterface public void requestExit(String slideId, long renderToken) {
-                handler.post(() -> {
-                    if (!isCurrentGeneration(slideId, renderToken)) {
-                        Log.w(TAG, "[stale_requestExit] " + slideId + "/" + renderToken + " current=" + currentSlideId + "/" + currentRenderToken);
-                        return;
-                    }
-                    listener.onRendererFailed(slideId, "exit_requested");
-                });
-            }
-        }
+              @JavascriptInterface public void ready(String slideId, long renderToken) {
+                  handler.post(() -> {
+                      if (!isCurrentGeneration(slideId, renderToken)) {
+                          logDiagnostic("stale_ready_ignored", slideId, renderToken, null);
+                          return;
+                      }
+                      cancelTimers();
+                      ready.set(true);
+                      show();
+                      resetHeartbeatTimer();
+                      if (currentPolicy != null && currentPolicy.customJs != null) {
+                          injectCustomJsWithRetries(currentPolicy.customJsMaxRetries);
+                      }
+                      listener.onRendererReady(slideId);
+                  });
+              }
+              @JavascriptInterface public void error(String slideId, long renderToken, String code, String message) {
+                  handler.post(() -> {
+                      if (!isCurrentGeneration(slideId, renderToken)) {
+                          logDiagnostic("stale_error_ignored", slideId, renderToken, code + ": " + message);
+                          return;
+                      }
+                      listener.onRendererFailed(slideId, code + ": " + message);
+                  });
+              }
+              @JavascriptInterface public void heartbeat(String slideId, long renderToken) {
+                  handler.post(() -> {
+                      if (!isCurrentGeneration(slideId, renderToken)) {
+                          logDiagnostic("stale_heartbeat_ignored", slideId, renderToken, null);
+                          return;
+                      }
+                      resetHeartbeatTimer();
+                  });
+              }
+              @JavascriptInterface public void event(String slideId, long renderToken, String eventName, String payload) {
+                  if (!isCurrentGeneration(slideId, renderToken)) {
+                      logDiagnostic("stale_event_ignored", slideId, renderToken, eventName);
+                      return;
+                  }
+                  Log.d(TAG, "[event] " + slideId + " " + eventName);
+              }
+              @JavascriptInterface public void requestNavigation(String slideId, long renderToken, String target) {
+                  if (!isCurrentGeneration(slideId, renderToken)) {
+                      logDiagnostic("stale_requestNavigation_ignored", slideId, renderToken, target);
+                      return;
+                  }
+                  Log.d(TAG, "[requestNavigation] " + slideId + " -> " + target);
+              }
+              @JavascriptInterface public void requestExit(String slideId, long renderToken) {
+                  handler.post(() -> {
+                      if (!isCurrentGeneration(slideId, renderToken)) {
+                          logDiagnostic("stale_requestExit_ignored", slideId, renderToken, null);
+                          return;
+                      }
+                      listener.onRendererFailed(slideId, "exit_requested");
+                  });
+              }
+          }
 }
