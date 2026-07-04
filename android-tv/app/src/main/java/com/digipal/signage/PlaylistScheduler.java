@@ -90,19 +90,29 @@ public class PlaylistScheduler {
     }
 
     public interface Delegate {
-        void schedulerPlayVideo(SlidePlan slide);
-        void schedulerShowImage(SlidePlan slide);
-        void schedulerPreloadVideo(SlidePlan slide);
-        void schedulerPreloadImage(SlidePlan slide);
-        void schedulerDeactivateWebView();
-        // Isolated per-slide WebView renderer (task #1875) is the only WebView-delegated
-        // rendering path for WEBVIEW_DESIGN/WEBVIEW_KIOSK/WEBVIEW_URL slides (task #1886).
-        void schedulerActivateIsolatedRenderer(SlidePlan slide);
-        void schedulerDeactivateIsolatedRenderer();
-        void schedulerStopVideo();
-        void schedulerHideImage();
-        void schedulerOnStateChanged(State state, String slideId);
-    }
+          void schedulerPlayVideo(SlidePlan slide);
+          void schedulerShowImage(SlidePlan slide);
+          void schedulerPreloadVideo(SlidePlan slide);
+          void schedulerPreloadImage(SlidePlan slide);
+          void schedulerDeactivateWebView();
+          // Codex P0 Fix 1: WebView.pauseTimers() is process-wide (freezes JS timers in
+          // EVERY WebView, not just the one being hidden). schedulerDeactivateWebView()
+          // calls pauseTimers() and is safe before native VIDEO/IMAGE dispatch (no WebView
+          // needs to run JS afterwards), but calling it before activating the isolated
+          // per-slide renderer froze that WebView's timers before React/design/kiosk JS
+          // could even load, send ready(), or start clock/animation timers -- causing
+          // blank/never-ready design and kiosk slides. This variant hides the main WebView
+          // WITHOUT pausing timers, so the isolated renderer's WebView (a separate,
+          // brand-new instance) is never frozen before its JS has a chance to run.
+          void schedulerDeactivateWebViewForIsolatedRenderer();
+          // Isolated per-slide WebView renderer (task #1875) is the only WebView-delegated
+          // rendering path for WEBVIEW_DESIGN/WEBVIEW_KIOSK/WEBVIEW_URL slides (task #1886).
+          void schedulerActivateIsolatedRenderer(SlidePlan slide);
+          void schedulerDeactivateIsolatedRenderer();
+          void schedulerStopVideo();
+          void schedulerHideImage();
+          void schedulerOnStateChanged(State state, String slideId);
+      }
 
     /** Isolated per-slide WebView renderer (task #1875) is now the only WebView-delegated
      *  rendering path for WEBVIEW_DESIGN/WEBVIEW_KIOSK/WEBVIEW_URL slides. The legacy
@@ -835,9 +845,12 @@ public class PlaylistScheduler {
                       // prevents old content shadowing the WebView and frees the hardware
                       // decoder (critical on Fire TV).
                       delegate.schedulerStopVideo();
-                      delegate.schedulerHideImage();
-                      delegate.schedulerDeactivateWebView();
-                      delegate.schedulerActivateIsolatedRenderer(slide);
+                        delegate.schedulerHideImage();
+                        // Codex P0 Fix 1: must NOT call the pauseTimers()-based deactivation
+                        // here -- it would freeze the isolated renderer's WebView JS timers
+                        // before design/kiosk content can even load.
+                        delegate.schedulerDeactivateWebViewForIsolatedRenderer();
+                        delegate.schedulerActivateIsolatedRenderer(slide);
                   } catch (Exception e) {
                       Log.e(TAG, "[dispatch] isolated webview activation failed slide=" + slide.slideId, e);
                       if (telemetry != null) telemetry.logEvent("webview_dispatch_error",
