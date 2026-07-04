@@ -69,38 +69,64 @@ public class WebViewPolicy {
      * Everything else (plain URL) = restrictive (file access off, compatibility mode).
      */
     public static WebViewPolicy forSlideType(PlaylistScheduler.SlideType slideType) {
-        WebViewPolicy p = new WebViewPolicy();
-        boolean isDesignKiosk = slideType == PlaylistScheduler.SlideType.WEBVIEW_DESIGN
-                || slideType == PlaylistScheduler.SlideType.WEBVIEW_KIOSK;
-        if (isDesignKiosk) {
-            p.allowFileAccess = true;
-            p.allowFileAccessFromFileUrls = true;
-            p.allowUniversalFileAccess = true;
-            p.databaseEnabled = true;
-            p.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW;
-            p.rendererPriorityImportant = true;
-            p.requiresTouch = slideType == PlaylistScheduler.SlideType.WEBVIEW_KIOSK;
-            // Fresh WebView per slide for BOTH design and kiosk: reusing a hidden
-            // WebView across different Design Studio projects/kiosk instances left
-            // stale JS globals, timers, and DOM state from the previous design alive
-            // in the background, which could fire late Digipal.ready()/error() calls
-            // for a slideId that is no longer current (see stale-callback guards in
-            // PlaylistScheduler). Only plain WEBVIEW_URL content is safe to reuse.
-            p.freshWebView = true;
-            p.name = slideType == PlaylistScheduler.SlideType.WEBVIEW_KIOSK
-                    ? "kiosk_permissive_fresh" : "design_permissive_fresh";
-        } else {
-            p.allowFileAccess = false;
-            p.allowFileAccessFromFileUrls = false;
-            p.allowUniversalFileAccess = false;
-            p.databaseEnabled = false;
-            p.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE;
-            p.rendererPriorityImportant = false;
-            p.name = "url_restrictive";
-        }
-        return p;
-    }
-
+          WebViewPolicy p = new WebViewPolicy();
+          boolean isDesignKiosk = slideType == PlaylistScheduler.SlideType.WEBVIEW_DESIGN
+                  || slideType == PlaylistScheduler.SlideType.WEBVIEW_KIOSK
+                  // Directory/wayfinding kiosks are just as interactive and stateful
+                  // (touch routing, multi-floor navigation, held DOM/JS state) as the
+                  // Kiosk Designer output -- they need the same permissive+fresh policy.
+                  || slideType == PlaylistScheduler.SlideType.WEBVIEW_DIRECTORY;
+          // Canva embeds are third-party iframes: they need cookies/mixed-content allowed
+          // like design/kiosk, but they are stateless single-purpose embeds (no local kiosk
+          // session to protect), so a fresh WebView per slide is not required.
+          boolean isCanva = slideType == PlaylistScheduler.SlideType.WEBVIEW_CANVA;
+          // Plain websites are arbitrary third-party pages -- same network permissiveness
+          // as Canva (mixed content, third-party cookies for embedded widgets/analytics)
+          // but reused across slides like WEBVIEW_URL/WIDGET/PDF/TEXT/AUDIO.
+          boolean isWebsite = slideType == PlaylistScheduler.SlideType.WEBVIEW_WEBSITE;
+          if (isDesignKiosk) {
+              p.allowFileAccess = true;
+              p.allowFileAccessFromFileUrls = true;
+              p.allowUniversalFileAccess = true;
+              p.databaseEnabled = true;
+              p.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW;
+              p.rendererPriorityImportant = true;
+              p.requiresTouch = slideType == PlaylistScheduler.SlideType.WEBVIEW_KIOSK
+                      || slideType == PlaylistScheduler.SlideType.WEBVIEW_DIRECTORY;
+              // Fresh WebView per slide for design/kiosk/directory: reusing a hidden
+              // WebView across different Design Studio projects/kiosk instances left
+              // stale JS globals, timers, and DOM state from the previous design alive
+              // in the background, which could fire late Digipal.ready()/error() calls
+              // for a slideId that is no longer current (see stale-callback guards in
+              // PlaylistScheduler). Only content types below are safe to reuse.
+              p.freshWebView = true;
+              p.name = slideType == PlaylistScheduler.SlideType.WEBVIEW_KIOSK ? "kiosk_permissive_fresh"
+                      : slideType == PlaylistScheduler.SlideType.WEBVIEW_DIRECTORY ? "directory_permissive_fresh"
+                      : "design_permissive_fresh";
+          } else if (isCanva || isWebsite) {
+              p.allowFileAccess = false;
+              p.allowFileAccessFromFileUrls = false;
+              p.allowUniversalFileAccess = false;
+              p.databaseEnabled = true;
+              p.allowThirdPartyCookies = true;
+              p.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW;
+              p.rendererPriorityImportant = false;
+              p.name = isCanva ? "canva_embed" : "website_embed";
+          } else {
+              // WEBVIEW_WIDGET / WEBVIEW_PDF / WEBVIEW_TEXT / WEBVIEW_AUDIO / WEBVIEW_URL:
+              // internally-rendered content served from our own origin -- keep the
+              // original restrictive, reusable policy unchanged.
+              p.allowFileAccess = false;
+              p.allowFileAccessFromFileUrls = false;
+              p.allowUniversalFileAccess = false;
+              p.databaseEnabled = false;
+              p.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE;
+              p.rendererPriorityImportant = false;
+              p.name = "url_restrictive";
+          }
+          return p;
+      }
+  
     /** Applies this policy's WebSettings-backed fields to the given WebView. */
     public void applyTo(WebView webView) {
         if (webView == null) return;
