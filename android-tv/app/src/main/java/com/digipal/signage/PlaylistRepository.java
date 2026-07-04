@@ -42,6 +42,10 @@ package com.digipal.signage;
 
       private final PlaylistDatabase.AppDatabase db;
       private final Handler mainHandler = new Handler(Looper.getMainLooper());
+      private PdfPrerenderer pdfPrerenderer;
+
+      /** Task #1891: wired from MainActivity after both collaborators are constructed. */
+      public void setPdfPrerenderer(PdfPrerenderer p) { this.pdfPrerenderer = p; }
 
       // Per-revision pipeline state (keyed by Room row id)
       private final ConcurrentHashMap<Long, AtomicInteger> pendingDownloads  = new ConcurrentHashMap<>();
@@ -126,16 +130,35 @@ package com.digipal.signage;
       // ─────────────────────────────────────────────────────────────────────────
 
       private void handleAssetDownloaded(long revId, String objectPath, String localPath) {
-          ConcurrentHashMap<String, String> paths = assetLocalPaths.get(revId);
-          if (paths == null) return; // revision was cancelled / already finalised
-          paths.put(objectPath, localPath);
+            ConcurrentHashMap<String, String> paths = assetLocalPaths.get(revId);
+            if (paths == null) return; // revision was cancelled / already finalised
+            paths.put(objectPath, localPath);
 
-          AtomicInteger pending = pendingDownloads.get(revId);
-          if (pending == null) return;
-          int remaining = pending.decrementAndGet();
-          Log.d(TAG, "[pipeline] revId=" + revId + " asset OK key=" + objectPath + " remaining=" + remaining);
-          if (remaining <= 0) finalizePipeline(revId);
-      }
+            // Task #1891: kick off native PDF-to-JPEG prerendering as soon as a PDF asset
+            // finishes downloading. Runs on PdfPrerenderer's own executor and writes page
+            // paths to Room asynchronously -- does NOT block pipeline finalization, so the
+            // very first activation of a brand-new PDF still falls back to the WEBVIEW_PDF
+            // viewer; subsequent activations pick up the prerendered pages via Room.
+            if (objectPath.endsWith("_pdf") && pdfPrerenderer != null) {
+                PlaylistDatabase.AssetEntity existing = db.assetDao().findById(objectPath);
+                if (existing == null || existing.prerenderedPages == null || existing.prerenderedPages.isEmpty()) {
+                    pdfPrerenderer.prerender(objectPath, localPath, new PdfPrerenderer.Callback() {
+                        @Override public void onPagesReady(String assetId, List<String> pageLocalPaths) {
+                            Log.i(TAG, "[pdf-prerender] " + assetId + " ready, " + pageLocalPaths.size() + " pages");
+                        }
+                        @Override public void onFailed(String assetId, String error) {
+                            Log.w(TAG, "[pdf-prerender] " + assetId + " failed: " + error + " -- keeping WEBVIEW_PDF fallback");
+                        }
+                    });
+                }
+            }
+
+            AtomicInteger pending = pendingDownloads.get(revId);
+            if (pending == null) return;
+            int remaining = pending.decrementAndGet();
+            Log.d(TAG, "[pipeline] revId=" + revId + " asset OK key=" + objectPath + " remaining=" + remaining);
+            if (remaining <= 0) finalizePipeline(revId);
+        }
 
       private void handleAssetFailed(long revId, String objectPath, String error) {
           AtomicInteger failed = failedDownloads.get(revId);
@@ -282,12 +305,16 @@ package com.digipal.signage;
               for (int i = 0; i < arr.length(); i++) {
                   JSONObject obj = arr.getJSONObject(i);
                   String type = obj.optString("type", "");
-                  if (!"VIDEO".equals(type) && !"IMAGE".equals(type)) continue;
+                  boolean isPdf = "WEBVIEW_PDF".equals(type);
+                  if (!"VIDEO".equals(type) && !"IMAGE".equals(type) && !isPdf) continue;
                   String url = obj.optString("url", "");
                   if (url.isEmpty() || !url.startsWith("http")) continue;
-                  // Stable key: contentId + type (survives signed-URL rotation)
+                  // Stable key: contentId + type (survives signed-URL rotation).
+                  // PDFs use a fixed "_pdf" suffix (task #1891) so PlaylistScheduler's
+                  // expandPdfIfPrerendered() can compute the same key independently.
                   String contentId = obj.optString("contentId", String.valueOf(i));
-                  String objectPath = "native_asset_" + contentId + "_" + type.toLowerCase();
+                  String suffix = isPdf ? "pdf" : type.toLowerCase();
+                  String objectPath = "native_asset_" + contentId + "_" + suffix;
                   result.add(new AssetDescriptor(objectPath, url));
               }
           } catch (Exception ex) {
