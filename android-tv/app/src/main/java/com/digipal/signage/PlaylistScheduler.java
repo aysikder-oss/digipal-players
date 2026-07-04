@@ -226,8 +226,13 @@ public class PlaylistScheduler {
     private int rendererReadyTimeoutGen = -1;
     /** Safety runnable: starts advance timer if renderer never calls onRendererReady(). */
     private Runnable rendererReadyTimeout;
-    /** Max time to wait for first-frame signal before starting the slide timer anyway. */
-    private static final long RENDERER_READY_TIMEOUT_MS = 3_000L;
+    /** Max time to wait for first-frame signal before starting the slide timer anyway (native VIDEO/IMAGE). */
+      private static final long RENDERER_READY_TIMEOUT_NATIVE_MS = 3_000L;
+      /** Bug fix (Android review): isolated WebView pages need longer than native decode —
+       *  IsolatedWebRenderer's own LOAD_TIMEOUT_MS/policy.readyTimeoutMs is 8s by default, so this
+       *  safety net must be set slightly higher or it fires first and starts the advance timer
+       *  before the page has actually rendered, silently truncating the slide's visible duration. */
+      private static final long RENDERER_READY_TIMEOUT_WEBVIEW_MS = 9_000L;
 
     public PlaylistScheduler(Delegate delegate, PlaylistRepository repository, TelemetryManager telemetry,
                              android.content.SharedPreferences prefs) {
@@ -432,6 +437,7 @@ public class PlaylistScheduler {
         if (prefs != null) {
             prefs.edit().putLong(KEY_PLAYLIST_EPOCH, System.currentTimeMillis()).apply();
         }
+        slideRetryCount = 0; // fresh playlist start -- reset the per-slide retry counter
         firstSlideRemainingMs = -1L; // fresh start — no wall-clock offset
         running = true;
         showCurrent();
@@ -514,7 +520,6 @@ public class PlaylistScheduler {
 
     /** Called when a renderer signals it is ready (first frame decoded). */
     public void onRendererReady(String slideId) {
-        lastReadyAtMs = System.currentTimeMillis();
         // Stale-callback guard: a renderer (isolated WebView, ExoPlayer) can report
         // ready asynchronously after the scheduler has already advanced past the
         // slide that requested it (fast user-triggered skip, rapid playlist swap).
@@ -526,6 +531,7 @@ public class PlaylistScheduler {
                     + " (current=" + slides.get(currentIndex).slideId + ")");
             return;
         }
+        lastReadyAtMs = System.currentTimeMillis(); // Bug fix: moved after the stale-callback guard so ignored/late callbacks for a superseded slide don't corrupt the dashboard's ready timestamp.
         long readyMs = SystemClock.elapsedRealtime() - slideStartMs; // Fix 13: monotonic
         Log.d(TAG, "[ready] " + slideId + " in " + readyMs + "ms");
         if (telemetry != null) telemetry.logEvent("slide_ready", slideId,
@@ -574,7 +580,6 @@ public class PlaylistScheduler {
      * Goes DEGRADED only after MAX_FAILURES consecutive failures.
      */
     public void onRendererError(String slideId, String error) {
-        lastErrorAtMs = System.currentTimeMillis();
         lastErrorMessage = error == null ? "" : error;
         // Stale-callback guard: mirrors onRendererReady() -- ignore errors reported
         // for a slide that is no longer the one the scheduler is currently showing
@@ -586,9 +591,10 @@ public class PlaylistScheduler {
                     + " (current=" + slides.get(currentIndex).slideId + "): " + error);
             return;
         }
+        lastErrorAtMs = System.currentTimeMillis(); // Bug fix: moved after the stale-callback guard so ignored/late callbacks for a superseded slide don't corrupt the dashboard's error timestamp.
         Log.w(TAG, "[error] " + slideId + ": " + error + " (slideRetry=" + slideRetryCount + ")");
         // Bug fix (task P3): a failure that arrives while still PREPARING_CURRENT (i.e.
-        // before onRendererReady() ever fired) leaves the 3s RENDERER_READY_TIMEOUT_MS
+        // before onRendererReady() ever fired) leaves the renderer-ready safety timeout
         // safety runnable armed. Without cancelling it here, that stale timeout can fire
         // mid-retry/mid-degraded-recovery and force State.PLAYING + start a *second*,
         // competing advance timer for the slide that just failed -- corrupting the
@@ -689,8 +695,13 @@ public class PlaylistScheduler {
         }
         assetGraceRetries = 0; // URL present — reset grace counter
 
-        slideRetryCount = 0;
-        lastFallbackUsed = false; // reset per-slide; set true if isolated renderer/degraded fallback fires
+        // Bug fix (Android review): slideRetryCount must NOT be reset here -- showCurrent()
+          // is also invoked by onRendererError()'s own retry path (same slideId), so resetting it
+          // on every call meant the counter never accumulated past 1 and MAX_SLIDE_RETRIES never
+          // actually triggered, causing an infinite 500ms retry loop for a permanently-broken
+          // slide. It is now reset only when genuinely moving to a new slide: in advance() and
+          // at initial playlist start.
+          lastFallbackUsed = false; // reset per-slide; set true if isolated renderer/degraded fallback fires
         final long memoryBeforeMb = telemetry != null ? telemetry.currentMemMb() : -1;
         slideStartMs = SystemClock.elapsedRealtime(); // Fix 13: monotonic
         toState(State.PREPARING_CURRENT, slide.slideId);
@@ -745,12 +756,18 @@ public class PlaylistScheduler {
         // dispatching to the renderer.  For preloaded videos that are already buffered,
         // schedulerPlayVideo() calls onRendererReady() synchronously on the same thread.
         // If rendererReadyTimeoutGen were still -1 when onRendererReady() ran, the
-        // generation check would fail and the 3-second RENDERER_READY_TIMEOUT_MS
+        // generation check would fail and the renderer-ready safety timeout
         // fallback would fire instead — stalling every preloaded slide by 3 seconds.
         final boolean isNativeSlide = (eff == SlideType.VIDEO || eff == SlideType.IMAGE);
         final boolean isWebviewSlide = isWebviewType(eff);
         final boolean needsReadyGate = isNativeSlide || isWebviewSlide;
-        if (needsReadyGate) {
+        // Bug fix (Android review): isolated WebView pages take longer to first-paint than
+          // native decode; using one timeout for both types starts the advance timer for
+          // WEBVIEW_* slides before the page has actually rendered, truncating visible duration.
+          final long rendererReadyTimeoutMs = isWebviewSlide
+                  ? RENDERER_READY_TIMEOUT_WEBVIEW_MS
+                  : RENDERER_READY_TIMEOUT_NATIVE_MS;
+          if (needsReadyGate) {
             pendingAdvanceDurationMs = dur;
             rendererReadyTimeoutGen = generation;
             final int myGen = generation;
@@ -759,11 +776,11 @@ public class PlaylistScheduler {
             rendererReadyTimeout = () -> {
                 if (generation != myGen) return;
                 Log.w(TAG, "[renderer_ready_timeout] no first-frame for slide " + mySlideId
-                        + " after " + RENDERER_READY_TIMEOUT_MS + "ms — starting timer anyway");
+                        + " after " + rendererReadyTimeoutMs + "ms — starting timer anyway");
                 if (telemetry != null) telemetry.logEvent("renderer_timeout", mySlideId,
                         "{\"pendingMs\":" + pendingAdvanceDurationMs
-                        + ",\"readyLatencyMs\":" + RENDERER_READY_TIMEOUT_MS
-                        + ",\"firstFrameLatencyMs\":" + RENDERER_READY_TIMEOUT_MS
+                        + ",\"readyLatencyMs\":" + rendererReadyTimeoutMs
+                        + ",\"firstFrameLatencyMs\":" + rendererReadyTimeoutMs
                         + ",\"rendererKind\":\"" + currentRendererKind + "\""
                         + ",\"memoryTier\":\"" + currentMemoryTier() + "\""
                         + ",\"webViewPolicy\":\"" + lastWebViewPolicy + "\""
@@ -775,7 +792,7 @@ public class PlaylistScheduler {
                 toState(State.PLAYING, mySlideId);
                 startAdvanceTimer(myGen, pendingAdvanceDurationMs);
             };
-            handler.postDelayed(rendererReadyTimeout, RENDERER_READY_TIMEOUT_MS);
+            handler.postDelayed(rendererReadyTimeout, rendererReadyTimeoutMs);
         }
 
         // Renderer ownership contract:
@@ -849,7 +866,7 @@ public class PlaylistScheduler {
 
         // Legacy WebView slides: advance timer starts immediately (no first-frame callback).
         // Native slides and isolated-renderer slides: advance timer is started by
-        // onRendererReady() or the RENDERER_READY_TIMEOUT_MS safety runnable armed above.
+        // onRendererReady() or the renderer-ready safety runnable armed above.
         if (!needsReadyGate) {
             toState(State.PLAYING, slide.slideId);
             startAdvanceTimer(generation, dur);
@@ -914,6 +931,7 @@ public class PlaylistScheduler {
         }
 
         consecutiveFailures = 0;
+        slideRetryCount = 0; // new slide -- reset the per-slide retry counter (see showCurrent())
         toState(State.TRANSITIONING, next != null ? next.slideId : "");
         currentIndex = nextIdx;
         showCurrent();
