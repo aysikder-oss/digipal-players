@@ -99,6 +99,13 @@ import android.os.Looper;
     // Dual-buffer B views â preloaded content renders here silently while A is visible
     private androidx.media3.ui.PlayerView nativeVideoViewB;
     private android.widget.ImageView nativeImageViewB;
+    // P0 Fix 5: on-screen native debug overlay (rendererKind/webViewPolicy/etc.),
+    // toggled from the JS DebugOverlay via setNativeDebugOverlayEnabled so field
+    // techs can see ground-truth renderer state even while the WebView is dormant.
+    private TextView nativeDebugOverlay;
+    private volatile boolean nativeDebugOverlayEnabled = false;
+    private final android.os.Handler debugOverlayHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable debugOverlayTickRunnable;
     private boolean activeVideoViewIsA = true;
     private boolean activeImageViewIsA = true;
     // Old player held alive during swap-wait so activeView stays visible; released after new frame confirmed
@@ -289,9 +296,30 @@ import android.os.Looper;
         nativeImageView.setVisibility(View.INVISIBLE);
         root.addView(nativeImageView, new FrameLayout.LayoutParams(1, 1));
         // Dual-buffer B image view â preloaded image loads here while A is visible
-        nativeImageViewB = new RecyclingSafeImageView(this);
-        nativeImageViewB.setVisibility(View.INVISIBLE);
-        root.addView(nativeImageViewB, new FrameLayout.LayoutParams(1, 1));
+
+        // P0 Fix 5: native debug overlay TextView, added above every other renderer
+        // (including any isolated per-slide WebView created later, task #1875) so the
+        // debug panel stays visible even when an isolated WebView briefly sits above
+        // the main WebView in z-order. Never focusable/clickable so it cannot steal
+        // touch/remote input from the actual renderers underneath it.
+        nativeDebugOverlay = new TextView(this);
+        nativeDebugOverlay.setTextColor(Color.parseColor("#00FF88"));
+        nativeDebugOverlay.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11f);
+        nativeDebugOverlay.setBackgroundColor(Color.parseColor("#B0000000"));
+        nativeDebugOverlay.setPadding(16, 12, 16, 12);
+        nativeDebugOverlay.setTypeface(android.graphics.Typeface.MONOSPACE);
+        nativeDebugOverlay.setFocusable(false);
+        nativeDebugOverlay.setFocusableInTouchMode(false);
+        nativeDebugOverlay.setClickable(false);
+        nativeDebugOverlay.setVisibility(View.GONE);
+        FrameLayout.LayoutParams debugOverlayParams = new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        );
+        debugOverlayParams.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
+        debugOverlayParams.topMargin = 24;
+        debugOverlayParams.leftMargin = 24;
+        root.addView(nativeDebugOverlay, debugOverlayParams);
 
         setContentView(root);
 
@@ -672,6 +700,34 @@ import android.os.Looper;
          * is even turned on for this build. Consumed by the JS DebugOverlay so the
          * on-screen debug panel can show ground truth instead of guessing from appVersion.
          */
+        // P0 Fix 5: toggled by the JS DebugOverlay when the user opens/closes the
+        // on-screen diagnostics panel; drives visibility of the native TextView
+        // overlay that mirrors getRendererStatus() so debug info survives WebView
+        // dormancy / isolated-WebView renderer swaps.
+        @JavascriptInterface
+        public void setNativeDebugOverlayEnabled(boolean enabled) {
+            nativeDebugOverlayEnabled = enabled;
+            runOnUiThread(() -> {
+                if (debugOverlayTickRunnable != null) {
+                    debugOverlayHandler.removeCallbacks(debugOverlayTickRunnable);
+                }
+                if (nativeDebugOverlay == null) return;
+                if (!enabled) {
+                    nativeDebugOverlay.setVisibility(View.GONE);
+                    return;
+                }
+                nativeDebugOverlay.bringToFront();
+                nativeDebugOverlay.setVisibility(View.VISIBLE);
+                debugOverlayTickRunnable = () -> {
+                    updateNativeDebugOverlayText();
+                    if (nativeDebugOverlayEnabled) {
+                        debugOverlayHandler.postDelayed(debugOverlayTickRunnable, 2000L);
+                    }
+                };
+                debugOverlayHandler.post(debugOverlayTickRunnable);
+            });
+        }
+
         @JavascriptInterface
         public String getRendererStatus() {
             try {
@@ -1576,6 +1632,16 @@ import android.os.Looper;
                               // (OptiSigns technique — eliminates cumulative memory leak between slides.)
                               // Fix 8: skip WebView recreation for short slides (< 30 s) — mixed image/design
                               // playlists need the WebView imminently; recreating causes black frames.
+                              // P1 Fix 8: never recreate the main WebView while the isolated per-slide
+                              // WebView renderer (task #1875) is the active renderer -- that separate
+                              // WebView, not this one, is what's covering the screen, so destroying
+                              // `webView` here only reloads/flashes the React control shell for no benefit.
+                              if (playlistScheduler != null
+                                      && "isolated_webview".equals(playlistScheduler.getCurrentRendererKind())) {
+                                  android.util.Log.d("DigipalNative",
+                                      "[nativeFirst] WebView recreate skipped — isolated_webview renderer active");
+                                  return;
+                              }
                               final boolean longSlide = (currentNativeSlideDurationMs > 30_000L);
                               if (!longSlide) {
                                   android.util.Log.d("DigipalNative", "[nativeFirst] WebView recreate skipped — slide < 30 s");
@@ -2407,6 +2473,23 @@ import android.os.Looper;
                                           new IsolatedWebRenderer.Listener() {
                                               @Override public void onRendererReady(String slideId) {
                                                   if (playlistScheduler != null) playlistScheduler.onRendererReady(slideId);
+                                                  // P1 Fix 7: the isolated per-slide WebView is a separate
+                                                  // WebView instance from the main React shell's `webView`
+                                                  // field, so its readiness never reaches window.__digipal
+                                                  // NativeRendererReady on the main WebView. Without this call,
+                                                  // waitForNativeRendererReady() in playerBridge.ts always falls
+                                                  // through to its ~2s timeout instead of firing as soon as the
+                                                  // isolated slide is actually ready, delaying setWebViewDormant(true).
+                                                  if (webView != null) {
+                                                      final String quotedSlideId = org.json.JSONObject.quote(slideId);
+                                                      runOnUiThread(() -> {
+                                                          try {
+                                                              webView.evaluateJavascript(
+                                                                  "window.__digipalNativeRendererReady && window.__digipalNativeRendererReady(" + quotedSlideId + ")",
+                                                                  null);
+                                                          } catch (Throwable ignored) {}
+                                                      });
+                                                  }
                                               }
                                               @Override public void onRendererFailed(String slideId, String reason) {
                                                   if (isolatedWebRenderer != null) isolatedWebRenderer.hide();
@@ -3220,6 +3303,41 @@ import android.os.Looper;
 
     /** Arm the 3-minute stable playback timer. Resets on each successful renderer-ready event.
        *  When it fires cleanly it calls AppRecoverManager.onCleanStart() to reset the crash counter. */
+      /**
+       * P0 Fix 5: refreshes the native debug overlay TextView with the same fields
+       * exposed via getRendererStatus() (rendererKind, memoryTier, webViewPolicy,
+       * shellSource, slide/content ids, last error). Runs on a 2s tick while the
+       * overlay is enabled; no-ops silently if the overlay view was never created
+       * (e.g. the WebView-unavailable early-return path in onCreate).
+       */
+      private void updateNativeDebugOverlayText() {
+          if (nativeDebugOverlay == null || !nativeDebugOverlayEnabled) return;
+          try {
+              StringBuilder sb = new StringBuilder();
+              sb.append("appVersion: ").append(BuildConfig.VERSION_NAME)
+                  .append(" (").append(BuildConfig.VERSION_CODE).append(")\n");
+              if (playlistScheduler != null) {
+                  sb.append("renderer: ").append(playlistScheduler.getCurrentRendererKind()).append("\n");
+                  sb.append("memoryTier: ").append(playlistScheduler.getMemoryTierName()).append("\n");
+                  sb.append("webViewPolicy: ").append(playlistScheduler.getLastWebViewPolicyName()).append("\n");
+                  sb.append("shellSource: ").append(playlistScheduler.getShellSourceName()).append("\n");
+                  sb.append("slideId: ").append(playlistScheduler.getCurrentSlideId()).append("\n");
+                  sb.append("contentId: ").append(playlistScheduler.getCurrentContentId()).append("\n");
+                  sb.append("renderMode: ").append(playlistScheduler.getCurrentRenderMode()).append("\n");
+                  sb.append("fallbackUsed: ").append(playlistScheduler.isLastFallbackUsed()).append("\n");
+                  sb.append("retryCount: ").append(playlistScheduler.getRetryCountForSlide()).append("\n");
+                  sb.append("consecutiveFailures: ").append(playlistScheduler.getConsecutiveFailures());
+                  String lastErr = playlistScheduler.getLastErrorMessage();
+                  if (lastErr != null && !lastErr.isEmpty()) {
+                      sb.append("\nlastError: ").append(lastErr);
+                  }
+              } else {
+                  sb.append("renderer: unknown (no scheduler)");
+              }
+              nativeDebugOverlay.setText(sb.toString());
+          } catch (Throwable ignored) {}
+      }
+
       private void armStablePlaybackTimer() {
           stablePlaybackHandler.removeCallbacks(stablePlaybackRunnable != null ? stablePlaybackRunnable : () -> {});
           stablePlaybackRunnable = () -> {
