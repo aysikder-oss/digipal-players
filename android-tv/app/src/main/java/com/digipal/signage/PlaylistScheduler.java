@@ -41,8 +41,8 @@ import java.util.concurrent.Executors;
 public class PlaylistScheduler {
 
     private static final String TAG = "PlaylistScheduler";
-    private static final int MAX_FAILURES = 5; // consecutive failed *slides* before DEGRADED_PLAYBACK (P2)
-    private static final int MAX_SLIDE_RETRIES = 2; // retries for the *same* slide before skipping (P2)
+    private static final int MAX_FAILURES = 3;
+    private static final int MAX_SLIDE_RETRIES = 3;
     private static final long FALLBACK_EXTEND_MS = 5_000L;
 
     public enum State {
@@ -172,9 +172,6 @@ public class PlaylistScheduler {
     // ── Debug status panel getters (surfaced to JS via WebAppInterface.getRendererStatus) ──
     public String getCurrentRendererKind() { return currentRendererKind; }
     public String getLastWebViewPolicyName() { return lastWebViewPolicy; }
-    /** P2: expose per-slide retry count and consecutive-failure count for debug status. */
-    public int getRetryCountForSlide() { return retryCountForSlide; }
-    public int getConsecutiveFailures() { return consecutiveFailures; }
     public String getShellSourceName() { return shellSource; }
     public boolean isLastFallbackUsed() { return lastFallbackUsed; }
     public String getMemoryTierName() { return currentMemoryTier(); }
@@ -194,12 +191,8 @@ public class PlaylistScheduler {
       public void setWebView(android.webkit.WebView wv) { repository.setWebView(wv); }
 
   
-    /** slideId currently being retried; "" when no retry is in progress. Reset only on
-     *  genuine slide change (advance/skip/stop/setPlaylist), NOT at the top of showCurrent()
-     *  (P2 fix: showCurrent() is also called to re-render the SAME slide during a retry). */
-    private String retrySlideId = "";
-    /** Number of consecutive failures for retrySlideId. Reset with retrySlideId. */
-    private int retryCountForSlide = 0;
+    /** Per-slide retry counter; reset in showCurrent(), incremented in onRendererError(). */
+    private int slideRetryCount = 0;
 
     /** Wall-clock time when pause() was called; -1 when not paused. */
     private long pausedAt = -1;
@@ -242,6 +235,9 @@ public class PlaylistScheduler {
         this.repository = repository;
         this.telemetry = telemetry;
         this.prefs = prefs;
+          // Task #1891 fix: reload the active revision from Room the instant a WEBVIEW_PDF's
+          // pages finish prerendering, instead of waiting for the next full playlist refresh.
+          this.repository.setPdfPrerenderReadyListener(assetId -> reloadActiveRevisionFromRoom());
     }
 
     /** Called from MainActivity.onCreate() -- restores last playlist from Room if available. */
@@ -284,6 +280,76 @@ public class PlaylistScheduler {
     }
 
     /**
+       * Task #1891 fix: called when a WEBVIEW_PDF asset finishes native page prerendering
+       * (PdfPrerenderReadyListener) so the current playlist reloads with the expanded
+       * native IMAGE pages -- no waiting for the next full playlist refresh or a reboot.
+       *
+       * Loads the active revision's local_manifest from Room off the main thread, re-parses
+       * it (parseSlides() already calls expandPdfIfPrerendered()), then swaps {@link #slides}
+       * on the main thread while trying to preserve the current logical playback position:
+       *   - If the current slide is untouched, match by slideId.
+       *   - If the current slide was the WEBVIEW_PDF that just expanded, jump to its first
+       *     expanded page (slideId + "_p0") so the pages start playing immediately.
+       *   - Otherwise fall back to index 0 rather than risk an out-of-bounds jump.
+       */
+      public void reloadActiveRevisionFromRoom() {
+          final long revIdAtCallTime = activeRevisionId;
+          if (revIdAtCallTime < 0) {
+              Log.d(TAG, "[pdf-reload] no active revision -- skipping");
+              return;
+          }
+          dbExec.execute(() -> {
+              PlaylistDatabase.PlaylistRevisionEntity rev = repository.getActive();
+              if (rev == null || rev.id != revIdAtCallTime) {
+                  Log.i(TAG, "[pdf-reload] active revision changed since prerender became ready -- skipping stale reload");
+                  return;
+              }
+              if (rev.localManifest == null || rev.localManifest.isEmpty()) {
+                  Log.w(TAG, "[pdf-reload] revId=" + rev.id + " has no local_manifest -- skipping");
+                  return;
+              }
+              final List<SlidePlan> newSlides = parseSlides(rev.localManifest);
+              if (newSlides.isEmpty()) {
+                  Log.w(TAG, "[pdf-reload] revId=" + rev.id + " parsed to 0 slides -- skipping");
+                  return;
+              }
+              handler.post(() -> {
+                  synchronized (PlaylistScheduler.this) {
+                      if (activeRevisionId != revIdAtCallTime) {
+                          Log.i(TAG, "[pdf-reload] active revision superseded before apply -- skipping");
+                          return;
+                      }
+                      final SlidePlan currentSlide = (currentIndex >= 0 && currentIndex < slides.size())
+                              ? slides.get(currentIndex) : null;
+                      int newIndex = 0;
+                      if (currentSlide != null && currentSlide.slideId != null) {
+                          final String wantExact = currentSlide.slideId;
+                          final String wantExpandedPrefix = currentSlide.slideId + "_p";
+                          for (int i = 0; i < newSlides.size(); i++) {
+                              String sid = newSlides.get(i).slideId;
+                              if (sid == null) continue;
+                              if (sid.equals(wantExact) || sid.startsWith(wantExpandedPrefix)) {
+                                  newIndex = i;
+                                  break;
+                              }
+                          }
+                      }
+                      if (newIndex >= newSlides.size()) newIndex = 0;
+                      Log.i(TAG, "[pdf-reload] applying " + newSlides.size()
+                              + " slides from Room, resuming at index=" + newIndex);
+                      slides = newSlides;
+                      currentIndex = newIndex;
+                      if (running) {
+                          generation++;
+                          if (advanceRunnable != null) { handler.removeCallbacks(advanceRunnable); advanceRunnable = null; }
+                          showCurrent();
+                      }
+                  }
+              });
+          });
+      }
+
+      /**
      * Called from setNativePlaylist JS bridge.
      * Passing "[]" stops playback and clears the active Room revision so boot()
      * does not restore stale content after a commanded page reload.
@@ -374,7 +440,7 @@ public class PlaylistScheduler {
     /** Force-advance to the next slide immediately (RecoveryCoordinator: SLIDE_SKIP). */
       public synchronized void skipCurrentSlide() {
           if (!running) return;
-          retrySlideId = ""; retryCountForSlide = 0;
+          slideRetryCount = 0;
           if (advanceRunnable != null) { handler.removeCallbacks(advanceRunnable); advanceRunnable = null; }
           final int myGen = generation;
           handler.post(() -> { if (generation == myGen && running) advance(); });
@@ -520,17 +586,7 @@ public class PlaylistScheduler {
                     + " (current=" + slides.get(currentIndex).slideId + "): " + error);
             return;
         }
-        // P2 fix: track retries per-slide via retrySlideId/retryCountForSlide instead of a
-        // single global counter reset at the top of showCurrent() (showCurrent() is also
-        // used to re-render this SAME slide during a retry, which made the old counter unreliable).
-        if (!slideId.equals(retrySlideId)) {
-            retrySlideId = slideId;
-            retryCountForSlide = 0;
-            consecutiveFailures++; // count distinct failed slides, not individual retry attempts
-        }
-        retryCountForSlide++;
-        Log.w(TAG, "[error] " + slideId + ": " + error + " (retry=" + retryCountForSlide + "/" + MAX_SLIDE_RETRIES
-                + ", consecutiveFailures=" + consecutiveFailures + "/" + MAX_FAILURES + ")");
+        Log.w(TAG, "[error] " + slideId + ": " + error + " (slideRetry=" + slideRetryCount + ")");
         // Bug fix (task P3): a failure that arrives while still PREPARING_CURRENT (i.e.
         // before onRendererReady() ever fired) leaves the 3s RENDERER_READY_TIMEOUT_MS
         // safety runnable armed. Without cancelling it here, that stale timeout can fire
@@ -542,10 +598,11 @@ public class PlaylistScheduler {
             rendererReadyTimeout = null;
         }
         rendererReadyTimeoutGen = -1;
+        slideRetryCount++;
+        consecutiveFailures++;
         if (telemetry != null) telemetry.logEvent("slide_failed", slideId,
                 "{\"error\":" + JSONObject.quote(error)
-                + ",\"slideRetry\":" + retryCountForSlide
-                + ",\"consecutiveFailures\":" + consecutiveFailures
+                + ",\"slideRetry\":" + slideRetryCount
                 + ",\"rendererKind\":\"" + currentRendererKind + "\""
                 + ",\"memoryTier\":\"" + currentMemoryTier() + "\""
                 + ",\"webViewPolicy\":\"" + lastWebViewPolicy + "\""
@@ -562,8 +619,8 @@ public class PlaylistScheduler {
 
         if (advanceRunnable != null) handler.removeCallbacks(advanceRunnable);
 
-        if (retryCountForSlide <= MAX_SLIDE_RETRIES) {
-            Log.d(TAG, "[error] retrying slide " + slideId + " in 500ms (attempt " + retryCountForSlide + ")");
+        if (slideRetryCount < MAX_SLIDE_RETRIES) {
+            Log.d(TAG, "[error] retrying slide " + slideId + " in 500ms (attempt " + slideRetryCount + ")");
             final int myGen = generation;
             handler.postDelayed(() -> {
                 if (generation != myGen || !running) return;
@@ -571,7 +628,7 @@ public class PlaylistScheduler {
             }, 500);
         } else {
             Log.w(TAG, "[error] max retries for " + slideId + " -- skipping");
-            retrySlideId = ""; retryCountForSlide = 0;
+            slideRetryCount = 0;
             final int myGen = generation;
             handler.postDelayed(() -> {
                 if (generation != myGen || !running) return;
@@ -632,6 +689,7 @@ public class PlaylistScheduler {
         }
         assetGraceRetries = 0; // URL present — reset grace counter
 
+        slideRetryCount = 0;
         lastFallbackUsed = false; // reset per-slide; set true if isolated renderer/degraded fallback fires
         final long memoryBeforeMb = telemetry != null ? telemetry.currentMemMb() : -1;
         slideStartMs = SystemClock.elapsedRealtime(); // Fix 13: monotonic
@@ -692,19 +750,6 @@ public class PlaylistScheduler {
         final boolean isNativeSlide = (eff == SlideType.VIDEO || eff == SlideType.IMAGE);
         final boolean isWebviewSlide = isWebviewType(eff);
         final boolean needsReadyGate = isNativeSlide || isWebviewSlide;
-        // P1 fix: per-slide-type ready timeout. Native VIDEO/IMAGE keep the original
-        // 3s budget (ExoPlayer/Glide first-frame is normally fast). WEBVIEW_* slides use
-        // the WebViewPolicy.readyTimeoutMs for their type (e.g. design/kiosk/website/canva
-        // pages legitimately need longer than 3s to first-paint on slow/low-RAM devices),
-        // falling back to the 3s constant only if a policy leaves it unset.
-        final long effectiveReadyTimeoutMs;
-        if (isWebviewSlide) {
-            WebViewPolicy readyPolicy = WebViewPolicy.forSlideType(eff);
-            effectiveReadyTimeoutMs = (readyPolicy != null && readyPolicy.readyTimeoutMs > 0)
-                    ? readyPolicy.readyTimeoutMs : RENDERER_READY_TIMEOUT_MS;
-        } else {
-            effectiveReadyTimeoutMs = RENDERER_READY_TIMEOUT_MS;
-        }
         if (needsReadyGate) {
             pendingAdvanceDurationMs = dur;
             rendererReadyTimeoutGen = generation;
@@ -714,11 +759,11 @@ public class PlaylistScheduler {
             rendererReadyTimeout = () -> {
                 if (generation != myGen) return;
                 Log.w(TAG, "[renderer_ready_timeout] no first-frame for slide " + mySlideId
-                        + " after " + effectiveReadyTimeoutMs + "ms — starting timer anyway");
+                        + " after " + RENDERER_READY_TIMEOUT_MS + "ms — starting timer anyway");
                 if (telemetry != null) telemetry.logEvent("renderer_timeout", mySlideId,
                         "{\"pendingMs\":" + pendingAdvanceDurationMs
-                        + ",\"readyLatencyMs\":" + effectiveReadyTimeoutMs
-                        + ",\"firstFrameLatencyMs\":" + effectiveReadyTimeoutMs
+                        + ",\"readyLatencyMs\":" + RENDERER_READY_TIMEOUT_MS
+                        + ",\"firstFrameLatencyMs\":" + RENDERER_READY_TIMEOUT_MS
                         + ",\"rendererKind\":\"" + currentRendererKind + "\""
                         + ",\"memoryTier\":\"" + currentMemoryTier() + "\""
                         + ",\"webViewPolicy\":\"" + lastWebViewPolicy + "\""
@@ -730,8 +775,7 @@ public class PlaylistScheduler {
                 toState(State.PLAYING, mySlideId);
                 startAdvanceTimer(myGen, pendingAdvanceDurationMs);
             };
-            handler.postDelayed(rendererReadyTimeout, effectiveReadyTimeoutMs);
-        }
+            handler.postDelayed(rendererReadyTimeout, RENDERER_READY_TIMEOUT_MS);
         }
 
         // Renderer ownership contract:
@@ -884,7 +928,7 @@ public class PlaylistScheduler {
         advanceRunnable = () -> {
             if (generation != myGen) return;
             consecutiveFailures = 0;
-            retrySlideId = ""; retryCountForSlide = 0;
+            slideRetryCount = 0;
             toState(State.RECOVERING_RENDERER, slideId);
             advance();
         };
