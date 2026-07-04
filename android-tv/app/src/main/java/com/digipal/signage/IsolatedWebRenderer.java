@@ -68,19 +68,44 @@ public class IsolatedWebRenderer {
      * {@code null} to fall back to the safe default (equivalent to the old two-bucket
      * applyWebViewProfile behavior) — task: Per-Asset WebView Policy.
      */
-    public void prepare(String slideId, String url, WebViewPolicy policy) {
-        this.currentSlideId = slideId;
-        this.currentPolicy = policy;
-        this.ready.set(false);
-        if (policy != null && policy.freshWebView) {
-            // Per-asset policy demands a brand-new WebView instance (e.g. interactive
-            // kiosk content) rather than reusing whatever instance is already alive.
-            destroy();
-        }
-        ensureWebView();
-        if (policy != null) policy.applyTo(webView);
-        hide();
-        cancelTimers();
+    /** True once a {@code freshWebView}-policy slide has been prepared (task #1892:
+       *  destroy after use). Consumed the *next* time prepare() runs so the fresh
+       *  instance is torn down before the following slide loads, regardless of
+       *  whether that next slide also demands freshWebView. Prevents a "fresh" kiosk/
+       *  interactive WebView (with JS state, timers, cookies) from silently being
+       *  reused by a subsequent non-fresh slide. */
+      private boolean pendingFreshWebViewTeardown = false;
+
+      public void prepare(String slideId, String url, WebViewPolicy policy) {
+          this.currentSlideId = slideId;
+          this.currentPolicy = policy;
+          this.ready.set(false);
+          if (pendingFreshWebViewTeardown) {
+              // Previous slide required a fresh WebView; it must not be handed to this
+              // (or any) subsequent slide -- destroy it now, before deciding whether this
+              // slide also needs a fresh instance.
+              destroy();
+              pendingFreshWebViewTeardown = false;
+          }
+          boolean isReuse = webView != null;
+          if (policy != null && policy.freshWebView) {
+              // Per-asset policy demands a brand-new WebView instance (e.g. interactive
+              // kiosk content) rather than reusing whatever instance is already alive.
+              destroy();
+              isReuse = false;
+          }
+          if (isReuse) {
+              // Reusing an existing WebView across slides: clear the outgoing page first so
+              // its JS timers/intervals, in-flight media, and DOM state don't keep running
+              // (or bleed) into the next slide's load. loadUrl("about:blank") synchronously
+              // tears down the document; stopLoading() aborts any in-flight navigation.
+              try { webView.stopLoading(); webView.loadUrl("about:blank"); } catch (Throwable ignored) {}
+          }
+          ensureWebView();
+          if (policy != null) policy.applyTo(webView);
+          hide();
+          cancelTimers();
+          pendingFreshWebViewTeardown = (policy != null && policy.freshWebView);
 
         long timeoutMs = (policy != null && policy.readyTimeoutMs > 0) ? policy.readyTimeoutMs : LOAD_TIMEOUT_MS;
         timeoutRunnable = () -> {
