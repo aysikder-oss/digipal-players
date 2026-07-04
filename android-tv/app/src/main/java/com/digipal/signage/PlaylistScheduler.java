@@ -973,6 +973,15 @@ public class PlaylistScheduler {
                 SlidePlan s = new SlidePlan();
                 s.slideId    = e.slideId;
                 try { s.type = SlideType.valueOf(e.type); } catch (Exception ex) { s.type = SlideType.WEBVIEW_URL; }
+                  // Recover a specific WEBVIEW_* category from configJson for entities that
+                  // were persisted as the generic WEBVIEW_URL fallback before this fix (task
+                  // P0: normalizeSlideType) -- protects devices that already saved bad types.
+                  if (s.type == SlideType.WEBVIEW_URL) {
+                      String cfgType = cfg.optString("type", "");
+                      if (!cfgType.isEmpty() && !"WEBVIEW_URL".equals(cfgType)) {
+                          try { s.type = SlideType.valueOf(cfgType); } catch (Exception ignored) { /* keep WEBVIEW_URL */ }
+                      }
+                  }
                 s.url        = cfg.optString("url", "");
                 s.durationMs = e.durationMs;
                 s.contentId  = cfg.optInt("contentId", 0);
