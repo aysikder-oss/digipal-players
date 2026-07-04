@@ -333,10 +333,11 @@ public class IsolatedWebRenderer {
               // finish() on the whole Activity — killing the app instead of just
               // this slide. That produced a crash/reboot loop on low-RAM Fire TV
               // devices with no caught exception (so no crash report was ever
-              // recorded). Handling it here destroys only the dead WebView and
-              // routes back to the legacy renderer via onRendererFailed(),
-              // matching how MainActivity's own long-lived WebView already
-              // recovers from the same condition.
+              // recorded). Handling it here destroys only the dead isolated WebView
+              // and reports the failure via onRendererFailed(), letting
+              // PlaylistScheduler.onIsolatedRendererFailed() decide the fallback
+              // (e.g. advancing to the next slide), matching how MainActivity's own
+              // long-lived WebView already recovers from the same condition.
               @android.annotation.TargetApi(android.os.Build.VERSION_CODES.O)
               @Override public boolean onRenderProcessGone(WebView v, android.webkit.RenderProcessGoneDetail detail) {
                     boolean didCrash = detail != null && detail.didCrash();
