@@ -947,6 +947,10 @@ public class PlaylistScheduler {
     public int getCurrentIndex() { return currentIndex; }
     public int getSlideCount() { return slides.size(); }
     public long getActiveRevisionId() { return activeRevisionId; }
+    /** Retry attempts made for the currently active slide (resets to 0 on each new slide). Used by the dashboard telemetry bridge (getRendererStatus). */
+    public int getRetryCountForSlide() { return slideRetryCount; }
+    /** Consecutive slide failures since the last successful render (resets to 0 on success/reload). Used by the dashboard telemetry bridge (getRendererStatus). */
+    public int getConsecutiveFailures() { return consecutiveFailures; }
 
     private boolean isSameStructure(List<SlidePlan> n) {
         if (n.size() != slides.size()) return false;
