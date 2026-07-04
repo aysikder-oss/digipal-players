@@ -106,7 +106,12 @@ public class WebViewPolicy {
               // Dynamic design/kiosk/directory content can involve heavy DOM/JS work
               // (widgets, animations, multi-floor routing) that legitimately needs more
               // than the 3s native-media ready gate on slow/low-RAM Android devices.
-              p.readyTimeoutMs = 8_000L;
+              // Unified Design Studio Renderer stabilization (Step 7): weak Fire TV /
+              // Android TV devices can take longer than 8s on first load for a
+              // design/kiosk/directory slide (heavy DOM/JS, widgets, animations,
+              // multi-floor routing) -- bumped to 12s so a legitimately-slow-but-working
+              // first paint isn't misclassified as a load_timeout failure.
+              p.readyTimeoutMs = 12_000L;
           } else if (isCanva || isWebsite) {
               p.allowFileAccess = false;
               p.allowFileAccessFromFileUrls = false;
