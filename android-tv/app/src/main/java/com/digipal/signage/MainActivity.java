@@ -2486,6 +2486,7 @@ import android.os.Looper;
               }, "LocalPathCacheWarmup").start();
 
               pdfPrerenderer    = new PdfPrerenderer(this, playlistRepository);
+              playlistRepository.setPdfPrerenderer(pdfPrerenderer); // task #1891: enables native IMAGE expansion of WEBVIEW_PDF slides
 
               reliabilitySupervisor = new ReliabilitySupervisor(
                   this,
