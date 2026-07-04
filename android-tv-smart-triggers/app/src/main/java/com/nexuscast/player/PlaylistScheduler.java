@@ -231,6 +231,7 @@ public class PlaylistScheduler {
         if (prefs != null) {
             prefs.edit().putLong(KEY_PLAYLIST_EPOCH, System.currentTimeMillis()).apply();
         }
+        slideRetryCount = 0; // fresh playlist start -- reset the per-slide retry counter
         firstSlideRemainingMs = -1L; // fresh start — no wall-clock offset
         running = true;
         showCurrent();
@@ -379,8 +380,13 @@ public class PlaylistScheduler {
         }
         assetGraceRetries = 0; // URL present — reset grace counter
 
-        slideRetryCount = 0;
-        slideStartMs = System.currentTimeMillis();
+        // Bug fix (Android review): slideRetryCount must NOT be reset here -- showCurrent()
+          // is also invoked by onRendererError()'s own retry path (same slideId), so resetting it
+          // on every call meant the counter never accumulated past 1 and MAX_SLIDE_RETRIES never
+          // actually triggered, causing an infinite 500ms retry loop for a permanently-broken
+          // slide. It is now reset only when genuinely moving to a new slide: in advance() and
+          // at initial playlist start.
+          slideStartMs = System.currentTimeMillis();
         toState(State.PREPARING_CURRENT, slide.slideId);
 
         SlideType eff = slide.type;
@@ -529,6 +535,7 @@ public class PlaylistScheduler {
         }
 
         consecutiveFailures = 0;
+        slideRetryCount = 0; // new slide -- reset the per-slide retry counter (see showCurrent())
         toState(State.TRANSITIONING, next != null ? next.slideId : "");
         currentIndex = nextIdx;
         showCurrent();
