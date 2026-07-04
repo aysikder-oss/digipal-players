@@ -677,6 +677,19 @@ public class PlaylistScheduler {
         final boolean isNativeSlide = (eff == SlideType.VIDEO || eff == SlideType.IMAGE);
         final boolean isWebviewSlide = isWebviewType(eff);
         final boolean needsReadyGate = isNativeSlide || isWebviewSlide;
+        // P1 fix: per-slide-type ready timeout. Native VIDEO/IMAGE keep the original
+        // 3s budget (ExoPlayer/Glide first-frame is normally fast). WEBVIEW_* slides use
+        // the WebViewPolicy.readyTimeoutMs for their type (e.g. design/kiosk/website/canva
+        // pages legitimately need longer than 3s to first-paint on slow/low-RAM devices),
+        // falling back to the 3s constant only if a policy leaves it unset.
+        final long effectiveReadyTimeoutMs;
+        if (isWebviewSlide) {
+            WebViewPolicy readyPolicy = WebViewPolicy.forSlideType(eff);
+            effectiveReadyTimeoutMs = (readyPolicy != null && readyPolicy.readyTimeoutMs > 0)
+                    ? readyPolicy.readyTimeoutMs : RENDERER_READY_TIMEOUT_MS;
+        } else {
+            effectiveReadyTimeoutMs = RENDERER_READY_TIMEOUT_MS;
+        }
         if (needsReadyGate) {
             pendingAdvanceDurationMs = dur;
             rendererReadyTimeoutGen = generation;
@@ -686,11 +699,11 @@ public class PlaylistScheduler {
             rendererReadyTimeout = () -> {
                 if (generation != myGen) return;
                 Log.w(TAG, "[renderer_ready_timeout] no first-frame for slide " + mySlideId
-                        + " after " + RENDERER_READY_TIMEOUT_MS + "ms — starting timer anyway");
+                        + " after " + effectiveReadyTimeoutMs + "ms — starting timer anyway");
                 if (telemetry != null) telemetry.logEvent("renderer_timeout", mySlideId,
                         "{\"pendingMs\":" + pendingAdvanceDurationMs
-                        + ",\"readyLatencyMs\":" + RENDERER_READY_TIMEOUT_MS
-                        + ",\"firstFrameLatencyMs\":" + RENDERER_READY_TIMEOUT_MS
+                        + ",\"readyLatencyMs\":" + effectiveReadyTimeoutMs
+                        + ",\"firstFrameLatencyMs\":" + effectiveReadyTimeoutMs
                         + ",\"rendererKind\":\"" + currentRendererKind + "\""
                         + ",\"memoryTier\":\"" + currentMemoryTier() + "\""
                         + ",\"webViewPolicy\":\"" + lastWebViewPolicy + "\""
@@ -702,7 +715,8 @@ public class PlaylistScheduler {
                 toState(State.PLAYING, mySlideId);
                 startAdvanceTimer(myGen, pendingAdvanceDurationMs);
             };
-            handler.postDelayed(rendererReadyTimeout, RENDERER_READY_TIMEOUT_MS);
+            handler.postDelayed(rendererReadyTimeout, effectiveReadyTimeoutMs);
+        }
         }
 
         // Renderer ownership contract:
