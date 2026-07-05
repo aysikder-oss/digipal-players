@@ -6,6 +6,8 @@ package com.digipal.signage;
   import android.os.Looper;
   import android.webkit.WebView;
 
+  import java.util.Locale;
+
   import org.json.JSONException;
   import org.json.JSONObject;
 
@@ -149,18 +151,24 @@ package com.digipal.signage;
               if (sanitizedName.length() > 200) {
                   sanitizedName = sanitizedName.substring(sanitizedName.length() - 200);
               }
-              File outputFile = new File(mediaDir, sanitizedName);
+              File outputFile = SafeFiles.child(mediaDir, sanitizedName);
 
-              File parentDir = outputFile.getParentFile();
-              if (parentDir != null && !parentDir.exists()) parentDir.mkdirs();
+                File parentDir = outputFile.getParentFile();
+                if (parentDir != null && !parentDir.exists()) parentDir.mkdirs();
 
-              URL url = new URL(signedUrl);
-              HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-              conn.setConnectTimeout(30000);
-              conn.setReadTimeout(60000);
-              conn.setRequestMethod("GET");
+                URL url = new URL(signedUrl);
+                String scheme = url.getProtocol();
+                if (!"https".equalsIgnoreCase(scheme)
+                        && !("http".equalsIgnoreCase(scheme) && UrlPolicy.isPrivateHost(url.getHost()))) {
+                    notifyDownloadFailed(objectPath, "Blocked non-trusted media URL");
+                    return;
+                }
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(30000);
+                conn.setReadTimeout(60000);
+                conn.setRequestMethod("GET");
 
-              int responseCode = conn.getResponseCode();
+                int responseCode = conn.getResponseCode();
               if (responseCode != 200) {
                   conn.disconnect();
                   notifyDownloadFailed(objectPath, "HTTP " + responseCode);
@@ -180,7 +188,7 @@ package com.digipal.signage;
                   }
               }
 
-              File tempFile = new File(mediaDir, sanitizedName + ".tmp");
+              File tempFile = SafeFiles.child(mediaDir, sanitizedName + ".tmp");
               long totalRead = 0;
               // Task P6: try-with-resources guarantees in/out are closed even if read()/write()
               // throws mid-transfer (e.g. connection reset) -- the previous plain close() calls
@@ -252,15 +260,15 @@ package com.digipal.signage;
           String localPath = entry.optString("localPath", "");
           if (localPath.isEmpty()) return "";
 
-          File file = new File(localPath);
-          if (!file.exists()) {
-              removeFromManifest(objectPath);
-              return "";
-          }
+          File file = SafeFiles.existingFileInsideOrNull(getMediaDir(), localPath);
+            if (file == null) {
+                removeFromManifest(objectPath);
+                return "";
+            }
 
-          updateLastUsed(objectPath);
-            return "file://" + localPath;
-        }
+            updateLastUsed(objectPath);
+              return "file://" + file.getAbsolutePath();
+          }
 
         /** Unified Design Studio Renderer stabilization (Step 3): returns a web-servable
          *  URL for locally-cached media, safe to embed directly in an isolated-renderer
@@ -280,13 +288,13 @@ package com.digipal.signage;
             String localPath = entry.optString("localPath", "");
             if (localPath.isEmpty()) return "";
 
-            File file = new File(localPath);
-            if (!file.exists()) {
-                removeFromManifest(objectPath);
-                return "";
-            }
+            File file = SafeFiles.existingFileInsideOrNull(getMediaDir(), localPath);
+              if (file == null) {
+                  removeFromManifest(objectPath);
+                  return "";
+              }
 
-            updateLastUsed(objectPath);
+              updateLastUsed(objectPath);
             try {
                 String encoded = java.net.URLEncoder.encode(objectPath, "UTF-8");
                 return "https://appassets.androidplatform.net/media/" + encoded;
@@ -317,15 +325,15 @@ package com.digipal.signage;
             String localPath = entry.optString("localPath", "");
             if (localPath.isEmpty()) return null;
 
-            File file = new File(localPath);
-            if (!file.exists()) return null;
+            File file = SafeFiles.existingFileInsideOrNull(getMediaDir(), localPath);
+            if (file == null) return null;
             return file;
         }
 
         /** Best-effort MIME type for a cached media file, used when serving it through
          *  resolveLocalMediaFile()'s virtual URL from IsolatedWebRenderer. */
         public static String guessMimeType(File file) {
-            String name = file.getName().toLowerCase();
+            String name = file.getName().toLowerCase(Locale.ROOT);
             if (name.endsWith(".png")) return "image/png";
             if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
             if (name.endsWith(".gif")) return "image/gif";
@@ -348,8 +356,7 @@ package com.digipal.signage;
 
           String localPath = entry.optString("localPath", "");
           if (!localPath.isEmpty()) {
-              File file = new File(localPath);
-              if (file.exists()) file.delete();
+              SafeFiles.deleteFileInside(getMediaDir(), localPath);
           }
           removeFromManifest(objectPath);
           return true;
@@ -364,10 +371,7 @@ package com.digipal.signage;
               JSONObject entry = manifest.optJSONObject(key);
               if (entry != null) {
                   String localPath = entry.optString("localPath", "");
-                  if (!localPath.isEmpty()) {
-                      File file = new File(localPath);
-                      if (file.exists()) { file.delete(); count++; }
-                  }
+                  if (!localPath.isEmpty() && SafeFiles.deleteFileInside(getMediaDir(), localPath)) count++;
               }
           }
 
@@ -441,7 +445,7 @@ package com.digipal.signage;
               JSONObject entry = manifest.optJSONObject(key);
               if (entry != null) {
                   String localPath = entry.optString("localPath", "");
-                  if (!localPath.isEmpty() && !new File(localPath).exists()) toRemove.add(key);
+                  if (!localPath.isEmpty() && SafeFiles.existingFileInsideOrNull(mediaDir, localPath) == null) toRemove.add(key);
               }
           }
           for (String key : toRemove) manifest.remove(key);
@@ -510,8 +514,8 @@ package com.digipal.signage;
           // Fire legacy WebView JS notification
           if (webView == null) return;
           mainHandler.post(() -> {
-              String js = "javascript:if(window.__onMediaDownloaded){window.__onMediaDownloaded('"
-                      + escapeJs(objectPath) + "','" + escapeJs(localPath) + "');}";
+              String js = "if(window.__onMediaDownloaded){window.__onMediaDownloaded("
+                      + JSONObject.quote(objectPath) + "," + JSONObject.quote(localPath) + ");}";
               webView.evaluateJavascript(js, null);
           });
       }
@@ -522,8 +526,9 @@ package com.digipal.signage;
           // Fire legacy WebView JS notification
           if (webView == null) return;
           mainHandler.post(() -> {
-              String js = "javascript:if(window.__onMediaDownloadFailed){window.__onMediaDownloadFailed('"
-                      + escapeJs(objectPath) + "','" + escapeJs(error != null ? error : "Unknown error") + "');}";
+              String safeError = error != null ? error : "Unknown error";
+              String js = "if(window.__onMediaDownloadFailed){window.__onMediaDownloadFailed("
+                      + JSONObject.quote(objectPath) + "," + JSONObject.quote(safeError) + ");}";
               webView.evaluateJavascript(js, null);
           });
       }
