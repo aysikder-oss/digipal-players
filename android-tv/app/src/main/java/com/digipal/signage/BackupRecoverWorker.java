@@ -2,6 +2,7 @@ package com.digipal.signage;
 
   import android.content.Context;
   import android.content.Intent;
+  import android.os.Build;
   import androidx.annotation.NonNull;
   import androidx.work.Worker;
   import androidx.work.WorkerParameters;
@@ -26,9 +27,15 @@ package com.digipal.signage;
           }
           try {
               Context ctx = getApplicationContext();
-              Intent intent = new Intent(ctx, MainActivity.class);
-              intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-              ctx.startActivity(intent);
+              boolean enabled = ctx.getSharedPreferences("DigipalPrefs", Context.MODE_PRIVATE)
+                      .getBoolean("auto_relaunch", false);
+              if (!enabled) return Result.success();
+              Intent svc = new Intent(ctx, BootLaunchService.class);
+              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                  ctx.startForegroundService(svc);
+              } else {
+                  ctx.startService(svc);
+              }
           } catch (Throwable e) {
               android.util.Log.e("Digipal", "BackupRecoverWorker: launch failed", e);
           }
