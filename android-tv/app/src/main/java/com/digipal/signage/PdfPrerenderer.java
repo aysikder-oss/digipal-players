@@ -24,6 +24,7 @@ public class PdfPrerenderer {
     private static final int MAX_WIDTH  = 1920;
     private static final int MAX_HEIGHT = 1080;
     private static final int JPEG_QUALITY = 88;
+    private static final int MAX_PAGES = 25;
 
     public interface Callback {
         void onPagesReady(String assetId, List<String> pageLocalPaths);
@@ -43,16 +44,17 @@ public class PdfPrerenderer {
         exec.execute(() -> {
             List<String> paths = new ArrayList<>();
             try {
-                File pdf = new File(pdfLocalPath);
-                if (!pdf.exists()) { cb.onFailed(assetId, "pdf_not_found"); return; }
+                File mediaRoot = new File(ctx.getFilesDir(), "media");
+                File pdf = SafeFiles.existingFileInsideOrNull(mediaRoot, pdfLocalPath);
+                if (pdf == null) { cb.onFailed(assetId, "pdf_not_found"); return; }
 
                 File outDir = new File(ctx.getFilesDir(), "digipal_pdf_pages");
-                if (!outDir.exists()) outDir.mkdirs();
+                if (!outDir.exists() && !outDir.mkdirs()) { cb.onFailed(assetId, "pdf_output_unavailable"); return; }
 
                 try (ParcelFileDescriptor pfd = ParcelFileDescriptor.open(pdf, ParcelFileDescriptor.MODE_READ_ONLY);
                      PdfRenderer renderer = new PdfRenderer(pfd)) {
 
-                    int pageCount = renderer.getPageCount();
+                    int pageCount = Math.min(renderer.getPageCount(), MAX_PAGES);
                     Log.i(TAG, "[prerender] " + assetId + " pages=" + pageCount);
 
                     for (int i = 0; i < pageCount; i++) {
@@ -74,18 +76,21 @@ public class PdfPrerenderer {
                                 h = MAX_HEIGHT; w = Math.round(MAX_HEIGHT * aspect);
                             }
 
-                            Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-                            bmp.eraseColor(Color.WHITE);
-                            page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
-
                             String safeId = assetId.replaceAll("[^a-zA-Z0-9._-]", "_");
                             if (safeId.length() > 120) safeId = safeId.substring(safeId.length() - 120);
-                            File outFile = new File(outDir, safeId + "_page" + i + ".jpg");
+                            File outFile = SafeFiles.child(outDir, safeId + "_page" + i + ".jpg");
 
-                            try (FileOutputStream fos = new FileOutputStream(outFile)) {
-                                bmp.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, fos);
+                            Bitmap bmp = null;
+                            try {
+                                bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                                bmp.eraseColor(Color.WHITE);
+                                page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                                try (FileOutputStream fos = new FileOutputStream(outFile)) {
+                                    bmp.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, fos);
+                                }
+                            } finally {
+                                if (bmp != null && !bmp.isRecycled()) bmp.recycle();
                             }
-                            bmp.recycle();
                             paths.add(outFile.getAbsolutePath());
                             Log.d(TAG, "[page " + i + "] -> " + outFile.getName());
                         }
