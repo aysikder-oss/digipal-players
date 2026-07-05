@@ -83,7 +83,14 @@ package com.digipal.signage;
               }
           }
 
-          @Override public int onStartCommand(Intent i, int f, int s) { return START_STICKY; }
+          @Override
+          public int onStartCommand(Intent i, int f, int s) {
+              if (!isAutoRelaunchEnabled()) {
+                  stopSelf();
+                  return START_NOT_STICKY;
+              }
+              return START_STICKY;
+          }
           @Override public IBinder onBind(Intent i) { return null; }
           @Override public void onDestroy() {
               if (handler != null) handler.removeCallbacks(loop);
