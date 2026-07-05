@@ -61,6 +61,17 @@ import android.os.Looper;
      *  boot from a last-known-good shell snapshot when the configured server is unreachable. */
     private PlayerShellManager playerShellManager;
     private boolean bootedFromLocalShell = false;
+    /** Mount-confirmation watchdog (fixes silent blank-screen boots from a broken local shell).
+     *  onPageFinished only proves the top-level HTML document loaded without an HTTP error — it
+     *  says nothing about whether the JS app actually mounted anything (e.g. the pairing screen).
+     *  A local shell missing/corrupting a referenced asset used to still pass that check and get
+     *  promoted to "last_good" forever. The JS side now calls Android.reportAppMounted() once
+     *  real content renders; if that signal doesn't arrive within MOUNT_WATCHDOG_MS of
+     *  onPageFinished, the boot is treated as failed. */
+    private volatile boolean appMountConfirmed = false;
+    private final android.os.Handler mountWatchdogHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable mountWatchdogRunnable;
+    private static final long MOUNT_WATCHDOG_MS = 8000;
     /** "texture" or "surface" — defaults to "texture" on Fire TV, "surface" elsewhere */
     private static final String PREF_VIDEO_RENDERER = "pref_video_renderer";
     private boolean isUserClosing = false;
@@ -449,16 +460,25 @@ import android.os.Looper;
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 super.onPageStarted(view, url, favicon);
                 hasHttpError = false;
+                appMountConfirmed = false;
+                if (mountWatchdogRunnable != null) mountWatchdogHandler.removeCallbacks(mountWatchdogRunnable);
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 if (!hasHttpError) {
-                    // Local shell (or server-loaded shell) rendered without an HTTP/network error —
-                    // promote whatever is currently "current" to last_good so a future boot can
-                    // trust it as a rollback target (local player shell hardening task).
-                    if (playerShellManager != null) playerShellManager.markCurrentAsGood();
+                    // The HTML document loaded without an HTTP/network error, but that alone does
+                    // NOT prove the JS app actually mounted anything — a local shell missing/
+                    // corrupting a referenced asset renders a blank page with no HTTP error at
+                    // all (WebViewAssetLoader 404s a sub-resource silently; onReceivedError only
+                    // fires for the main frame). Wait for the JS side to positively confirm real
+                    // content rendered (Android.reportAppMounted()) before promoting this shell to
+                    // last_good or clearing the error overlay. If confirmation never arrives,
+                    // onMountWatchdogTimeout() below treats it as a failed boot.
+                    if (mountWatchdogRunnable != null) mountWatchdogHandler.removeCallbacks(mountWatchdogRunnable);
+                    mountWatchdogRunnable = () -> onMountWatchdogTimeout();
+                    mountWatchdogHandler.postDelayed(mountWatchdogRunnable, MOUNT_WATCHDOG_MS);
                     errorContainer.setVisibility(View.GONE);
                     webView.setVisibility(View.VISIBLE);
                     // Suppress webkit media controls and the native video
@@ -640,6 +660,21 @@ import android.os.Looper;
         @JavascriptInterface
         public void scheduleRelaunch() {
             scheduleAppRelaunch(2000);
+        }
+
+        /** Called by the web app once it has actually rendered real content (pairing screen,
+         *  player, error screen — anything past a blank shell). Cancels the mount watchdog and,
+         *  the first time it fires after a page load, promotes the current shell to last_good —
+         *  replacing the old blind "onPageFinished with no HTTP error = good" promotion, which
+         *  could not tell a real render apart from a silently blank one (fixes stuck blank
+         *  pairing/player screens on a broken locally cached shell). */
+        @JavascriptInterface
+        public void reportAppMounted() {
+            appMountConfirmed = true;
+            if (mountWatchdogRunnable != null) mountWatchdogHandler.removeCallbacks(mountWatchdogRunnable);
+            if (playerShellManager != null) {
+                try { playerShellManager.markCurrentAsGood(); } catch (Throwable ignored) {}
+            }
         }
 
         @JavascriptInterface
@@ -3032,6 +3067,25 @@ import android.os.Looper;
             }
         } catch (Throwable ignored) {}
         return false;
+    }
+
+    /** Fires MOUNT_WATCHDOG_MS after a page finishes loading with no HTTP error, if the JS side
+     *  never called Android.reportAppMounted() by then. Means the shell rendered blank — most
+     *  commonly a locally cached shell (local player shell hardening task) that is missing a
+     *  referenced asset. Recover the same way a hard load failure recovers: roll back to the
+     *  last known-good local shell if one exists, otherwise drop the broken "current" pointer so
+     *  the next attempt loads straight from the network instead of repeating the same failure. */
+    private void onMountWatchdogTimeout() {
+        if (appMountConfirmed) return;
+        Log.w("Digipal", "[shell] app did not report mount within " + MOUNT_WATCHDOG_MS
+                + "ms of onPageFinished — treating shell as broken");
+        if (maybeRollbackLocalShell()) return;
+        if (playerShellManager != null) {
+            try { playerShellManager.invalidateCurrent(); } catch (Throwable ignored) {}
+        }
+        bootedFromLocalShell = false;
+        hasHttpError = false;
+        webView.postDelayed(() -> loadPlayerUrl(getServerUrl()), 300);
     }
 
     // ---- Crash resilience: renderer recovery, memory pressure, ANR watchdog ----
