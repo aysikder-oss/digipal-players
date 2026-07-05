@@ -2,20 +2,23 @@ package com.digipal.signage;
 
   import android.content.Context;
   import android.graphics.Canvas;
+  import android.util.AttributeSet;
   import android.util.Log;
-  import android.widget.ImageView;
+  import androidx.appcompat.widget.AppCompatImageView;
 
-  /**
-   * ImageView that swallows RuntimeException during draw so a recycled-bitmap
-   * race condition during rapid playlist image transitions does not crash the app.
-   * Inspired by OptiSigns' ImageViewRecyclable pattern.
-   */
-  public class RecyclingSafeImageView extends ImageView {
-
+  public class RecyclingSafeImageView extends AppCompatImageView {
       private static final String TAG = "DigipalImageView";
 
       public RecyclingSafeImageView(Context context) {
           super(context);
+      }
+
+      public RecyclingSafeImageView(Context context, AttributeSet attrs) {
+          super(context, attrs);
+      }
+
+      public RecyclingSafeImageView(Context context, AttributeSet attrs, int defStyleAttr) {
+          super(context, attrs, defStyleAttr);
       }
 
       @Override
@@ -23,10 +26,16 @@ package com.digipal.signage;
           try {
               super.onDraw(canvas);
           } catch (RuntimeException e) {
-              // Swallow recycled-bitmap RuntimeException — happens when Glide
-              // recycles a bitmap that is still being drawn during a transition.
               Log.w(TAG, "onDraw suppressed (recycled bitmap): " + e.getMessage());
           }
+      }
+
+      @Override
+      protected void onDetachedFromWindow() {
+          try {
+              setImageDrawable(null);
+          } catch (Throwable ignored) {}
+          super.onDetachedFromWindow();
       }
   }
   
