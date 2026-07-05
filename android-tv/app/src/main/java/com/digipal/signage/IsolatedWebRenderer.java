@@ -1,5 +1,6 @@
 package com.digipal.signage;
 
+import android.annotation.SuppressLint;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
@@ -168,7 +169,7 @@ public class IsolatedWebRenderer {
             // Digipal.ready/error/heartbeat/event/requestNavigation/requestExit call
             // (see RenderBridge below) -- lets us tell apart two generations of the
             // same slideId, which slideId matching alone cannot do.
-            url = url + (url.contains("?") ? "&" : "?") + "renderToken=" + this.currentRenderToken;
+            url = appendQueryParameter(url, "renderToken", String.valueOf(this.currentRenderToken));
               // javac requires effectively-final captured locals inside the timeoutRunnable
               // lambda below; url is reassigned above (renderToken append) so it no longer
               // qualifies -- capture a separate final copy for the lambda to reference.
@@ -242,14 +243,32 @@ public class IsolatedWebRenderer {
     /** Returns true (cancel navigation) if uri's host differs from trustedHost.
  *  A null/unparsable uri or a null trustedHost (nothing loaded yet) is allowed
  *  through rather than blocked, since it can't be a cross-origin escape. */
-    private boolean blockUntrustedNavigation(android.net.Uri uri) {
-        if (uri == null || trustedHost == null) return false;
-        String host = uri.getHost();
-        if (host != null && host.equalsIgnoreCase(trustedHost)) return false;
-        Log.w(TAG, "[blocked_cross_origin_navigation] slide=" + currentSlideId + " from=" + trustedHost + " to=" + uri);
-        return true;
-    }
+    private static String appendQueryParameter(String url, String key, String value) {
+          try {
+              android.net.Uri uri = android.net.Uri.parse(url);
+              return uri.buildUpon().appendQueryParameter(key, value).build().toString();
+          } catch (Throwable t) {
+              return url + (url != null && url.contains("?") ? "&" : "?")
+                      + android.net.Uri.encode(key) + "=" + android.net.Uri.encode(value);
+          }
+      }
 
+      private boolean blockUntrustedNavigation(android.net.Uri uri) {
+          if (uri == null) return true;
+          String scheme = uri.getScheme();
+          if ("about".equalsIgnoreCase(scheme)) return false;
+          if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+              Log.w(TAG, "[blocked_navigation_scheme] slide=" + currentSlideId + " uri=" + uri);
+              return true;
+          }
+          if (trustedHost == null) return false;
+          String host = uri.getHost();
+          if (host != null && host.equalsIgnoreCase(trustedHost)) return false;
+          Log.w(TAG, "[blocked_cross_origin_navigation] slide=" + currentSlideId + " from=" + trustedHost + " to=" + uri);
+          return true;
+      }
+
+    @SuppressLint("SetJavaScriptEnabled")
     private void ensureWebView() {
         if (webView != null) return;
         webView = new WebView(ctx);
@@ -286,18 +305,27 @@ public class IsolatedWebRenderer {
                 // network loading (returns null).
                 @Override public android.webkit.WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
                     try {
-                        android.net.Uri uri = req != null ? req.getUrl() : null;
-                        if (uri != null && "appassets.androidplatform.net".equals(uri.getHost())
-                                && mediaDownloadManager != null) {
-                            File cached = mediaDownloadManager.resolveLocalMediaFile(uri.getPath());
-                            if (cached != null) {
-                                String mime = MediaDownloadManager.guessMimeType(cached);
-                                return new android.webkit.WebResourceResponse(mime, null,
-                                        new java.io.FileInputStream(cached));
-                            }
-                        }
-                    } catch (Throwable ignored) {}
-                    return null;
+                          android.net.Uri uri = req != null ? req.getUrl() : null;
+                          if (uri != null && "appassets.androidplatform.net".equals(uri.getHost())
+                                  && mediaDownloadManager != null) {
+                              File cached = mediaDownloadManager.resolveLocalMediaFile(uri.getPath());
+                              if (cached != null) {
+                                  String mime = MediaDownloadManager.guessMimeType(cached);
+                                  return new android.webkit.WebResourceResponse(mime, null,
+                                          new java.io.FileInputStream(cached));
+                              }
+                          }
+                          if (uri != null && "http".equalsIgnoreCase(uri.getScheme())) {
+                              String reqHost = uri.getHost();
+                              if (!UrlPolicy.isPrivateHost(reqHost)) {
+                                  return new android.webkit.WebResourceResponse(
+                                          "text/plain",
+                                          "UTF-8",
+                                          new java.io.ByteArrayInputStream(new byte[0]));
+                              }
+                          }
+                      } catch (Throwable ignored) {}
+                      return null;
                 }
                 @Override public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError err) {
                     // P7: only ever fail the active slide for a main-frame error on the
@@ -423,20 +451,24 @@ public class IsolatedWebRenderer {
                   });
               }
               @JavascriptInterface public void event(String slideId, long renderToken, String eventName, String payload) {
-                  if (!isCurrentGeneration(slideId, renderToken)) {
-                      logDiagnostic("stale_event_ignored", slideId, renderToken, eventName);
-                      return;
-                  }
-                  Log.d(TAG, "[event] " + slideId + " " + eventName);
-              }
-              @JavascriptInterface public void requestNavigation(String slideId, long renderToken, String target) {
-                  if (!isCurrentGeneration(slideId, renderToken)) {
-                      logDiagnostic("stale_requestNavigation_ignored", slideId, renderToken, target);
-                      return;
-                  }
-                  Log.d(TAG, "[requestNavigation] " + slideId + " -> " + target);
-              }
-              @JavascriptInterface public void requestExit(String slideId, long renderToken) {
+                    handler.post(() -> {
+                        if (!isCurrentGeneration(slideId, renderToken)) {
+                            logDiagnostic("stale_event_ignored", slideId, renderToken, eventName);
+                            return;
+                        }
+                        Log.d(TAG, "[event] " + slideId + " " + eventName);
+                    });
+                }
+                @JavascriptInterface public void requestNavigation(String slideId, long renderToken, String target) {
+                    handler.post(() -> {
+                        if (!isCurrentGeneration(slideId, renderToken)) {
+                            logDiagnostic("stale_requestNavigation_ignored", slideId, renderToken, target);
+                            return;
+                        }
+                        Log.d(TAG, "[requestNavigation] " + slideId + " -> " + target);
+                    });
+                }
+                @JavascriptInterface public void requestExit(String slideId, long renderToken) {
                   handler.post(() -> {
                       if (!isCurrentGeneration(slideId, renderToken)) {
                           logDiagnostic("stale_requestExit_ignored", slideId, renderToken, null);
