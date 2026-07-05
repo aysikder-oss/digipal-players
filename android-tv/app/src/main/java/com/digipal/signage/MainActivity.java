@@ -36,7 +36,12 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
   import android.text.format.Formatter;
-  public class MainActivity extends Activity {
+import androidx.annotation.OptIn;
+import androidx.media3.common.util.UnstableApi;
+import java.util.Locale;
+
+@OptIn(markerClass = UnstableApi.class)
+public class MainActivity extends Activity {
 
     /** Set true in onResume, false in onStop â read by WatchdogService.inForeground(). */
     public static volatile boolean activityVisible = false;
@@ -342,11 +347,13 @@ import android.util.Log;
 
         
           // Start crash watchdog â relaunches app within 10s if it crashes or is killed.
-          Intent watchdogIntent = new Intent(this, WatchdogService.class);
-          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-              startForegroundService(watchdogIntent);
-          } else {
-              startService(watchdogIntent);
+          if (isAutoRelaunchEnabled()) {
+              Intent watchdogIntent = new Intent(this, WatchdogService.class);
+              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                  startForegroundService(watchdogIntent);
+              } else {
+                  startService(watchdogIntent);
+              }
           }
   
         String serverUrl = getServerUrl();
@@ -495,27 +502,35 @@ import android.util.Log;
                         "})();",
                         null);
                 // Inject offline playlist cache for immediate use by React app (window.__digipalOfflineCache)
-                  if (cacheDb != null) {
-                      final android.webkit.WebView _wv = webView;
-                      new Thread(() -> {
-                          try {
-                              java.util.List<CacheDatabase.CacheObject> all = cacheDb.cacheDao().findAll();
-                              if (all == null || all.isEmpty()) return;
-                              StringBuilder js = new StringBuilder(
-                                  "if(!window.__digipalOfflineCache)window.__digipalOfflineCache={};");
-                              for (CacheDatabase.CacheObject item : all) {
-                                  js.append("window.__digipalOfflineCache[\"")
-                                    .append(item.key.replace("\\", "\\\\").replace("\"", "\\\""))
-                                    .append("\"] = ").append(item.json).append(";");
-                              }
-                              final String script = js.toString();
-                              runOnUiThread(() -> _wv.evaluateJavascript(script, null));
-                          } catch (Throwable e) {
-                              android.util.Log.w("Digipal", "Offline cache inject: " + e.getMessage());
-                          }
-                      }).start();
-                  }
-                  // Inject APK crash stats and any pending crash report for web-player pickup
+                    if (cacheDb != null) {
+                        final android.webkit.WebView _wv = webView;
+                        new Thread(() -> {
+                            try {
+                                java.util.List<CacheDatabase.CacheObject> all = cacheDb.cacheDao().findAll();
+                                if (all == null || all.isEmpty()) return;
+                                StringBuilder js = new StringBuilder(
+                                    "if(!window.__digipalOfflineCache)window.__digipalOfflineCache={};");
+                                for (CacheDatabase.CacheObject item : all) {
+                                    if (item == null || item.key == null || item.json == null) continue;
+                                    try {
+                                        new org.json.JSONTokener(item.json).nextValue();
+                                    } catch (Throwable invalid) {
+                                        continue;
+                                    }
+                                    js.append("window.__digipalOfflineCache[")
+                                      .append(org.json.JSONObject.quote(item.key))
+                                      .append("]=")
+                                      .append(item.json)
+                                      .append(";");
+                                }
+                                final String script = js.toString();
+                                runOnUiThread(() -> { if (_wv != null) _wv.evaluateJavascript(script, null); });
+                            } catch (Throwable e) {
+                                android.util.Log.w("Digipal", "Offline cache inject: " + e.getMessage());
+                            }
+                        }, "DigipalOfflineCacheInject").start();
+                    }
+                    // Inject APK crash stats and any pending crash report for web-player pickup
                   try {
                       android.content.SharedPreferences _cp = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
                       int _cc = _cp.getInt(CrashCounter.KEY_CRASH_COUNT, 0);
@@ -571,7 +586,17 @@ import android.util.Log;
 
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                return false;
+                String url = request != null && request.getUrl() != null ? request.getUrl().toString() : null;
+                if (isAllowedMainWebViewUrl(url)) return false;
+                Log.w("DigipalSecurity", "Blocked main WebView navigation to " + url);
+                return true;
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                if (isAllowedMainWebViewUrl(url)) return false;
+                Log.w("DigipalSecurity", "Blocked main WebView navigation to " + url);
+                return true;
             }
 
             @android.annotation.TargetApi(Build.VERSION_CODES.O)
@@ -843,18 +868,7 @@ import android.util.Log;
                   o.put("manufacturer", android.os.Build.MANUFACTURER);
                   o.put("androidVersion", android.os.Build.VERSION.RELEASE);
                   o.put("appVersion", BuildConfig.VERSION_NAME);
-                  String androidId = android.provider.Settings.Secure.getString(
-                      getContentResolver(), android.provider.Settings.Secure.ANDROID_ID);
-                  if (androidId != null && !androidId.isEmpty()) {
-                      try {
-                          java.security.MessageDigest md =
-                              java.security.MessageDigest.getInstance("SHA-256");
-                          byte[] hash = md.digest(androidId.getBytes("UTF-8"));
-                          StringBuilder sb = new StringBuilder();
-                          for (byte b : hash) sb.append(String.format("%02x", b));
-                          o.put("deviceId", sb.toString().substring(0, 16));
-                      } catch (java.security.NoSuchAlgorithmException ignored) {}
-                  }
+                  o.put("deviceId", getOrCreateInstallId());
                   return o.toString();
               } catch (Throwable e) {
                   return "{}";
@@ -984,14 +998,19 @@ import android.util.Log;
           @JavascriptInterface
         public void notifyPaired(String url) {
             SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-            if (prefs.getBoolean("cloud_pairing_pending", false)) {
-                String serverUrl = (url != null && !url.isEmpty()) ? url : BuildConfig.SERVER_URL;
-                prefs.edit()
+            if (!prefs.getBoolean("cloud_pairing_pending", false)) return;
+
+            String serverUrl = (url != null && !url.trim().isEmpty()) ? url.trim() : BuildConfig.SERVER_URL;
+            if (!UrlPolicy.isAllowedServerUrl(serverUrl)) {
+                Log.w("DigipalSecurity", "Rejected paired server URL: " + serverUrl);
+                return;
+            }
+
+            prefs.edit()
                     .putString(KEY_SERVER_MODE, "cloud")
                     .putString(KEY_SERVER_URL, serverUrl)
                     .putBoolean("cloud_pairing_pending", false)
                     .apply();
-            }
         }
 
           @JavascriptInterface
@@ -1005,34 +1024,49 @@ import android.util.Log;
 
           @JavascriptInterface
           public void captureScreenshot(String requestId) {
+              final String quotedId = org.json.JSONObject.quote(requestId == null ? "" : requestId);
+              if (webView == null) return;
               if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
                   // PixelCopy requires API 26+; signal null so the web side falls back to html2canvas
-                  runOnUiThread(() ->
-                      webView.evaluateJavascript(
-                          "if(window.__digipalNativeScreenshot)window.__digipalNativeScreenshot('"
-                              + requestId + "',null)", null));
+                  runOnUiThread(() -> {
+                      if (webView != null) {
+                          webView.evaluateJavascript(
+                              "if(window.__digipalNativeScreenshot)window.__digipalNativeScreenshot("
+                                  + quotedId + ",null)",
+                              null);
+                      }
+                  });
                   return;
               }
-              Bitmap bmp = Bitmap.createBitmap(
-                      webView.getWidth(), webView.getHeight(), Bitmap.Config.ARGB_8888);
+              int width = Math.max(1, webView.getWidth());
+              int height = Math.max(1, webView.getHeight());
+              Bitmap bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
               PixelCopy.request(
                       getWindow(),
-                      new Rect(0, 0, webView.getWidth(), webView.getHeight()),
+                      new Rect(0, 0, width, height),
                       bmp,
                       copyResult -> {
                           String b64 = null;
-                          if (copyResult == PixelCopy.SUCCESS) {
-                              ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                              bmp.compress(Bitmap.CompressFormat.JPEG, 85, baos);
-                              b64 = "data:image/jpeg;base64,"
-                                      + Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP);
+                          try {
+                              if (copyResult == PixelCopy.SUCCESS) {
+                                  ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                                  bmp.compress(Bitmap.CompressFormat.JPEG, 85, baos);
+                                  b64 = "data:image/jpeg;base64,"
+                                          + Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP);
+                              }
+                              final String payload = b64;
+                              final String quotedPayload = payload == null ? "null" : org.json.JSONObject.quote(payload);
+                              runOnUiThread(() -> {
+                                  if (webView != null) {
+                                      webView.evaluateJavascript(
+                                              "if(window.__digipalNativeScreenshot)window.__digipalNativeScreenshot("
+                                                      + quotedId + "," + quotedPayload + ")",
+                                              null);
+                                  }
+                              });
+                          } finally {
+                              try { bmp.recycle(); } catch (Throwable ignored) {}
                           }
-                          final String payload = b64;
-                          runOnUiThread(() ->
-                              webView.evaluateJavascript(
-                                  "if(window.__digipalNativeScreenshot)window.__digipalNativeScreenshot('"
-                                      + requestId + "'," + (payload == null ? "null" : "'" + payload + "'") + ")",
-                                  null));
                       },
                       new Handler(Looper.getMainLooper()));
           }
@@ -1150,9 +1184,7 @@ import android.util.Log;
                                   // Release old player now that new content is confirmed visible
                                   pendingOldPlayer = null;
                                   if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
-                                  webView.evaluateJavascript(
-                                      "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
-                                      if (contentId != null && !contentId.isEmpty()) { webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady_"+contentId+"==='function')window.__digipalNativeVideoReady_"+contentId+"()", null); }
+                                  notifyNativeVideoReady(contentId);
                               } else {
                                   // Preload still buffering â old content stays visible on activeView until first frame
                                   final boolean[] done = {false};
@@ -1177,9 +1209,7 @@ import android.util.Log;
                                               preloadVideoReady = false;
                                               pendingOldPlayer = null;
                                               if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
-                                              webView.evaluateJavascript(
-                                                  "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
-                                                  if (contentId != null && !contentId.isEmpty()) { webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady_"+contentId+"==='function')window.__digipalNativeVideoReady_"+contentId+"()", null); }
+                                              notifyNativeVideoReady(contentId);
                                           });
                                       }
                                       @Override public void onPlayerError(androidx.media3.common.PlaybackException error) {
@@ -1198,9 +1228,7 @@ import android.util.Log;
                                           pendingOldPlayer = null;
                                           if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
                                           android.util.Log.w("DigipalMetrics", "[preload onPlayerError fatal] advancing playlist");
-                                          webView.evaluateJavascript(
-                                              "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
-                                              if (contentId != null && !contentId.isEmpty()) { webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady_"+contentId+"==='function')window.__digipalNativeVideoReady_"+contentId+"()", null); }
+                                          notifyNativeVideoReady(contentId);
                                       }
                                   };
                                   exoPlayer.addListener(nativeVideoListener);
@@ -1223,9 +1251,7 @@ import android.util.Log;
                                           preloadVideoReady = false;
                                           pendingOldPlayer = null;
                                           if (oldPlayer != null) { try { oldPlayer.release(); } catch (Throwable ignored) {} }
-                                          webView.evaluateJavascript(
-                                              "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
-                                              if (contentId != null && !contentId.isEmpty()) { webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady_"+contentId+"==='function')window.__digipalNativeVideoReady_"+contentId+"()", null); }
+                                          notifyNativeVideoReady(contentId);
                                       }
                                   };
                                   videoReadyHandler = readyHandler; videoReadyRunnable = readyCb;
@@ -1281,9 +1307,7 @@ import android.util.Log;
                                       pendingOldPlayer = null;
                                       if (failedCold != null) { try { failedCold.stop(); failedCold.release(); } catch (Throwable ignored) {} }
                                       preloadView.setPlayer(null);
-                                      webView.evaluateJavascript(
-                                          "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
-                                          if (contentId != null && !contentId.isEmpty()) { webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady_"+contentId+"==='function')window.__digipalNativeVideoReady_"+contentId+"()", null); }
+                                      notifyNativeVideoReady(contentId);
                                       webView.evaluateJavascript("if(window.__digipalNativeMetrics)window.__digipalNativeMetrics({type:'videoFallback',path:'cold-load',latencyMs:" + diagFbMs + "})", null);
                                   }
                               };
@@ -1310,10 +1334,12 @@ import android.util.Log;
                                           activeVideoViewIsA = !activeVideoViewIsA;
                                           pendingOldPlayer = null;
                                           if (oldPlayer != null) { try { oldPlayer.stop(); oldPlayer.release(); } catch (Throwable ignored) {} }
+                                          notifyNativeVideoReady(contentId);
+                                          String safeDiagPath = org.json.JSONObject.quote(diagPath == null ? "" : diagPath);
                                           webView.evaluateJavascript(
-                                              "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
-                                              if (contentId != null && !contentId.isEmpty()) { webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady_"+contentId+"==='function')window.__digipalNativeVideoReady_"+contentId+"()", null); }
-                                          webView.evaluateJavascript("if(window.__digipalNativeMetrics)window.__digipalNativeMetrics({type:'videoReady',path:'" + diagPath + "',latencyMs:" + diagLatencyMs + "})", null);
+                                                  "if(window.__digipalNativeMetrics)window.__digipalNativeMetrics({type:'videoReady',path:"
+                                                          + safeDiagPath + ",latencyMs:" + diagLatencyMs + "})",
+                                                  null);
                                       });
                                   }
                                   @Override public void onPlayerError(androidx.media3.common.PlaybackException error) {
@@ -1335,9 +1361,7 @@ import android.util.Log;
                                       if (failedErr != null) { try { failedErr.stop(); failedErr.release(); } catch (Throwable ignored) {} }
                                       preloadView.setPlayer(null);
                                       android.util.Log.w("DigipalMetrics", "[cold onPlayerError fatal] advancing playlist");
-                                      webView.evaluateJavascript(
-                                          "if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady()", null);
-                                          if (contentId != null && !contentId.isEmpty()) { webView.evaluateJavascript("if(typeof window.__digipalNativeVideoReady_"+contentId+"==='function')window.__digipalNativeVideoReady_"+contentId+"()", null); }
+                                      notifyNativeVideoReady(contentId);
                                   }
                               };
                               exoPlayer.addListener(nativeVideoListener);
@@ -2034,7 +2058,7 @@ import android.util.Log;
       /** True when running on an Amazon Fire TV / Fire Stick device. */
       private boolean isFireTv() {
           return android.os.Build.MANUFACTURER.equalsIgnoreCase("Amazon")
-              || android.os.Build.MODEL.toUpperCase().startsWith("AFT");
+              || android.os.Build.MODEL.toUpperCase(Locale.ROOT).startsWith("AFT");
       }
 
       /** Returns true when TextureView renderer is selected (default for Fire TV). */
@@ -2134,7 +2158,7 @@ import android.util.Log;
                 // Per-asset WebView policy task: track the Android System WebView
                 // package/version for diagnostics — surfaced in logs/telemetry, not a
                 // new dashboard.
-                android.util.Log.i("DigipalWebView", "system webview = " + WebViewPolicy.currentWebViewPackageInfo());
+                android.util.Log.i("DigipalWebView", "system webview = " + WebViewPolicy.currentWebViewPackageInfo(MainActivity.this));
 
                 // ---- MemoryBudgetManager: 5-second memory tier poller ----
                 memoryBudgetManager = new MemoryBudgetManager(
@@ -2224,8 +2248,7 @@ import android.util.Log;
                         }
                     },
                     js -> runOnUiThread(() -> { if (webView != null) webView.evaluateJavascript(js, null); }));
-                AppRecoverManager.setRecoveryCoordinator(recoveryCoordinator);
-
+                
                 final ReliabilitySupervisor[] supRef = new ReliabilitySupervisor[1];
 
               playlistScheduler = new PlaylistScheduler(
@@ -2761,81 +2784,72 @@ import android.util.Log;
       }
 
 
-    /**
-     * Apply WebView security/performance settings appropriate for the slide type.
-     * Must be called on the UI thread.
-     *
-     * DESIGN_KIOSK: full settings — file access, universal access, ALWAYS_ALLOW mixed content,
-     *               renderer priority IMPORTANT (keeps renderer alive under memory pressure).
-     * SIMPLE_URL  : restricted — no file access, no universal access,
-     *               COMPATIBILITY_MODE (blocks active mixed content), renderer priority NORMAL.
-     */
-    private void applyWebViewProfile(PlaylistScheduler.SlideType slideType) {
-        if (webView == null) return;
-        android.webkit.WebSettings settings = webView.getSettings();
-        boolean isDesignKiosk = slideType == PlaylistScheduler.SlideType.WEBVIEW_DESIGN
-                || slideType == PlaylistScheduler.SlideType.WEBVIEW_KIOSK;
-        if (isDesignKiosk) {
-            settings.setAllowFileAccess(true);
-            settings.setAllowFileAccessFromFileURLs(true);
-            settings.setAllowUniversalAccessFromFileURLs(true);
-            settings.setDatabaseEnabled(true);
-            settings.setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true);
-            }
-        } else {
-            // SIMPLE_URL: restrict file access, block active mixed content
-            settings.setAllowFileAccess(false);
-            settings.setAllowFileAccessFromFileURLs(false);
-            settings.setAllowUniversalAccessFromFileURLs(false);
-            settings.setDatabaseEnabled(false);
-            settings.setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_BOUND, true);
-            }
-        }
-    }
+    
 
       private void scheduleAppRelaunch(long delayMs) {
         try {
             Intent intent = new Intent(this, MainActivity.class);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                    | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    | Intent.FLAG_ACTIVITY_SINGLE_TOP);
 
             int flags = PendingIntent.FLAG_ONE_SHOT;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 flags |= PendingIntent.FLAG_IMMUTABLE;
             }
 
-            PendingIntent pendingIntent = PendingIntent.getActivity(
-                this, 0, intent, flags
-            );
-
+            PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent, flags);
             AlarmManager alarmManager = (AlarmManager) getSystemService(ALARM_SERVICE);
-            if (alarmManager != null) {
-                long triggerAt = System.currentTimeMillis() + delayMs;
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent);
-                } else {
-                    alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent);
-                }
-            }
-        } catch (SecurityException e) {
-            // Fallback: try non-exact alarm if exact alarm permission not granted
-            try {
-                Intent intent = new Intent(this, MainActivity.class);
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                int flags = PendingIntent.FLAG_ONE_SHOT;
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    flags |= PendingIntent.FLAG_IMMUTABLE;
-                }
-                PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent, flags);
-                AlarmManager alarmManager = (AlarmManager) getSystemService(ALARM_SERVICE);
-                if (alarmManager != null) {
-                    alarmManager.set(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + delayMs, pendingIntent);
-                }
-            } catch (Throwable ignored) {}
+            if (alarmManager == null) return;
+
+            long earliest = android.os.SystemClock.elapsedRealtime() + delayMs;
+            alarmManager.setWindow(
+                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    earliest,
+                    5_000L,
+                    pendingIntent);
+        } catch (Throwable t) {
+            Log.e("Digipal", "scheduleAppRelaunch failed", t);
         }
+    }
+
+    private boolean isAllowedMainWebViewUrl(String rawUrl) {
+        if (rawUrl == null) return false;
+        if (rawUrl.startsWith("about:blank")) return true;
+        try {
+            android.net.Uri uri = android.net.Uri.parse(rawUrl);
+            String host = uri.getHost();
+            String scheme = uri.getScheme();
+            if ("appassets.androidplatform.net".equalsIgnoreCase(host)) return true;
+            if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) return false;
+            android.net.Uri server = android.net.Uri.parse(getServerUrl());
+            String serverHost = server.getHost();
+            return serverHost != null && host != null && serverHost.equalsIgnoreCase(host);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private void notifyNativeVideoReady(String contentId) {
+        if (webView == null) return;
+        String safeContentId = org.json.JSONObject.quote(contentId == null ? "" : contentId);
+        webView.evaluateJavascript(
+                "try{var _f=window['__digipalNativeVideoReady_'+"
+                        + safeContentId
+                        + "];if(typeof _f==='function')_f();"
+                        + "else if(typeof window.__digipalNativeVideoReady==='function')window.__digipalNativeVideoReady();"
+                        + "}catch(e){}",
+                null);
+    }
+
+    private String getOrCreateInstallId() {
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        String id = prefs.getString("install_id", null);
+        if (id == null || id.isEmpty()) {
+            id = java.util.UUID.randomUUID().toString();
+            prefs.edit().putString("install_id", id).apply();
+        }
+        return id;
     }
 
     private boolean isAutoRelaunchEnabled() {
@@ -3498,7 +3512,7 @@ import android.util.Log;
         super.onResume();
         activityVisible = true;
         hideSystemUI();
-        webView.onResume();
+        if (webView != null) webView.onResume();
         // Resume PlaylistScheduler slide timer with remaining duration.
         if (playlistScheduler != null) playlistScheduler.resume();
     }
@@ -3508,7 +3522,7 @@ import android.util.Log;
         super.onPause();
         // Pause PlaylistScheduler so advance() does not fire while backgrounded.
         if (playlistScheduler != null) playlistScheduler.pause();
-        webView.onPause();
+        if (webView != null) webView.onPause();
     }
 
     @Override
@@ -3525,6 +3539,8 @@ import android.util.Log;
        */
       private void releaseAllRenderers() {
           try {
+              stopStallWatchdog();
+              stopBufferWatchdog();
               // Cancel pending first-frame ready timer
               if (videoReadyHandler != null && videoReadyRunnable != null) {
                   videoReadyHandler.removeCallbacks(videoReadyRunnable);
@@ -3583,6 +3599,7 @@ import android.util.Log;
         // Using it alongside scheduleAppRelaunch creates a recovery race condition.
         if (webView != null) {
             webView.destroy();
+            webView = null;
         }
         releaseAllRenderers(); // releases exoPlayer, preloadPlayer, pendingOldPlayer, Glide
         if (videoCache != null) { try { videoCache.release(); } catch (Throwable ignored) {} videoCache = null; }
@@ -3608,7 +3625,7 @@ import android.util.Log;
       private void showDiagnosticsOverlay() {
             if (diagnosticsOverlay != null) return;
             try {
-                android.widget.FrameLayout root = (android.widget.FrameLayout) getWindow().getDecorView();
+                android.widget.FrameLayout root = findViewById(android.R.id.content);
 
                 String ip = "unavailable";
                 try {
@@ -3616,7 +3633,7 @@ import android.util.Log;
                     if (wm != null) ip = Formatter.formatIpAddress(wm.getConnectionInfo().getIpAddress());
                 } catch (Throwable ignored) {}
                 long uptimeSec = android.os.SystemClock.elapsedRealtime() / 1000;
-                String uptime = String.format("%dh %02dm %02ds", uptimeSec / 3600, (uptimeSec % 3600) / 60, uptimeSec % 60);
+                String uptime = String.format(Locale.ROOT, "%dh %02dm %02ds", uptimeSec / 3600, (uptimeSec % 3600) / 60, uptimeSec % 60);
                 String ver = "?";
                 try { ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Throwable ignored) {}
                 final String curRenderer = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
@@ -3698,7 +3715,7 @@ import android.util.Log;
           diagDismissHandler.removeCallbacksAndMessages(null);
           if (diagnosticsOverlay != null) {
               try {
-                  android.widget.FrameLayout root = (android.widget.FrameLayout) getWindow().getDecorView();
+                  android.widget.FrameLayout root = findViewById(android.R.id.content);
                   root.removeView(diagnosticsOverlay);
               } catch (Throwable ignored) {}
               diagnosticsOverlay = null;
