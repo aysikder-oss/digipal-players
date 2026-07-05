@@ -43,6 +43,10 @@ package com.digipal.signage;
           @Override
           public void onCreate() {
               super.onCreate();
+              if (!isAutoRelaunchEnabled()) {
+                  stopSelf();
+                  return;
+              }
               // Read configurable interval from prefs (set by setRelaunchCheckSec JS bridge).
               int checkSec = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                       .getInt(KEY_CHECK_SEC, DEFAULT_CHECK_SEC);
@@ -92,7 +96,7 @@ package com.digipal.signage;
 
           private boolean isAutoRelaunchEnabled() {
               SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-              return prefs.getBoolean(KEY_AUTO_RELAUNCH, true);
+              return prefs.getBoolean(KEY_AUTO_RELAUNCH, false);
           }
 
           private boolean inForeground() {
@@ -117,17 +121,15 @@ package com.digipal.signage;
               // On Android O+ the alarm must use getForegroundService so the
               // PendingIntent can promote BootLaunchService to foreground.
               Intent i = new Intent(this, BootLaunchService.class);
-              int f = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
+              int f = PendingIntent.FLAG_UPDATE_CURRENT
+                      | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
               PendingIntent pi = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                   ? PendingIntent.getForegroundService(this, 2, i, f)
                   : PendingIntent.getService(this, 2, i, f);
               AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
               if (am == null) return;
-              long at = System.currentTimeMillis() + RESTART_MS;
-              try {
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi);
-                  else am.setExact(AlarmManager.RTC_WAKEUP, at, pi);
-              } catch (SecurityException e) { am.set(AlarmManager.RTC_WAKEUP, at, pi); }
+              long earliest = SystemClock.elapsedRealtime() + RESTART_MS;
+              am.setWindow(AlarmManager.ELAPSED_REALTIME_WAKEUP, earliest, 5_000L, pi);
           }
 
           private void ensureChannel() {
