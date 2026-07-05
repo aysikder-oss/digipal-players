@@ -133,7 +133,7 @@ import android.os.Looper;
     private static final long   BUF_WATCHDOG_INTERVAL_MS = 5_000L;   // check every 5s
     private static final int    BUF_WATCHDOG_STALL_TICKS = 3;        // 3 × 5s = 15s threshold
     // Native content loop — drives video/image slides via NativePlaylistManager without WebView
-    private NativePlaylistManager nativePlaylistManager;
+    private volatile String pendingNativePlaylistJson; // Codex fix 7: buffered playlist JSON until PlaylistScheduler is constructed
       // Native heartbeat for Fire TV: when WebView is paused (timers frozen), a Java
       // Handler fires evaluateJavascript every 25s to keep the WebSocket alive.
       // Without this, Amazon WebView's pauseTimers() suspends setInterval-based heartbeats
@@ -1717,16 +1717,11 @@ import android.os.Looper;
                             // via MediaDownloadManager — do NOT download here to avoid duplicate work.
                         }
                     } else {
-                        // Fallback: bare NativePlaylistManager (pre-v3.11 compat)
-                        if (nativePlaylistManager == null) {
-                            nativePlaylistManager = new NativePlaylistManager(js -> runOnUiThread(() -> {
-                                try {
-                                    if (webView != null) webView.evaluateJavascript(js, null);
-                                } catch (Throwable ignored) {}
-                            }));
-                        }
-                        nativePlaylistManager.setPlaylist(json);
-                        android.util.Log.i("DigipalNative", "[nativeLoop] setNativePlaylist: loaded slides (fallback)");
+                        // Codex fix 7: PlaylistScheduler isn't constructed yet (very early bridge
+                        // call). Buffer the JSON and flush it once the scheduler is ready instead
+                        // of falling back to the legacy JS-driven NativePlaylistManager.
+                        pendingNativePlaylistJson = json;
+                        android.util.Log.i("DigipalNative", "[nativeLoop] setNativePlaylist: buffered (scheduler not ready yet)");
                     }
                 }
 
@@ -2605,6 +2600,15 @@ import android.os.Looper;
                   playlistRepository, telemetryManager,
                   getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
               );
+
+              // Codex fix 7: flush any playlist JSON that arrived (from the WebView
+              // bridge) before PlaylistScheduler was constructed, instead of relying
+              // on the removed legacy NativePlaylistManager fallback path.
+              if (pendingNativePlaylistJson != null) {
+                  playlistScheduler.setPlaylist(pendingNativePlaylistJson);
+                  android.util.Log.i("DigipalNative", "[nativeLoop] flushed buffered playlist → PlaylistScheduler");
+                  pendingNativePlaylistJson = null;
+              }
 
               assetCacheManager = new AssetCacheManager(this, playlistRepository);
 
