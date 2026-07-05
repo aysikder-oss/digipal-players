@@ -1,5 +1,7 @@
 package com.digipal.signage;
 
+import android.content.Context;
+import android.content.Context;
 import android.os.Build;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -85,9 +87,9 @@ public class WebViewPolicy {
           // but reused across slides like WEBVIEW_URL/WIDGET/PDF/TEXT/AUDIO.
           boolean isWebsite = slideType == PlaylistScheduler.SlideType.WEBVIEW_WEBSITE;
           if (isDesignKiosk) {
-              p.allowFileAccess = true;
-              p.allowFileAccessFromFileUrls = true;
-              p.allowUniversalFileAccess = true;
+              p.allowFileAccess = false;
+              p.allowFileAccessFromFileUrls = false;
+              p.allowUniversalFileAccess = false;
               p.databaseEnabled = true;
               p.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW;
               p.rendererPriorityImportant = true;
@@ -167,9 +169,7 @@ public class WebViewPolicy {
         }
         try {
             android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                cm.setAcceptThirdPartyCookies(webView, allowThirdPartyCookies);
-            }
+            cm.setAcceptThirdPartyCookies(webView, allowThirdPartyCookies);
         } catch (Throwable ignored) {}
     }
 
@@ -177,12 +177,11 @@ public class WebViewPolicy {
      * Returns "package@version" for the Android System WebView implementation currently
      * in use, or "unknown" if it cannot be determined. Exposed for diagnostics/telemetry.
      */
-    public static String currentWebViewPackageInfo() {
+    public static String currentWebViewPackageInfo(Context context) {
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                android.content.pm.PackageInfo info = WebView.getCurrentWebViewPackage();
-                if (info != null) return info.packageName + "@" + info.versionName;
-            }
+            android.content.pm.PackageInfo info =
+                    androidx.webkit.WebViewCompat.getCurrentWebViewPackage(context);
+            if (info != null) return info.packageName + "@" + info.versionName;
         } catch (Throwable ignored) {}
         return "unknown";
     }
