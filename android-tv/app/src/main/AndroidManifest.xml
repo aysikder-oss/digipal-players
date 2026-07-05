@@ -33,6 +33,7 @@
         android:hardwareAccelerated="true"
         android:largeHeap="true"
         android:networkSecurityConfig="@xml/network_security_config"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         tools:targetApi="31">
 
         <!-- Server Setup Activity (launcher entry point) -->
@@ -65,11 +66,9 @@
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"
-            android:exported="true"
-            android:directBootAware="true">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
@@ -85,6 +84,11 @@
         <provider
             android:name="io.sentry.android.core.SentryInitProvider"
             android:authorities="${applicationId}.SentryInitProvider"
+            tools:node="remove" />
+
+        <provider
+            android:name="io.sentry.android.core.SentryPerformanceProvider"
+            android:authorities="${applicationId}.SentryPerformanceProvider"
             tools:node="remove" />
       </application>
   </manifest>
