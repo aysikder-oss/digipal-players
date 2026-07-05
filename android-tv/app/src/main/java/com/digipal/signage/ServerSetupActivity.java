@@ -35,6 +35,7 @@ import android.widget.TextView;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.regex.Pattern;
 
 public class ServerSetupActivity extends Activity {
@@ -205,7 +206,7 @@ public class ServerSetupActivity extends Activity {
     @SuppressLint("SetTextI18n")
     private void addLogoAndSubtitle(LinearLayout root, int subtitleBottom) {
         try {
-            int logoResId = getResources().getIdentifier("player_logo", "drawable", getPackageName());
+            int logoResId = iconForName("player_logo");
             if (logoResId != 0) {
                 ImageView logo = new ImageView(this);
                 logo.setImageResource(logoResId);
@@ -324,7 +325,7 @@ public class ServerSetupActivity extends Activity {
     private ImageView buildCardIcon(String drawableName) {
         ImageView icon = new ImageView(this);
         try {
-            int resId = getResources().getIdentifier(drawableName, "drawable", getPackageName());
+            int resId = iconForName(drawableName);
             if (resId != 0) {
                 icon.setImageResource(resId);
             }
@@ -502,8 +503,8 @@ public class ServerSetupActivity extends Activity {
             if (!url.startsWith("http://") && !url.startsWith("https://")) {
                 url = "http://" + url;
             }
-            if (url.startsWith("http://") && !isPrivateNetworkUrl(url)) {
-                manualUrlInput.setError("HTTP is only allowed for local network addresses. Use https:// for public servers.");
+            if (!UrlPolicy.isAllowedServerUrl(url)) {
+                manualUrlInput.setError("Use HTTPS for public servers. HTTP is only allowed for private network addresses.");
                 return;
             }
             saveServerChoice("local", url);
@@ -803,13 +804,20 @@ public class ServerSetupActivity extends Activity {
         "192\\.168\\.\\d{1,3}\\.\\d{1,3})$"
     );
 
+    private int iconForName(String drawableName) {
+        switch (drawableName) {
+            case "ic_cloud_server": return R.drawable.ic_cloud_server;
+            case "ic_discover_servers": return R.drawable.ic_discover_servers;
+            case "ic_manual_server": return R.drawable.ic_manual_server;
+            case "player_logo": return R.drawable.player_logo;
+            default: return 0;
+        }
+    }
+
     private boolean isPrivateNetworkUrl(String url) {
         try {
             URI uri = new URI(url);
-            String host = uri.getHost();
-            if (host == null) return false;
-            if (host.equals("localhost") || host.equals("127.0.0.1") || host.equals("::1")) return true;
-            return PRIVATE_IP.matcher(host).matches();
+            return UrlPolicy.isPrivateHost(uri.getHost());
         } catch (Exception e) {
             return false;
         }
@@ -862,7 +870,8 @@ public class ServerSetupActivity extends Activity {
           rendererDesc.setLayoutParams(rdP);
           root.addView(rendererDesc);
           // Determine current and default renderer
-          boolean isFireTvDevice = Build.MANUFACTURER.equalsIgnoreCase("Amazon") || Build.MODEL.toUpperCase().startsWith("AFT");
+          boolean isFireTvDevice = Build.MANUFACTURER.equalsIgnoreCase("Amazon")
+                  || Build.MODEL.toUpperCase(Locale.ROOT).startsWith("AFT");
           String[] curRef = { prefs.getString(PREF_VIDEO_RENDERER, isFireTvDevice ? "texture" : "surface") };
           // Renderer buttons
           LinearLayout btnRow = new LinearLayout(this);
