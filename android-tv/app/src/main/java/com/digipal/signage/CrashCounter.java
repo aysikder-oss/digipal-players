@@ -1,5 +1,6 @@
 package com.digipal.signage;
 
+  import android.annotation.SuppressLint;
   import android.content.Context;
   import android.content.SharedPreferences;
 
@@ -18,7 +19,7 @@ package com.digipal.signage;
       static final String KEY_CRASH_WINDOW_START = "crash_counter_window_start";
       static final String KEY_MAX_EXCEEDED       = "crash_counter_max_exceeded";
 
-      /** Sliding window duration: 100 seconds. */
+      /** Sliding window duration: 5 minutes. */
       private static final long CRASH_WINDOW_MS = 300_000L; // Fix 10: widened from 100s to avoid false positives on slow-boot devices
       /** Crashes within the window that trigger max-exceeded state. */
       private static final int MAX_CRASHES = 5;
@@ -27,6 +28,7 @@ package com.digipal.signage;
        * Increments the crash counter and returns true if max-exceeded was just triggered.
        * Uses commit() (synchronous) so the value survives immediate process death.
        */
+      @SuppressLint("ApplySharedPref")
       public static boolean recordCrash(Context ctx) {
           SharedPreferences prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
           long now = System.currentTimeMillis();
@@ -54,6 +56,7 @@ package com.digipal.signage;
       }
 
       /** Called on clean startup to reset all counters. */
+      @SuppressLint("ApplySharedPref")
       public static void reset(Context ctx) {
           ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
               .putInt(KEY_CRASH_COUNT, 0)
