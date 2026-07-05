@@ -19,6 +19,7 @@ package com.digipal.signage;
 
       @Override
       public void onReceive(Context context, Intent intent) {
+          if (intent == null) return;
           String action = intent.getAction();
           if (action == null) return;
 
