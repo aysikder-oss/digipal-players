@@ -12,8 +12,10 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.json.JSONObject;
 
 /**
  * PlayerShellManager — local versioned copy of the player shell (task local
@@ -187,7 +189,11 @@ public class PlayerShellManager {
                             failedAssets.add(assetPath);
                             continue;
                         }
-                        File dest = new File(versionDir, sanitizeRelativePath(assetPath));
+                        File dest = SafeFiles.child(versionDir, sanitizeRelativePath(assetPath));
+                        if (dest == null) {
+                            failedAssets.add(assetPath);
+                            continue;
+                        }
                         File parent = dest.getParentFile();
                         if (parent != null && !parent.exists()) parent.mkdirs();
                         writeFile(dest, bytes);
@@ -241,7 +247,7 @@ public class PlayerShellManager {
         // the failedAssets check above, so this only guards the top-level document shape.)
         try {
             String head = readFileHead(indexHtml, 4096);
-            return head.toLowerCase().contains("<script");
+            return head.toLowerCase(Locale.ROOT).contains("<script");
         } catch (Exception e) {
             return false;
         }
@@ -269,13 +275,13 @@ public class PlayerShellManager {
     }
 
     private JsonRecord readRecord(String fileName) {
-        File f = new File(rootDir, fileName);
-        if (!f.exists()) return null;
         try {
-            String json = readFileHead(f, 8192);
-            String version = extractJsonField(json, "version");
-            String serverUrl = extractJsonField(json, "serverUrl");
-            if (version == null || serverUrl == null) return null;
+            File f = SafeFiles.child(rootDir, fileName);
+            if (f == null || !f.exists()) return null;
+            JSONObject json = new JSONObject(readFileHead(f, 8192));
+            String version = json.optString("version", "");
+            String serverUrl = json.optString("serverUrl", "");
+            if (version.isEmpty() || serverUrl.isEmpty()) return null;
             return new JsonRecord(version, serverUrl);
         } catch (Exception e) {
             return null;
@@ -284,21 +290,15 @@ public class PlayerShellManager {
 
     private void writeRecord(String fileName, JsonRecord record) {
         try {
-            String json = "{\"version\":\"" + escapeJson(record.version)
-                    + "\",\"serverUrl\":\"" + escapeJson(record.serverUrl) + "\"}";
-            writeFile(new File(rootDir, fileName), json.getBytes("UTF-8"));
+            File dest = SafeFiles.child(rootDir, fileName);
+            if (dest == null) throw new IllegalStateException("invalid record path");
+            JSONObject json = new JSONObject();
+            json.put("version", record.version);
+            json.put("serverUrl", record.serverUrl);
+            writeFile(dest, json.toString().getBytes("UTF-8"));
         } catch (Exception e) {
             Log.e(TAG, "[writeRecord] failed for " + fileName, e);
         }
-    }
-
-    private static String extractJsonField(String json, String field) {
-        Matcher m = Pattern.compile("\"" + field + "\"\\s*:\\s*\"([^\"]*)\"").matcher(json);
-        return m.find() ? m.group(1) : null;
-    }
-
-    private static String escapeJson(String s) {
-        return s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     private static List<String> extractAssetPaths(String html) {
@@ -320,12 +320,13 @@ public class PlayerShellManager {
     }
 
     private static String sanitizeRelativePath(String path) {
-        String p = stripLeadingSlash(path);
-        // Defensive: never allow a downloaded asset path to escape versionDir via traversal.
-        p = p.replace("..", "");
+        String p = stripLeadingSlash(path == null ? "" : path);
         int q = p.indexOf('?');
         if (q >= 0) p = p.substring(0, q);
-        return p.isEmpty() ? "asset" : p;
+        p = p.replace('\\', '/');
+        while (p.startsWith("/")) p = p.substring(1);
+        if (p.isEmpty() || p.contains("..") || p.startsWith(".")) return "asset";
+        return p;
     }
 
     private static String httpGetText(String urlStr) throws Exception {
