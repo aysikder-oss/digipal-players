@@ -262,6 +262,19 @@ public class PlaylistScheduler {
     public void boot() {
         toState(State.BOOTING, "");
         dbExec.execute(() -> {
+            // Task #1892: a live setPlaylist() call (either a buffered playlist flushed
+            // just before boot() was invoked, or a bridge call that raced boot() on this
+            // same sequential dbExec executor) already set `running=true` SYNCHRONOUSLY
+            // before queuing its own dbExec work -- independent of whether its revision
+            // has finished being promoted to ACTIVE yet. If that already happened, this
+            // Room-restore must not clobber the just-established live playlist with a
+            // stale (or, for a fresh pairing, nonexistent) revision.
+            synchronized (PlaylistScheduler.this) {
+                if (running) {
+                    Log.i(TAG, "[boot] scheduler already running from a live setPlaylist -- skipping Room restore");
+                    return;
+                }
+            }
             // Honour a prior JS stop signal across reboots — prevents a removed video from
             // replaying when the device restarts before the server is reachable.
             if (prefs != null && prefs.getBoolean(KEY_PLS_WAS_STOPPED, false)) {
