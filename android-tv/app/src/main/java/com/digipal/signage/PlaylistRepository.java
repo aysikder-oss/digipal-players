@@ -10,6 +10,7 @@ package com.digipal.signage;
   import java.io.File;
   import java.util.ArrayList;
   import java.util.List;
+  import java.util.Locale;
   import java.util.concurrent.ConcurrentHashMap;
   import java.util.concurrent.atomic.AtomicInteger;
 
@@ -69,9 +70,11 @@ package com.digipal.signage;
       // Optional collaborators set after construction
       private MediaDownloadManager mediaDownloadManager;
       private WebView webView;
+      private final Context appContext;
 
       public PlaylistRepository(Context ctx) {
           this.db = PlaylistDatabase.getInstance(ctx);
+          this.appContext = ctx.getApplicationContext();
       }
 
       public void setMediaDownloadManager(MediaDownloadManager mdm) { this.mediaDownloadManager = mdm; }
@@ -301,8 +304,8 @@ package com.digipal.signage;
                   if (obj == null) continue;
                   String url = obj.optString("url", "");
                   if (url.startsWith("file://")) {
-                      File f = new File(url.substring(7));
-                      if (f.exists()) { f.delete(); }
+                      File root = new File(appContext.getFilesDir(), "media");
+                      SafeFiles.deleteFileInside(root, url.substring(7));
                   }
               }
           } catch (Exception ignored) {}
@@ -311,6 +314,12 @@ package com.digipal.signage;
       // ─────────────────────────────────────────────────────────────────────────
       // Helpers
       // ─────────────────────────────────────────────────────────────────────────
+
+      private static String safeAssetKey(String contentId, String suffix) {
+          String id = contentId == null ? "" : contentId.replaceAll("[^a-zA-Z0-9._-]", "_");
+          if (id.length() > 120) id = id.substring(id.length() - 120);
+          return "native_asset_" + id + "_" + suffix;
+      }
 
       /** Extract VIDEO/IMAGE slides with http asset URLs from a playlist JSON array. */
       private List<AssetDescriptor> extractMediaAssets(String json) {
@@ -323,13 +332,13 @@ package com.digipal.signage;
                   boolean isPdf = "WEBVIEW_PDF".equals(type);
                   if (!"VIDEO".equals(type) && !"IMAGE".equals(type) && !isPdf) continue;
                   String url = obj.optString("url", "");
-                  if (url.isEmpty() || !url.startsWith("http")) continue;
+                  if (!UrlPolicy.isAllowedServerUrl(url)) continue;
                   // Stable key: contentId + type (survives signed-URL rotation).
                   // PDFs use a fixed "_pdf" suffix (task #1891) so PlaylistScheduler's
                   // expandPdfIfPrerendered() can compute the same key independently.
                   String contentId = obj.optString("contentId", String.valueOf(i));
-                  String suffix = isPdf ? "pdf" : type.toLowerCase();
-                  String objectPath = "native_asset_" + contentId + "_" + suffix;
+                  String suffix = isPdf ? "pdf" : type.toLowerCase(Locale.ROOT);
+                  String objectPath = safeAssetKey(contentId, suffix);
                   result.add(new AssetDescriptor(objectPath, url));
               }
           } catch (Exception ex) {
@@ -355,7 +364,7 @@ package com.digipal.signage;
                     // extractMediaAssets()) so the isolated-WebView PDF fallback still opens the
                     // locally-cached file (task P4) instead of a possibly-expired/offline-
                     // unreachable remote signed URL when native prerendering hasn't completed yet.
-                    String objectPath = "native_asset_" + contentId + "_" + (isPdf ? "pdf" : type.toLowerCase());
+                    String objectPath = safeAssetKey(contentId, isPdf ? "pdf" : type.toLowerCase(Locale.ROOT));
                     String localPath = paths.get(objectPath);
                     if (localPath != null && !localPath.isEmpty()) {
                         obj.put("url", localPath);
