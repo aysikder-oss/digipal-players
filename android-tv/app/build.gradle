@@ -10,11 +10,22 @@ try {
     gitSha = proc.text.trim()
 } catch (Exception ignored) {}
 
-def hasReleaseSigning =
+def hasEnvSigning =
         System.getenv("KEYSTORE_FILE") &&
         System.getenv("KEYSTORE_PASSWORD") &&
         System.getenv("KEY_ALIAS") &&
         System.getenv("KEY_PASSWORD")
+
+// CI (build-android-tv.yml) injects signing credentials via Gradle -P properties
+// (android.injected.signing.*) rather than env vars — recognize that path too so
+// release builds in CI are not incorrectly blocked.
+def hasInjectedSigning =
+        project.hasProperty("android.injected.signing.store.file") &&
+        project.hasProperty("android.injected.signing.store.password") &&
+        project.hasProperty("android.injected.signing.key.alias") &&
+        project.hasProperty("android.injected.signing.key.password")
+
+def hasReleaseSigning = hasEnvSigning || hasInjectedSigning
 
 android {
     namespace 'com.digipal.signage'
@@ -22,12 +33,15 @@ android {
 
     signingConfigs {
         release {
-            if (hasReleaseSigning) {
+            if (hasEnvSigning) {
                 storeFile file(System.getenv("KEYSTORE_FILE"))
                 storePassword System.getenv("KEYSTORE_PASSWORD")
                 keyAlias System.getenv("KEY_ALIAS")
                 keyPassword System.getenv("KEY_PASSWORD")
             }
+            // When only hasInjectedSigning is true, leave fields unset here — the
+            // Android Gradle Plugin auto-populates them from the injected
+            // android.injected.signing.* properties passed via -P on the CLI.
         }
     }
 
