@@ -5,6 +5,7 @@ import android.os.StatFs;
 import android.util.Log;
 import java.io.*;
 import java.security.MessageDigest;
+import java.util.Locale;
 import java.util.concurrent.*;
 import okhttp3.*;
 
@@ -46,8 +47,9 @@ public class AssetCacheManager {
         PlaylistDatabase.AssetEntity e = repo.getAsset(assetId);
         if (e == null || e.localPath == null || e.localPath.isEmpty()) return null;
         if (!"READY".equals(e.downloadState) && !"PINNED_FOR_ROLLBACK".equals(e.downloadState)) return null;
-        File f = new File(e.localPath);
-        return f.exists() ? f : null;
+        File mediaDir = getMediaDir();
+        File f = SafeFiles.existingFileInsideOrNull(mediaDir, e.localPath);
+        return f;
     }
 
     /**
@@ -82,6 +84,10 @@ public class AssetCacheManager {
     public void setOnAssetReadyListener(OnAssetReadyListener l) { this.onAssetReadyListener = l; }
 
     private void download(String assetId, String url, String expectedSha256, DownloadCallback cb) {
+        if (!UrlPolicy.isAllowedServerUrl(url)) {
+            cb.onFailure(assetId, "blocked_url");
+            return;
+        }
         // Upsert: ensure an asset row exists before downloading.
         // markAssetReady() is update-only; insert() is required for brand-new assets.
         try {
@@ -105,8 +111,9 @@ public class AssetCacheManager {
 
         String safeId = assetId.replaceAll("[^a-zA-Z0-9._-]", "_");
         if (safeId.length() > 180) safeId = safeId.substring(safeId.length() - 180);
-        File finalFile = new File(mediaDir, safeId);
-        File tmpFile   = new File(mediaDir, safeId + ".tmp");
+        File finalFile = SafeFiles.child(mediaDir, safeId);
+        File tmpFile   = SafeFiles.child(mediaDir, safeId + ".tmp");
+        if (finalFile == null || tmpFile == null) { cb.onFailure(assetId, "invalid_path"); return; }
 
         // Check ETag / Last-Modified for conditional fetch
         PlaylistDatabase.AssetEntity existing = repo.getAsset(assetId);
@@ -198,9 +205,10 @@ public class AssetCacheManager {
             long weekAgo = now - 7L * 86400 * 1000;
             java.util.List<PlaylistDatabase.AssetEntity> prunable =
                 repo.getDb().assetDao().findPrunable(weekAgo, now);
+            File mediaDir = getMediaDir();
             for (PlaylistDatabase.AssetEntity a : prunable) {
                 if (a.localPath != null && !a.localPath.isEmpty()) {
-                    new File(a.localPath).delete();
+                    SafeFiles.deleteFileInside(mediaDir, a.localPath);
                 }
             }
             Log.d(TAG, "[cleanup] Pruned " + prunable.size() + " stale assets");
@@ -220,7 +228,7 @@ public class AssetCacheManager {
 
     private static String bytesToHex(byte[] bytes) {
         StringBuilder sb = new StringBuilder(bytes.length * 2);
-        for (byte b : bytes) sb.append(String.format("%02x", b));
+        for (byte b : bytes) sb.append(String.format(Locale.ROOT, "%02x", b));
         return sb.toString();
     }
 
