@@ -243,7 +243,7 @@ public class IsolatedWebRenderer {
     /** Returns true (cancel navigation) if uri's host differs from trustedHost.
  *  A null/unparsable uri or a null trustedHost (nothing loaded yet) is allowed
  *  through rather than blocked, since it can't be a cross-origin escape. */
-    private static String appendQueryParameter(String url, String key, String value) {
+    static String appendQueryParameter(String url, String key, String value) {
           try {
               android.net.Uri uri = android.net.Uri.parse(url);
               return uri.buildUpon().appendQueryParameter(key, value).build().toString();
