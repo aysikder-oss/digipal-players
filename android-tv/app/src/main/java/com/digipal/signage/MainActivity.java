@@ -58,6 +58,8 @@ public class MainActivity extends Activity {
     private static final String KEY_SERVER_MODE = "server_mode";
     private static final String KEY_AUTO_RELAUNCH = "auto_relaunch";
     private static final String KEY_CHECK_SEC = "relaunch_check_sec";
+    private static final long RELAUNCH_DEBOUNCE_MS = 10_000L;
+    private long lastRelaunchScheduleElapsedMs = 0L;
     /** Screen pairing code, reported once by the JS player via Android.reportPairingCode()
      *  (task #1875) — used to build the isolated-renderer /tv/render/:pairingCode/:contentId URL. */
     private static final String KEY_PAIRING_CODE = "pairing_code";
@@ -2788,21 +2790,28 @@ public class MainActivity extends Activity {
 
       private void scheduleAppRelaunch(long delayMs) {
         try {
+            long now = android.os.SystemClock.elapsedRealtime();
+            if (now - lastRelaunchScheduleElapsedMs < RELAUNCH_DEBOUNCE_MS) {
+                Log.w("Digipal", "Skipping duplicate relaunch request");
+                return;
+            }
+            lastRelaunchScheduleElapsedMs = now;
+
             Intent intent = new Intent(this, MainActivity.class);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                     | Intent.FLAG_ACTIVITY_CLEAR_TOP
                     | Intent.FLAG_ACTIVITY_SINGLE_TOP);
 
-            int flags = PendingIntent.FLAG_ONE_SHOT;
+            int flags = PendingIntent.FLAG_CANCEL_CURRENT;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 flags |= PendingIntent.FLAG_IMMUTABLE;
             }
 
-            PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent, flags);
+            PendingIntent pendingIntent = PendingIntent.getActivity(this, 1002, intent, flags);
             AlarmManager alarmManager = (AlarmManager) getSystemService(ALARM_SERVICE);
             if (alarmManager == null) return;
 
-            long earliest = android.os.SystemClock.elapsedRealtime() + delayMs;
+            long earliest = now + delayMs;
             alarmManager.setWindow(
                     AlarmManager.ELAPSED_REALTIME_WAKEUP,
                     earliest,
