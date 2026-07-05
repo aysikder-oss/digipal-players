@@ -111,8 +111,16 @@ public class AssetCacheManager {
 
         String safeId = assetId.replaceAll("[^a-zA-Z0-9._-]", "_");
         if (safeId.length() > 180) safeId = safeId.substring(safeId.length() - 180);
-        File finalFile = SafeFiles.child(mediaDir, safeId);
-        File tmpFile   = SafeFiles.child(mediaDir, safeId + ".tmp");
+        File finalFile;
+        File tmpFile;
+        try {
+            finalFile = SafeFiles.child(mediaDir, safeId);
+            tmpFile   = SafeFiles.child(mediaDir, safeId + ".tmp");
+        } catch (IOException | SecurityException pathEx) {
+            Log.w(TAG, "[download] unsafe asset path for " + assetId + ": " + pathEx.getMessage());
+            cb.onFailure(assetId, "invalid_path");
+            return;
+        }
         if (finalFile == null || tmpFile == null) { cb.onFailure(assetId, "invalid_path"); return; }
 
         // Check ETag / Last-Modified for conditional fetch
