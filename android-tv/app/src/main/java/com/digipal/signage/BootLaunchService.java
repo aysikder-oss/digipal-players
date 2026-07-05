@@ -33,11 +33,16 @@ package com.digipal.signage;
           ensureChannel();
           // API 34+ requires a declared foreground-service type.
           // shortService is correct for a short-lived boot-launch helper.
-          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-              startForeground(NOTIF_ID, buildNotif(),
-                  ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE);
-          } else {
-              startForeground(NOTIF_ID, buildNotif());
+          try {
+              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                  startForeground(NOTIF_ID, buildNotif(),
+                      ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE);
+              } else {
+                  startForeground(NOTIF_ID, buildNotif());
+              }
+          } catch (Throwable t) {
+              stopSelf();
+              return START_NOT_STICKY;
           }
           scheduleLaunch();
           // WatchdogService is started in MainActivity.onCreate() after the
