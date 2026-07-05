@@ -4,8 +4,8 @@ package com.digipal.signage;
   import android.os.Handler;
   import android.os.Looper;
   import android.util.Log;
-  import java.util.HashMap;
-import java.util.concurrent.ConcurrentHashMap;
+  import java.util.concurrent.ConcurrentHashMap;
+  import java.util.Locale;
   import java.util.Map;
 
   /**
@@ -78,7 +78,7 @@ import java.util.concurrent.ConcurrentHashMap;
        * @param rendererType "image", "video", "web", "pdf", etc.
        * @param memoryTier   current tier from MemoryBudgetManager (may be null)
        */
-      public void reportSlideFailure(String slideId, String assetId, String reason,
+      public synchronized void reportSlideFailure(String slideId, String assetId, String reason,
                                      String rendererType, MemoryBudgetManager.Tier memoryTier) {
           int slideFails = 1;
           if (slideId != null && !slideId.isEmpty()) {
@@ -94,7 +94,7 @@ import java.util.concurrent.ConcurrentHashMap;
        * Call on WebView renderer process crash. Tracks crash rate in a 5-minute window;
        * escalates to HARD_RESTART after 3 crashes in that window.
        */
-      public void reportWebViewCrash(String reason, MemoryBudgetManager.Tier memoryTier) {
+      public synchronized void reportWebViewCrash(String reason, MemoryBudgetManager.Tier memoryTier) {
           long now = System.currentTimeMillis();
           if (webViewCrashCount == 0 || now - firstWebViewCrashMs > WEBVIEW_CRASH_WINDOW_MS) {
               webViewCrashCount = 1;
@@ -111,7 +111,7 @@ import java.util.concurrent.ConcurrentHashMap;
        * Called by ReliabilitySupervisor when its watchdog fires.
        * Routes the event at SOFT_RESTART level and delegates recovery to AppRecoverManager.
        */
-      public void reportWatchdogTrigger(String reason, MemoryBudgetManager.Tier memoryTier) {
+      public synchronized void reportWatchdogTrigger(String reason, MemoryBudgetManager.Tier memoryTier) {
           dispatchRecovery(Level.SOFT_RESTART, null, null, reason, "watchdog", memoryTier);
       }
 
@@ -119,7 +119,7 @@ import java.util.concurrent.ConcurrentHashMap;
        * Log a non-escalating recovery event (e.g. WorkManager worker launch).
        * Does NOT increment failure counters or trigger further escalation.
        */
-      public void logRecoveryEvent(String levelName, String reason, MemoryBudgetManager.Tier memoryTier) {
+      public synchronized void logRecoveryEvent(String levelName, String reason, MemoryBudgetManager.Tier memoryTier) {
           String tierName = memoryTier != null ? memoryTier.name() : "UNKNOWN";
           Log.i(TAG, "[event] level=" + levelName + " reason=" + reason + " memory=" + tierName);
           String details = "{\"type\":\"recovery\","
@@ -130,7 +130,7 @@ import java.util.concurrent.ConcurrentHashMap;
       }
 
       /** Call on each successful slide advance to decay failure counters. */
-      public void onSlideSuccess(String slideId) {
+      public synchronized void onSlideSuccess(String slideId) {
           if (slideId != null) slideFailures.remove(slideId);
           if (globalFailures > 0) globalFailures = Math.max(0, globalFailures - 1);
       }
@@ -138,12 +138,12 @@ import java.util.concurrent.ConcurrentHashMap;
       // -----------------------------------------------------------------------
 
       private Level computeLevel(int slideFails) {
-          if (slideFails >= SLIDE_SKIP_THRESHOLD)        return Level.SLIDE_SKIP;
           if (globalFailures >= HARD_RESTART_THRESHOLD)  return Level.HARD_RESTART;
           if (globalFailures >= SOFT_RESTART_THRESHOLD)  return Level.SOFT_RESTART;
           if (globalFailures >= PLAYLIST_ROLLBACK_THRESHOLD) return Level.PLAYLIST_ROLLBACK;
           if (globalFailures >= WEBVIEW_REBUILD_THRESHOLD)   return Level.WEBVIEW_REBUILD;
           if (globalFailures >= RENDERER_REBUILD_THRESHOLD)  return Level.RENDERER_REBUILD;
+          if (slideFails >= SLIDE_SKIP_THRESHOLD)        return Level.SLIDE_SKIP;
           return Level.SLIDE_RETRY;
       }
 
@@ -170,7 +170,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
           // Set __digipalRecoveryReason before any restart
           if (level.ordinal() >= Level.SOFT_RESTART.ordinal()) {
-              setRecoveryReason(level.name().toLowerCase() + ": " + reason);
+              setRecoveryReason(level.name().toLowerCase(Locale.ROOT) + ": " + reason);
           }
 
           // Escalate via delegate
