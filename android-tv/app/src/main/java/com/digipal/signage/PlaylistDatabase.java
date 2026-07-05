@@ -3,6 +3,7 @@ package com.digipal.signage;
   import android.content.Context;
   import androidx.annotation.NonNull;
   import androidx.room.*;
+  import androidx.room.Index;
   import androidx.room.migration.Migration;
   import androidx.sqlite.db.SupportSQLiteDatabase;
   import java.util.List;
@@ -40,7 +41,11 @@ package com.digipal.signage;
           @ColumnInfo(name = "config_json")       public String configJson = "{}";
       }
 
-      @Entity(tableName = "assets")
+      @Entity(tableName = "assets", indices = {
+              @Index(value = "asset_id", unique = true),
+              @Index("url"),
+              @Index("download_state")
+      })
       public static class AssetEntity {
           @PrimaryKey(autoGenerate = true) public long id;
           @ColumnInfo(name = "asset_id")          public String assetId = "";
@@ -164,7 +169,17 @@ package com.digipal.signage;
           }
       };
 
-      @Database(entities={PlaylistRevisionEntity.class,SlideEntity.class,AssetEntity.class,PlaybackEventEntity.class,PlayerErrorEntity.class}, version=2, exportSchema=false)
+      static final Migration MIGRATION_2_3 = new Migration(2, 3) {
+          @Override
+          public void migrate(@NonNull SupportSQLiteDatabase database) {
+              database.execSQL("DELETE FROM assets WHERE id NOT IN (SELECT MAX(id) FROM assets GROUP BY asset_id)");
+              database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_assets_asset_id ON assets(asset_id)");
+              database.execSQL("CREATE INDEX IF NOT EXISTS index_assets_url ON assets(url)");
+              database.execSQL("CREATE INDEX IF NOT EXISTS index_assets_download_state ON assets(download_state)");
+          }
+      };
+
+      @Database(entities={PlaylistRevisionEntity.class,SlideEntity.class,AssetEntity.class,PlaybackEventEntity.class,PlayerErrorEntity.class}, version=3, exportSchema=true)
       public abstract static class AppDatabase extends RoomDatabase {
           public abstract PlaylistRevisionDao revisionDao();
           public abstract SlideDao slideDao();
@@ -179,7 +194,7 @@ package com.digipal.signage;
               synchronized (PlaylistDatabase.class) {
                   if (INSTANCE == null) {
                       INSTANCE = Room.databaseBuilder(ctx.getApplicationContext(), AppDatabase.class, "playlist_native.db")
-                          .addMigrations(MIGRATION_1_2)
+                          .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                           .build();
                   }
               }
