@@ -22,6 +22,8 @@ package com.digipal.signage;
       private static final long NORMAL_DELAY_SECONDS  = 30L;
       /** Recovery delay after max-exceeded crash loop (10 minutes). */
       private static final long MAX_DELAY_SECONDS     = 600L;
+      private static final String PREFS_NAME = "DigipalPrefs";
+      private static final String KEY_AUTO_RELAUNCH = "auto_relaunch";
 
       /**
        * Increments the crash counter and enqueues a one-shot RecoverWorker.
@@ -64,6 +66,14 @@ package com.digipal.signage;
        */
       static void scheduleBackupWorker(Context ctx) {
           Context appContext = ctx.getApplicationContext();
+          boolean enabled = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                  .getBoolean(KEY_AUTO_RELAUNCH, false);
+          if (!enabled) {
+              try {
+                  WorkManager.getInstance(appContext).cancelUniqueWork(BackupRecoverWorker.TAG);
+              } catch (Throwable ignored) {}
+              return;
+          }
           try {
               PeriodicWorkRequest backupWork = new PeriodicWorkRequest.Builder(
                   BackupRecoverWorker.class, 15L, TimeUnit.MINUTES)
