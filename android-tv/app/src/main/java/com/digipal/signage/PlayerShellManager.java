@@ -107,6 +107,22 @@ public class PlayerShellManager {
         Log.i(TAG, "[markCurrentAsGood] version=" + current.version + " promoted to last_good");
     }
 
+    /**
+     * Call when the currently active shell failed to actually mount an app (blank screen,
+     * e.g. a missing/broken JS chunk) even though the page itself finished loading with no
+     * HTTP/network error. Clears "current" (but preserves "last_good") so the NEXT boot does
+     * not keep loading the same broken local snapshot forever — it falls straight back to the
+     * network until a fresh, validated shell is downloaded again.
+     */
+    public void invalidateCurrent() {
+        File f = new File(rootDir, CURRENT_JSON);
+        if (f.exists() && !f.delete()) {
+            Log.w(TAG, "[invalidateCurrent] failed to delete " + CURRENT_JSON);
+        } else {
+            Log.w(TAG, "[invalidateCurrent] cleared current shell pointer after failed mount");
+        }
+    }
+
     /** If the currently active shell turns out to be broken at runtime, roll back and report which URL to reload. */
     public String rollbackToLastGood(String serverUrl) {
         JsonRecord lastGood = readRecord(LAST_GOOD_JSON);
@@ -150,18 +166,27 @@ public class PlayerShellManager {
                 writeFile(new File(versionDir, "index.html"), html.getBytes("UTF-8"));
 
                 List<String> assetPaths = extractAssetPaths(html);
+                List<String> sameOriginAssets = new ArrayList<>();
+                List<String> failedAssets = new ArrayList<>();
                 int downloaded = 0;
                 for (String assetPath : assetPaths) {
-                    if (downloaded >= MAX_ASSETS) break;
                     if (assetPath.startsWith("http://") || assetPath.startsWith("https://")) {
                         // Skip cross-origin assets (fonts CDN, analytics, etc.) — only same-origin
                         // shell code needs to be cached locally for offline boot.
                         continue;
                     }
+                    sameOriginAssets.add(assetPath);
+                    if (downloaded >= MAX_ASSETS) {
+                        failedAssets.add(assetPath);
+                        continue;
+                    }
                     try {
                         String assetUrl = normalize(serverUrl) + stripLeadingSlash(assetPath);
                         byte[] bytes = httpGetBytes(assetUrl);
-                        if (bytes == null || bytes.length == 0) continue;
+                        if (bytes == null || bytes.length == 0) {
+                            failedAssets.add(assetPath);
+                            continue;
+                        }
                         File dest = new File(versionDir, sanitizeRelativePath(assetPath));
                         File parent = dest.getParentFile();
                         if (parent != null && !parent.exists()) parent.mkdirs();
@@ -169,7 +194,24 @@ public class PlayerShellManager {
                         downloaded++;
                     } catch (Exception assetEx) {
                         Log.w(TAG, "[download] asset failed: " + assetPath + " — " + assetEx.getMessage());
+                        failedAssets.add(assetPath);
                     }
+                }
+
+                // Every same-origin script/link asset referenced by the shell HTML must download
+                // successfully. A partial download (network blip mid-fetch, an asset list that
+                // exceeds MAX_ASSETS, etc.) used to still pass the old "does index.html contain
+                // <script>" check and get silently promoted to "current" — the next boot would
+                // then load a shell missing its own JS/CSS with no network fallback
+                // (WebViewAssetLoader 404s local misses instead of retrying over the network),
+                // producing a permanently blank screen. Treat any missing same-origin asset as a
+                // failed download so a broken shell is never promoted.
+                if (!failedAssets.isEmpty()) {
+                    Log.w(TAG, "[download] " + failedAssets.size() + "/" + sameOriginAssets.size()
+                            + " same-origin assets failed to download — discarding version " + version);
+                    deleteRecursive(versionDir);
+                    if (callback != null) callback.onFailure("asset_download_incomplete");
+                    return;
                 }
 
                 if (!healthCheck(versionDir)) {
@@ -195,7 +237,8 @@ public class PlayerShellManager {
         if (!indexHtml.exists() || indexHtml.length() < 200) return false;
         // Basic sanity: the shell must at least reference a script tag — an empty error page or
         // a captive-portal redirect page would fail this check and be discarded before ever
-        // being promoted to "current".
+        // being promoted to "current". (Asset completeness is already enforced by the caller via
+        // the failedAssets check above, so this only guards the top-level document shape.)
         try {
             String head = readFileHead(indexHtml, 4096);
             return head.toLowerCase().contains("<script");
