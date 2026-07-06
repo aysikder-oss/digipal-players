@@ -354,6 +354,12 @@ public class MainActivity extends Activity {
         try {
             if (playerShellManager != null) localBootUrl = playerShellManager.getBootUrl(serverUrl);
         } catch (Throwable ignored) {}
+        // Captured immediately after getBootUrl() so the opportunistic refresh below can tell
+        // whether the shell it just booted from is stale relative to what's on the server right
+        // now, instead of only refreshing for whichever restart happens to come next (shell
+        // staleness self-heal task — a 24/7 kiosk device may never restart on its own).
+        final String bootedShellHash = playerShellManager != null ? playerShellManager.getLastBootContentHash() : "";
+        final boolean bootedLocally = localBootUrl != null;
         if (localBootUrl != null) {
             bootedFromLocalShell = true;
             currentPlayerUrl = localBootUrl;
@@ -366,13 +372,57 @@ public class MainActivity extends Activity {
         // load) actually served this boot, so field telemetry can distinguish the two.
         try {
             String source = playerShellManager != null ? playerShellManager.getLastBootSource() : "remote";
-            if (telemetryManager != null) telemetryManager.setShellSource(source);
+            if (telemetryManager != null) {
+                telemetryManager.setShellSource(source);
+                telemetryManager.setShellBuild(
+                        playerShellManager != null ? playerShellManager.getLastBootVersion() : "",
+                        bootedShellHash);
+            }
             if (playlistScheduler != null) playlistScheduler.setShellSource(source);
         } catch (Throwable ignored) {}
         // Opportunistically refresh the local shell cache in the background so the next boot
-        // (or a rollback) has an up-to-date, health-checked snapshot (local player shell hardening task).
+        // (or a rollback) has an up-to-date, health-checked snapshot (local player shell hardening
+        // task). Shell staleness self-heal task: if this session booted from a local snapshot and
+        // the freshly downloaded shell's content hash differs from it, the device is running
+        // stale JS *right now* — force an immediate reload of the just-cached fresh shell instead
+        // of waiting for a restart that a 24/7 kiosk device may never get.
         try {
-            if (playerShellManager != null) playerShellManager.downloadShellAsync(serverUrl, null);
+            if (playerShellManager != null) {
+                playerShellManager.downloadShellAsync(serverUrl, new PlayerShellManager.DownloadCallback() {
+                    @Override public void onSuccess(String version, String contentHash) {
+                        try {
+                            if (telemetryManager != null) telemetryManager.setShellBuild(version, contentHash);
+                            boolean stale = bootedLocally
+                                    && !bootedShellHash.isEmpty()
+                                    && contentHash != null && !contentHash.isEmpty()
+                                    && !contentHash.equals(bootedShellHash);
+                            if (!stale) return;
+                            Log.w("Digipal", "[shell] detected stale local shell (booted=" + bootedShellHash
+                                    + " current=" + contentHash + ") — self-healing with a fresh reload");
+                            if (telemetryManager != null) {
+                                telemetryManager.logEvent("shell_self_heal", null,
+                                        "{\"reason\":\"stale_shell\",\"bootedHash\":\"" + bootedShellHash
+                                                + "\",\"freshHash\":\"" + contentHash + "\"}");
+                            }
+                            runOnUiThread(() -> {
+                                try {
+                                    String freshUrl = playerShellManager.getBootUrl(serverUrl);
+                                    if (freshUrl == null) freshUrl = serverUrl; // shouldn't happen; fall back to network
+                                    bootedFromLocalShell = playerShellManager.getLastBootSource().equals("local");
+                                    currentPlayerUrl = freshUrl;
+                                    appMountConfirmed = false;
+                                    if (bootedFromLocalShell) {
+                                        webView.loadUrl(freshUrl);
+                                    } else {
+                                        loadPlayerUrl(freshUrl);
+                                    }
+                                } catch (Throwable ignored2) {}
+                            });
+                        } catch (Throwable ignored3) {}
+                    }
+                    @Override public void onFailure(String reason) { /* keep running on whatever booted this session */ }
+                });
+            }
         } catch (Throwable ignored) {}
 
         startAnrWatchdog();
@@ -822,6 +872,10 @@ public class MainActivity extends Activity {
                   // called heartbeat() at least once (debug/telemetry task).
                   o.put("lastHeartbeatAtMs", lastHeartbeatMs);
                   o.put("isolatedRendererFeatureEnabled", PlaylistScheduler.isIsolatedRendererFeatureEnabled());
+                  // Shell staleness telemetry task: the actual shell build this device is
+                  // currently executing, so field reports can be diagnosed remotely.
+                  o.put("shellVersion", playerShellManager != null ? playerShellManager.getLastBootVersion() : "");
+                  o.put("shellContentHash", playerShellManager != null ? playerShellManager.getLastBootContentHash() : "");
                 return o.toString();
             } catch (Exception e) {
                 return "{}";
@@ -1013,6 +1067,37 @@ public class MainActivity extends Activity {
                     io.sentry.Sentry.configureScope(scope -> scope.setTag("player_id", playerId));
                 }
             } catch (Exception ignored) {}
+        }
+
+        /**
+         * Remote unstick mechanism (shell staleness task): drop the cached local shell
+         * pointer and force an immediate absolute network reload of the current player URL.
+         * Unlike the existing "reload"/"force_update" WS commands (which do a relative
+         * window.location reload/replace and would just re-serve the SAME stale local shell
+         * if the device is stuck on one), this goes through Android's boot decision fresh —
+         * invalidateCurrent() means the next getBootUrl() call returns null, so the reload
+         * below falls straight through to the network. Lets ops unstick an already-affected
+         * device without a physical visit; exposed to the web layer as the refresh_shell WS
+         * command (useTvCommands.ts).
+         */
+        @JavascriptInterface
+        public void invalidateLocalShellAndReload() {
+            try {
+                if (playerShellManager != null) {
+                    try { playerShellManager.invalidateCurrent(); } catch (Throwable ignored) {}
+                }
+                bootedFromLocalShell = false;
+                final String serverUrl = getServerUrl();
+                runOnUiThread(() -> {
+                    try {
+                        appMountConfirmed = false;
+                        loadPlayerUrl(serverUrl);
+                    } catch (Throwable ignored) {}
+                });
+                if (telemetryManager != null) {
+                    telemetryManager.logEvent("shell_self_heal", null, "{\"reason\":\"remote_unstick\"}");
+                }
+            } catch (Throwable ignored) {}
         }
 
           @JavascriptInterface
