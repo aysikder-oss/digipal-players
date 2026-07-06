@@ -55,7 +55,12 @@ public class PlayerShellManager {
             "(?:<script[^>]+src=|<link[^>]+href=)[\"']([^\"'>]+)[\"']", Pattern.CASE_INSENSITIVE);
 
     public interface DownloadCallback {
-        void onSuccess(String version);
+        /** contentHash is the SHA-256 hex digest of the downloaded index.html — a
+         *  server-comparable build identifier callers can diff against the hash of the
+         *  shell they most recently booted from (see getLastBootContentHash()) to detect
+         *  staleness without guessing at "version" (which is just a local download
+         *  timestamp, not a build id). */
+        void onSuccess(String version, String contentHash);
         void onFailure(String reason);
     }
 
@@ -66,6 +71,12 @@ public class PlayerShellManager {
      *  (telemetry, renderer observability task) can report which shell is currently
      *  active without duplicating the boot-decision logic. */
     private volatile String lastBootSource = "remote";
+    /** version/contentHash of whatever shell getBootUrl()/rollbackToLastGood() most
+     *  recently pointed the caller at — captured once at boot so a later
+     *  downloadShellAsync() success can be diffed against exactly what's currently
+     *  running this session (shell staleness self-heal, local player shell hardening). */
+    private volatile String lastBootVersion = "";
+    private volatile String lastBootContentHash = "";
 
     public PlayerShellManager(Context ctx) {
         this.ctx = ctx.getApplicationContext();
@@ -76,6 +87,15 @@ public class PlayerShellManager {
     /** "local" if the app most recently booted (or rolled back) into a locally cached
      *  shell snapshot, "remote" if it loaded serverUrl directly over the network. */
     public String getLastBootSource() { return lastBootSource; }
+
+    /** version (download timestamp) of the shell the app most recently booted from, or
+     *  "" if the last boot was remote/none. Purely diagnostic (telemetry task). */
+    public String getLastBootVersion() { return lastBootVersion; }
+
+    /** SHA-256 content hash of the shell the app most recently booted from, or "" if the
+     *  last boot was remote, none, or the cached record predates this field (upgrade from
+     *  an older APK — self-heal simply skips comparison for that one boot). */
+    public String getLastBootContentHash() { return lastBootContentHash; }
 
     /** Returns the WebViewAssetLoader wired to serve /player_shell/** from local storage. */
     public WebViewAssetLoader buildAssetLoader() {
@@ -93,11 +113,13 @@ public class PlayerShellManager {
      */
     public String getBootUrl(String serverUrl) {
         JsonRecord current = readRecord(CURRENT_JSON);
-        if (current == null) { lastBootSource = "remote"; return null; }
-        if (!serverUrl.equals(current.serverUrl)) { lastBootSource = "remote"; return null; }
+        if (current == null) { lastBootSource = "remote"; lastBootVersion = ""; lastBootContentHash = ""; return null; }
+        if (!serverUrl.equals(current.serverUrl)) { lastBootSource = "remote"; lastBootVersion = ""; lastBootContentHash = ""; return null; }
         File indexHtml = new File(new File(rootDir, current.version), "index.html");
-        if (!indexHtml.exists() || indexHtml.length() == 0) { lastBootSource = "remote"; return null; }
+        if (!indexHtml.exists() || indexHtml.length() == 0) { lastBootSource = "remote"; lastBootVersion = ""; lastBootContentHash = ""; return null; }
         lastBootSource = "local";
+        lastBootVersion = current.version;
+        lastBootContentHash = current.contentHash;
         return "https://" + ASSET_LOADER_DOMAIN + ASSET_LOADER_HTTP_PATH + current.version + "/index.html";
     }
 
@@ -141,6 +163,8 @@ public class PlayerShellManager {
         writeRecord(CURRENT_JSON, lastGood);
         Log.w(TAG, "[rollback] restored current -> last_good version=" + lastGood.version);
         lastBootSource = "local";
+        lastBootVersion = lastGood.version;
+        lastBootContentHash = lastGood.contentHash;
         return "https://" + ASSET_LOADER_DOMAIN + ASSET_LOADER_HTTP_PATH + lastGood.version + "/index.html";
     }
 
@@ -226,11 +250,12 @@ public class PlayerShellManager {
                     return;
                 }
 
-                JsonRecord record = new JsonRecord(version, serverUrl);
+                String contentHash = sha256Hex(html.getBytes("UTF-8"));
+                JsonRecord record = new JsonRecord(version, serverUrl, contentHash);
                 writeRecord(CURRENT_JSON, record);
                 pruneOldVersions(version);
-                Log.i(TAG, "[download] new shell version=" + version + " assets=" + downloaded + " promoted to current");
-                if (callback != null) callback.onSuccess(version);
+                Log.i(TAG, "[download] new shell version=" + version + " hash=" + contentHash + " assets=" + downloaded + " promoted to current");
+                if (callback != null) callback.onSuccess(version, contentHash);
             } catch (Exception e) {
                 Log.e(TAG, "[download] shell download failed", e);
                 if (callback != null) callback.onFailure(String.valueOf(e.getMessage()));
@@ -271,7 +296,14 @@ public class PlayerShellManager {
     private static class JsonRecord {
         final String version;
         final String serverUrl;
-        JsonRecord(String version, String serverUrl) { this.version = version; this.serverUrl = serverUrl; }
+        /** SHA-256 hex digest of index.html at download time — "" for records written by an
+         *  older APK build that predates this field (upgrade-in-place case). */
+        final String contentHash;
+        JsonRecord(String version, String serverUrl, String contentHash) {
+            this.version = version;
+            this.serverUrl = serverUrl;
+            this.contentHash = contentHash == null ? "" : contentHash;
+        }
     }
 
     private JsonRecord readRecord(String fileName) {
@@ -281,8 +313,9 @@ public class PlayerShellManager {
             JSONObject json = new JSONObject(readFileHead(f, 8192));
             String version = json.optString("version", "");
             String serverUrl = json.optString("serverUrl", "");
+            String contentHash = json.optString("contentHash", "");
             if (version.isEmpty() || serverUrl.isEmpty()) return null;
-            return new JsonRecord(version, serverUrl);
+            return new JsonRecord(version, serverUrl, contentHash);
         } catch (Exception e) {
             return null;
         }
@@ -295,9 +328,29 @@ public class PlayerShellManager {
             JSONObject json = new JSONObject();
             json.put("version", record.version);
             json.put("serverUrl", record.serverUrl);
+            json.put("contentHash", record.contentHash);
             writeFile(dest, json.toString().getBytes("UTF-8"));
         } catch (Exception e) {
             Log.e(TAG, "[writeRecord] failed for " + fileName, e);
+        }
+    }
+
+    /** SHA-256 hex digest — used as a server-comparable "build id" for the downloaded shell
+     *  HTML, since the download timestamp ("version") tells us nothing about whether the
+     *  actual JS content changed. */
+    private static String sha256Hex(byte[] bytes) {
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(bytes);
+            StringBuilder sb = new StringBuilder(hash.length * 2);
+            for (byte b : hash) {
+                String hex = Integer.toHexString(0xff & b);
+                if (hex.length() == 1) sb.append('0');
+                sb.append(hex);
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return "";
         }
     }
 
