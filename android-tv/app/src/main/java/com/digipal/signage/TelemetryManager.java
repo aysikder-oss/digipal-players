@@ -55,6 +55,8 @@ public class TelemetryManager {
       // Renderer observability (full telemetry task): which player shell is currently
       // active ("local" vs "remote") — set once at boot from PlayerShellManager.
       private volatile String  shellSource         = "unknown";
+      private volatile String  shellVersion        = "";
+      private volatile String  shellContentHash    = "";
   
 
     // Heartbeat scheduling — Handler on the main Looper (no extra OS thread).
@@ -147,6 +149,15 @@ public class TelemetryManager {
       public void setWebViewActive(boolean active) { webViewActive = active; }
       public void setShellSource(String source) { shellSource = source; }
       public String getShellSource() { return shellSource; }
+      /** Shell staleness telemetry task: report which build the device is actually
+       *  executing right now, so "audit says fixed but device still broken" can be
+       *  diagnosed remotely instead of guessed at. version is PlayerShellManager's local
+       *  download timestamp; contentHash is the SHA-256 of the shell HTML (the real
+       *  server-comparable build id). */
+      public void setShellBuild(String version, String contentHash) {
+          shellVersion = version == null ? "" : version;
+          shellContentHash = contentHash == null ? "" : contentHash;
+      }
     public void setCacheReadyPercent(int pct) { cacheReadyPercent = pct; }
 
     /** Current process memory usage in MB (ActivityManager.MemoryInfo). Used to bracket
@@ -242,6 +253,8 @@ public class TelemetryManager {
         o.put("transitionGapMs", transitionGapMs.get());
         o.put("heartbeatIntervalMs", currentHeartbeatIntervalMs);
         o.put("shellSource", shellSource);
+        o.put("shellVersion", shellVersion);
+        o.put("shellContentHash", shellContentHash);
         return o;
     }
 
