@@ -40,7 +40,7 @@ package com.nexuscast.player;
           void onFailed(long revisionDbId, String reason);
       }
 
-      private final PlaylistDatabase.AppDatabase db;
+      private final PlaylistDatabase db;
       private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
       // Per-revision pipeline state (keyed by Room row id)
@@ -428,6 +428,6 @@ package com.nexuscast.player;
           db.assetDao().setPinnedUntil(assetId, untilMs);
       }
 
-      public PlaylistDatabase.AppDatabase getDb() { return db; }
+      public PlaylistDatabase getDb() { return db; }
   }
   
