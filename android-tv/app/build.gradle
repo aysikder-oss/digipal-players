@@ -137,9 +137,13 @@ dependencies {
 }
 
 sentry {
-    // Only upload ProGuard mapping when SENTRY_AUTH_TOKEN is available in CI
+    // Only upload ProGuard mapping when SENTRY_AUTH_TOKEN is available AND we're
+    // running in CI — a local dev machine that happens to have the token exported
+    // should not also attempt this upload (its paths/sourcemaps aren't CI-shaped, so
+    // it can fail spuriously outside a real CI run).
     def sentryToken = System.getenv("SENTRY_AUTH_TOKEN") ?: ""
-    autoUploadProguardMapping = !sentryToken.isEmpty()
+    def isCi = System.getenv("CI") == "true" || System.getenv("GITHUB_ACTIONS") == "true"
+    autoUploadProguardMapping = isCi && !sentryToken.isEmpty()
     includeNativeSources = false
     org = "digipal-signage"
     projectName = "android"
