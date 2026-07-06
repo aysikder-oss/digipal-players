@@ -118,7 +118,7 @@ import android.os.Looper;
     private String currentPlayerUrl = null;
 
       // Room-based offline playlist cache â survives boot, no blank screen on restart
-      private CacheDatabase.AppDatabase cacheDb;
+      private CacheDatabase cacheDb;
   
     @SuppressLint("SetJavaScriptEnabled")
     @Override
