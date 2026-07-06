@@ -176,16 +176,7 @@ public class MainActivity extends Activity {
     private String currentPlayerUrl = null;
 
     // Room-based offline playlist cache â survives boot, no blank screen on restart
-    private CacheDatabase.AppDatabase cacheDb;
-
-    private static final java.util.regex.Pattern PRIVATE_IP_PATTERN = java.util.regex.Pattern.compile(
-        "^(10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}" +
-        "|172\\.(1[6-9]|2\\d|3[01])\\.\\d{1,3}\\.\\d{1,3}" +
-        "|192\\.168\\.\\d{1,3}\\.\\d{1,3}" +
-        "|127\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}" +
-        "|localhost" +
-        "|\\[::1\\])$"
-    );
+    private CacheDatabase cacheDb;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -2957,7 +2948,7 @@ public class MainActivity extends Activity {
         if (baseUrl.startsWith("http://")) {
             try {
                 String host = new java.net.URI(baseUrl).getHost();
-                if (host == null || !PRIVATE_IP_PATTERN.matcher(host).matches()) {
+                if (host == null || !UrlPolicy.isPrivateHost(host)) {
                     showError("Security Error", "HTTP connections are only allowed to local network servers. Use https:// for public servers.");
                     return;
                 }
