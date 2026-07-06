@@ -48,7 +48,7 @@ package com.digipal.signage;
             void onPdfPrerenderReady(String assetId);
         }
 
-        private final PlaylistDatabase.AppDatabase db;
+        private final PlaylistDatabase db;
       private final Handler mainHandler = new Handler(Looper.getMainLooper());
       private PdfPrerenderer pdfPrerenderer;
         private PdfPrerenderReadyListener pdfPrerenderReadyListener;
@@ -492,6 +492,6 @@ package com.digipal.signage;
           db.assetDao().setPinnedUntil(assetId, untilMs);
       }
 
-      public PlaylistDatabase.AppDatabase getDb() { return db; }
+      public PlaylistDatabase getDb() { return db; }
   }
   
