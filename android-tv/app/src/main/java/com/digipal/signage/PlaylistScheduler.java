@@ -581,6 +581,10 @@ public class PlaylistScheduler {
             rendererReadyTimeoutGen = -1;
             toState(State.PLAYING, slideId);
             startAdvanceTimer(generation, pendingAdvanceDurationMs);
+            // Task #1902 fix: preload the next slide only now that we're actually PLAYING —
+            // see the comment above the schedulePreload() call site in showCurrent() for why
+            // this can no longer happen before onRendererReady() fires.
+            schedulePreload();
         }
     }
 
@@ -824,6 +828,9 @@ public class PlaylistScheduler {
                 rendererReadyTimeout = null; rendererReadyTimeoutGen = -1;
                 toState(State.PLAYING, mySlideId);
                 startAdvanceTimer(myGen, pendingAdvanceDurationMs);
+                // Task #1902 fix: same reasoning as the onRendererReady() success path —
+                // preload only after actually reaching PLAYING.
+                schedulePreload();
             };
             handler.postDelayed(rendererReadyTimeout, rendererReadyTimeoutMs);
         }
@@ -901,18 +908,29 @@ public class PlaylistScheduler {
                 + ",\"memoryBeforeMb\":" + memoryBeforeMb
                 + ",\"memoryAfterMb\":" + memoryAfterMb + "}");
 
-        schedulePreload(eff);
+        // Bug fix (shell staleness/scheduler race task #1902): schedulePreload() used to be
+        // called unconditionally right here, before the ready-gate. It synchronously calls
+        // toState(PREPARING_NEXT, ...), which clobbers `state` away from PREPARING_CURRENT
+        // BEFORE the async onRendererReady() callback for isolated-WebView (design/kiosk) and
+        // non-buffered native renderers can fire. onRendererReady()'s `state ==
+        // PREPARING_CURRENT` guard then fails every time, so the scheduler always fell back to
+        // its ~9s safety timeout instead of advancing on the real ready signal. Fix: only
+        // schedule the next-slide preload AFTER the state machine has actually reached
+        // PLAYING — see the three toState(PLAYING, ...) call sites (onRendererReady() success,
+        // the renderer-ready safety-timeout fallback below, and the legacy !needsReadyGate
+        // branch right here).
 
         // Legacy WebView slides: advance timer starts immediately (no first-frame callback).
-        // Native slides and isolated-renderer slides: advance timer is started by
+        // Native slides and isolated-renderer slides: advance timer/preload are started by
         // onRendererReady() or the renderer-ready safety runnable armed above.
         if (!needsReadyGate) {
             toState(State.PLAYING, slide.slideId);
             startAdvanceTimer(generation, dur);
+            schedulePreload();
         }
     }
 
-    private void schedulePreload(SlideType currentEff) {
+    private void schedulePreload() {
         if (slides.size() < 2) return;
         final int nextIdx = (currentIndex + 1) % slides.size();
         final SlidePlan next = slides.get(nextIdx);
