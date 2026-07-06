@@ -54,6 +54,13 @@ package com.nexuscast.player;
       private MediaDownloadManager mediaDownloadManager;
       private WebView webView;
 
+        // Off-main-thread executor for deferred DB maintenance (e.g. the
+        // ROLLED_BACK cleanup sweep scheduled after the rollback grace period).
+        // Room forbids DB access on the main thread; this was previously run
+        // directly from a mainHandler.postDelayed callback, crashing with
+        // IllegalStateException("Cannot access database on the main thread").
+        private final java.util.concurrent.ExecutorService dbExec = java.util.concurrent.Executors.newSingleThreadExecutor();
+
       public PlaylistRepository(Context ctx) {
           this.db = PlaylistDatabase.getInstance(ctx);
       }
@@ -211,8 +218,10 @@ package com.nexuscast.player;
           db.revisionDao().pruneOld(System.currentTimeMillis() - 7L * 86400 * 1000);
           Log.i(TAG, "[pipeline] promoted revisionDbId=" + revisionDbId + " → ACTIVE");
 
-          // Schedule ROLLED_BACK cleanup after grace period
-          mainHandler.postDelayed(this::cleanupRolledBackRevisions, ROLLBACK_GRACE_MS);
+          // Schedule ROLLED_BACK cleanup after grace period. Dispatch onto
+          // dbExec (not directly onto the main-thread Handler) since the
+          // cleanup does Room queries/deletes.
+          mainHandler.postDelayed(() -> dbExec.execute(this::cleanupRolledBackRevisions), ROLLBACK_GRACE_MS);
       }
 
       // ─────────────────────────────────────────────────────────────────────────
