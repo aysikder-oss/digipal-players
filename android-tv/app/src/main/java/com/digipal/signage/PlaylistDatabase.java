@@ -11,8 +11,12 @@ package com.digipal.signage;
   /**
    * PlaylistDatabase — Room DB for native playlist scheduling.
    * v2: added local_manifest column + ROLLED_BACK status + atomic pipeline DAO methods.
+   *
+   * NOTE: the @Database-annotated class must stay top-level (see CacheDatabase for why) —
+   * it is declared directly on this class rather than on a nested AppDatabase type.
    */
-  public class PlaylistDatabase {
+  @Database(entities={PlaylistDatabase.PlaylistRevisionEntity.class,PlaylistDatabase.SlideEntity.class,PlaylistDatabase.AssetEntity.class,PlaylistDatabase.PlaybackEventEntity.class,PlaylistDatabase.PlayerErrorEntity.class}, version=3, exportSchema=true)
+  public abstract class PlaylistDatabase extends RoomDatabase {
 
       @Entity(tableName = "playlist_revisions")
       public static class PlaylistRevisionEntity {
@@ -179,21 +183,18 @@ package com.digipal.signage;
           }
       };
 
-      @Database(entities={PlaylistRevisionEntity.class,SlideEntity.class,AssetEntity.class,PlaybackEventEntity.class,PlayerErrorEntity.class}, version=3, exportSchema=true)
-      public abstract static class AppDatabase extends RoomDatabase {
-          public abstract PlaylistRevisionDao revisionDao();
-          public abstract SlideDao slideDao();
-          public abstract AssetDao assetDao();
-          public abstract PlaybackEventDao eventDao();
-          public abstract PlayerErrorDao errorDao();
-      }
+      public abstract PlaylistRevisionDao revisionDao();
+      public abstract SlideDao slideDao();
+      public abstract AssetDao assetDao();
+      public abstract PlaybackEventDao eventDao();
+      public abstract PlayerErrorDao errorDao();
 
-      private static volatile AppDatabase INSTANCE;
-      public static AppDatabase getInstance(android.content.Context ctx) {
+      private static volatile PlaylistDatabase INSTANCE;
+      public static PlaylistDatabase getInstance(android.content.Context ctx) {
           if (INSTANCE == null) {
               synchronized (PlaylistDatabase.class) {
                   if (INSTANCE == null) {
-                      INSTANCE = Room.databaseBuilder(ctx.getApplicationContext(), AppDatabase.class, "playlist_native.db")
+                      INSTANCE = Room.databaseBuilder(ctx.getApplicationContext(), PlaylistDatabase.class, "playlist_native.db")
                           .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                           .build();
                   }
