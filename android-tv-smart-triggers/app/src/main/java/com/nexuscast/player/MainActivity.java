@@ -48,6 +48,9 @@ import android.os.Looper;
     public static volatile boolean activityAlive = false;
 
     private WebView webView;
+    private final android.os.Handler heartbeatHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable heartbeatRunnable;
+    private volatile int webViewKeepaliveMissCount = 0;
     private long lastGcMs = 0;
     private FrameLayout rootLayout;
     private FrameLayout errorContainer;
@@ -1221,6 +1224,31 @@ import android.os.Looper;
                     if (playlistScheduler != null) {
                         playlistScheduler.setPlaylist(json);
                         android.util.Log.i("DigipalNative", "[nativeLoop] setNativePlaylist → PlaylistScheduler");
+                        // Task 1952: an empty playlist means the native loop is
+                        // releasing the screen back to the WebView. Nothing else
+                        // re-shows it, so undo the dormant state here or the
+                        // device is left on a permanent black screen.
+                        boolean nativeLoopReleased = false;
+                        try { nativeLoopReleased = new org.json.JSONArray(json).length() == 0; } catch (Throwable ignored) {}
+                        if (nativeLoopReleased) {
+                            runOnUiThread(() -> {
+                                try {
+                                    if (heartbeatRunnable != null) {
+                                        heartbeatHandler.removeCallbacks(heartbeatRunnable);
+                                        heartbeatRunnable = null;
+                                    }
+                                    if (webView != null) {
+                                        try { webView.resumeTimers(); } catch (Throwable ignored2) {}
+                                        webView.setAlpha(1f);
+                                        webView.setVisibility(View.VISIBLE);
+                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                                            try { webView.setRendererPriorityPolicy(android.webkit.WebView.RENDERER_PRIORITY_IMPORTANT, false); } catch (Throwable ignored3) {}
+                                        }
+                                        android.util.Log.i("DigipalNative", "[nativeLoop] empty playlist -> WebView re-activated");
+                                    }
+                                } catch (Throwable ignored4) {}
+                            });
+                        }
                         if (assetCacheManager != null) {
                             try {
                                 org.json.JSONArray _arr = new org.json.JSONArray(json);
@@ -1600,7 +1628,53 @@ import android.os.Looper;
                       @Override public void schedulerDeactivateWebView() {
                           // WebView dormant enforced in schedulerPlayVideo/schedulerShowImage via setWebViewDormant(true)
                           // Pause V8/Blink timer loop to release JS heap pressure during native playback
-                          runOnUiThread(() -> { try { if (webView != null) webView.pauseTimers(); } catch (Throwable ignored) {} });
+                          runOnUiThread(() -> {
+                              try {
+                                  if (webView != null) {
+                                      webView.pauseTimers();
+                                        // Keepalive (task 1952): keep WebSocket + JS alive on ALL devices while
+                                        // timers are paused -- not just Fire TV. pauseTimers() freezes
+                                        // setInterval so the WS heartbeat and status polling stop; a Java
+                                        // Handler fires evaluateJavascript every 25s instead. The
+                                        // ValueCallback doubles as a liveness probe: two consecutive
+                                        // silent ticks mean the WebView renderer is wedged, so we resume
+                                        // timers and force a fresh reload.
+                                        if (heartbeatRunnable != null) {
+                                            heartbeatHandler.removeCallbacks(heartbeatRunnable);
+                                            heartbeatRunnable = null;
+                                        }
+                                        webViewKeepaliveMissCount = 0;
+                                        heartbeatRunnable = new Runnable() {
+                                            @Override public void run() {
+                                                try {
+                                                    if (webView != null) {
+                                                        final boolean[] acked = new boolean[] { false };
+                                                        webView.evaluateJavascript(
+                                                            "try{window.__digipalHeartbeat&&window.__digipalHeartbeat();}catch(e){};1",
+                                                            value -> { acked[0] = true; webViewKeepaliveMissCount = 0; }
+                                                        );
+                                                        heartbeatHandler.postDelayed(() -> {
+                                                            if (acked[0]) return;
+                                                            if (heartbeatRunnable == null) return;
+                                                            webViewKeepaliveMissCount++;
+                                                            android.util.Log.w("RendererOwner", "keepalive miss " + webViewKeepaliveMissCount);
+                                                            if (webViewKeepaliveMissCount >= 2) {
+                                                                webViewKeepaliveMissCount = 0;
+                                                                android.util.Log.e("RendererOwner", "WebView unresponsive during native loop -- forcing fresh reload");
+                                                                try { if (webView != null) webView.resumeTimers(); } catch (Throwable ignored3) {}
+                                                                forcePlayerReload();
+                                                            }
+                                                        }, 10_000);
+                                                    }
+                                                } catch (Throwable ignored2) {}
+                                                heartbeatHandler.postDelayed(this, 25_000);
+                                            }
+                                        };
+                                        heartbeatHandler.postDelayed(heartbeatRunnable, 25_000);
+                                        android.util.Log.d("RendererOwner", "native keepalive started (all devices)");
+                                    }
+                              } catch (Throwable ignored) {}
+                          });
                       }
                       @Override public void schedulerStopVideo() {
                           runOnUiThread(() -> {
@@ -1828,7 +1902,9 @@ import android.os.Looper;
         return BuildConfig.SERVER_URL;
     }
 
-    private void loadPlayerUrl(String baseUrl) {
+    private void loadPlayerUrl(String baseUrl) { loadPlayerUrl(baseUrl, false); }
+
+    private void loadPlayerUrl(String baseUrl, boolean freshReload) {
         if (baseUrl.startsWith("http://")) {
             try {
                 String host = new java.net.URI(baseUrl).getHost();
@@ -1846,6 +1922,7 @@ import android.os.Looper;
             playerUrl += "/";
         }
         playerUrl += "player";
+        if (freshReload) playerUrl += "?freshReload=1";
         currentPlayerUrl = playerUrl;
         webView.loadUrl(playerUrl);
     }
@@ -1996,7 +2073,17 @@ import android.os.Looper;
                 +"window.dispatchEvent(new CustomEvent('android-recovery',"
                 +"{detail:{reason:'webview_renderer_gone'}}));", null);
             } catch (Throwable ignored) {}
-            loadPlayerUrl(getServerUrl());
+            // Task 1952: the old WebView was destroyed while process-wide timers
+            // were paused by the native loop. resumeTimers() or the rebuilt
+            // WebView boots with frozen JS and can never heartbeat or poll.
+            try {
+                if (heartbeatRunnable != null) {
+                    heartbeatHandler.removeCallbacks(heartbeatRunnable);
+                    heartbeatRunnable = null;
+                }
+            } catch (Throwable ignored) {}
+            try { webView.resumeTimers(); } catch (Throwable ignored) {}
+            loadPlayerUrl(getServerUrl(), true);
         } catch (Throwable e) {
             if (isAutoRelaunchEnabled()) scheduleAppRelaunch(3000);
             isUserClosing = true;
@@ -2133,14 +2220,31 @@ import android.os.Looper;
         runOnUiThread(() -> {
             try {
                 if (errorContainer != null) errorContainer.setVisibility(View.GONE);
+                // Task 1952: a reload fired while the native loop owns the screen
+                // must undo the dormant state, or the revived page boots with
+                // frozen timers behind an invisible WebView and loops forever.
+                if (heartbeatRunnable != null) {
+                    heartbeatHandler.removeCallbacks(heartbeatRunnable);
+                    heartbeatRunnable = null;
+                }
+                if (webView != null) {
+                    try { webView.resumeTimers(); } catch (Throwable ignored) {}
+                    try { webView.setAlpha(1f); webView.setVisibility(View.VISIBLE); } catch (Throwable ignored) {}
+                }
                 String url = webView != null ? webView.getUrl() : null;
                 if (webView != null && url != null && !url.startsWith("about:")) {
-                    webView.reload();
+                    String freshUrl = url;
+                    try {
+                        if (!url.contains("freshReload=")) {
+                            freshUrl = url + (url.contains("?") ? "&" : "?") + "freshReload=1";
+                        }
+                    } catch (Throwable ignored) {}
+                    webView.loadUrl(freshUrl);
                 } else {
-                    loadPlayerUrl(getServerUrl());
+                    loadPlayerUrl(getServerUrl(), true);
                 }
             } catch (Exception e) {
-                try { loadPlayerUrl(getServerUrl()); } catch (Exception ignored) {}
+                try { loadPlayerUrl(getServerUrl(), true); } catch (Exception ignored) {}
             }
         });
     }
