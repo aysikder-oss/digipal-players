@@ -369,6 +369,26 @@ import android.os.Looper;
           webView.addJavascriptInterface(new WebAppInterface(), "Android");
 
         webView.setWebViewClient(new WebViewClient() {
+            // Serve virtual https://appassets.androidplatform.net/media/<objectPath>
+            // URLs (handed out by getLocalMediaWebUrl in the JS bridge) from the local
+            // media cache, so cached media plays offline without raw file:// URLs.
+            @Override
+            public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                try {
+                    android.net.Uri mediaUri = request != null ? request.getUrl() : null;
+                    if (mediaUri != null && "appassets.androidplatform.net".equals(mediaUri.getHost())
+                            && mediaDownloadManager != null) {
+                        java.io.File cached = mediaDownloadManager.resolveLocalMediaFile(mediaUri.getPath());
+                        if (cached != null) {
+                            String mime = MediaDownloadManager.guessMimeType(cached);
+                            return new android.webkit.WebResourceResponse(mime, null,
+                                    new java.io.FileInputStream(cached));
+                        }
+                    }
+                } catch (Throwable ignored) {}
+                return super.shouldInterceptRequest(view, request);
+            }
+
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
@@ -607,6 +627,17 @@ import android.os.Looper;
         public String getLocalMediaPath(String objectPath) {
             if (mediaDownloadManager != null) {
                 return mediaDownloadManager.getLocalMediaPath(objectPath);
+            }
+            return "";
+        }
+
+        /** Returns a WebView-only virtual https://appassets.androidplatform.net/media/
+         *  URL for a locally cached objectPath (empty string when not cached). Unlike
+         *  getLocalMediaPath()'s file:// URLs, these work from an https:// origin page. */
+        @JavascriptInterface
+        public String getLocalMediaWebUrl(String objectPath) {
+            if (mediaDownloadManager != null) {
+                return mediaDownloadManager.getLocalMediaWebUrl(objectPath);
             }
             return "";
         }
