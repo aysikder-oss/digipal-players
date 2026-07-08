@@ -499,6 +499,22 @@ public class MainActivity extends Activity {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                // Serve virtual https://appassets.androidplatform.net/media/<objectPath>
+                // URLs (handed out by getLocalMediaWebUrl below) from the local media
+                // cache, so the main WebView can play cached media while offline
+                // without ever using a raw file:// URL.
+                try {
+                    android.net.Uri mediaUri = request != null ? request.getUrl() : null;
+                    if (mediaUri != null && "appassets.androidplatform.net".equals(mediaUri.getHost())
+                            && mediaDownloadManager != null) {
+                        java.io.File cached = mediaDownloadManager.resolveLocalMediaFile(mediaUri.getPath());
+                        if (cached != null) {
+                            String mime = MediaDownloadManager.guessMimeType(cached);
+                            return new android.webkit.WebResourceResponse(mime, null,
+                                    new java.io.FileInputStream(cached));
+                        }
+                    }
+                } catch (Throwable ignored) {}
                 if (playerShellManager != null
                         && "appassets.androidplatform.net".equals(request.getUrl().getHost())) {
                     android.webkit.WebResourceResponse r =
@@ -794,6 +810,18 @@ public class MainActivity extends Activity {
         public String getLocalMediaPath(String objectPath) {
             if (mediaDownloadManager != null) {
                 return mediaDownloadManager.getLocalMediaPath(objectPath);
+            }
+            return "";
+        }
+
+        /** Returns a WebView-only virtual https://appassets.androidplatform.net/media/
+         *  URL for a locally cached objectPath (empty string when not cached). Unlike
+         *  getLocalMediaPath()'s file:// URLs, these work from an https:// origin page.
+         *  WebView-only: ExoPlayer/Glide native overlays cannot fetch these URLs. */
+        @JavascriptInterface
+        public String getLocalMediaWebUrl(String objectPath) {
+            if (mediaDownloadManager != null) {
+                return mediaDownloadManager.getLocalMediaWebUrl(objectPath);
             }
             return "";
         }
