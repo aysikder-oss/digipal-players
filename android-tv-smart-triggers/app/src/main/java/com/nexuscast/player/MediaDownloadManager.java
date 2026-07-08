@@ -211,6 +211,78 @@ package com.nexuscast.player;
           return "file://" + localPath;
       }
 
+      /** Returns a WebView-only virtual https://appassets.androidplatform.net/media/
+       *  URL for a locally cached objectPath, or "" when not cached. Unlike raw
+       *  file:// paths these work from an https:// origin page; MainActivity's
+       *  shouldInterceptRequest() resolves them back to local bytes. */
+      public String getLocalMediaWebUrl(String objectPath) {
+          JSONObject manifest = getManifest();
+          JSONObject entry = manifest.optJSONObject(objectPath);
+          if (entry == null) return "";
+
+          String localPath = entry.optString("localPath", "");
+          if (localPath.isEmpty()) return "";
+
+          File file = new File(localPath);
+          if (!file.exists()) {
+              removeFromManifest(objectPath);
+              return "";
+          }
+
+          updateLastUsed(objectPath);
+          try {
+              String encoded = java.net.URLEncoder.encode(objectPath, "UTF-8");
+              return "https://appassets.androidplatform.net/media/" + encoded;
+          } catch (Exception e) {
+              return "";
+          }
+      }
+
+      /** Resolves a virtual https://appassets.androidplatform.net/media/<encoded
+       *  objectPath> request (see getLocalMediaWebUrl() above) back to the locally
+       *  cached File for that objectPath. Only ever serves a path that is present
+       *  in the manifest and still exists on disk. Returns null on any mismatch. */
+      public File resolveLocalMediaFile(String virtualPath) {
+          if (virtualPath == null || !virtualPath.startsWith("/media/")) return null;
+
+          String objectPath;
+          try {
+              objectPath = java.net.URLDecoder.decode(virtualPath.substring("/media/".length()), "UTF-8");
+          } catch (Exception e) {
+              return null;
+          }
+
+          JSONObject manifest = getManifest();
+          JSONObject entry = manifest.optJSONObject(objectPath);
+          if (entry == null) return null;
+
+          String localPath = entry.optString("localPath", "");
+          if (localPath.isEmpty()) return null;
+
+          File file = new File(localPath);
+          if (!file.exists()) return null;
+          return file;
+      }
+
+      /** Best-effort MIME type for a cached media file, used when serving it through
+       *  resolveLocalMediaFile()'s virtual URL from shouldInterceptRequest(). */
+      public static String guessMimeType(File file) {
+          String name = file.getName().toLowerCase(java.util.Locale.ROOT);
+          if (name.endsWith(".png")) return "image/png";
+          if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+          if (name.endsWith(".gif")) return "image/gif";
+          if (name.endsWith(".webp")) return "image/webp";
+          if (name.endsWith(".svg")) return "image/svg+xml";
+          if (name.endsWith(".mp4")) return "video/mp4";
+          if (name.endsWith(".webm")) return "video/webm";
+          if (name.endsWith(".mov")) return "video/quicktime";
+          if (name.endsWith(".pdf")) return "application/pdf";
+          if (name.endsWith(".mp3")) return "audio/mpeg";
+          if (name.endsWith(".wav")) return "audio/wav";
+          if (name.endsWith(".ogg")) return "audio/ogg";
+          return "application/octet-stream";
+      }
+
       public boolean deleteMedia(String objectPath) {
           JSONObject manifest = getManifest();
           JSONObject entry = manifest.optJSONObject(objectPath);
