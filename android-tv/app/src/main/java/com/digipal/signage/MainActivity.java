@@ -127,6 +127,13 @@ public class MainActivity extends Activity {
     private Runnable debugOverlayTickRunnable;
     private boolean activeVideoViewIsA = true;
     private boolean activeImageViewIsA = true;
+      // Throttle repeated Glide-failure Sentry reports per slide: a single permanently-broken
+      // image can otherwise generate thousands of captureMessage() calls per day as the
+      // playlist loops back to it every cycle (seen: 2000+ events/day for one slide). Local
+      // Log.w + breadcrumb still fire every time for on-device debugging; only the actual
+      // Sentry event is rate-limited to once per slide per window.
+      private static final long GLIDE_FAILURE_SENTRY_THROTTLE_MS = 10 * 60 * 1000L;
+      private final java.util.Map<String, Long> glideFailureLastSentryMs = new java.util.concurrent.ConcurrentHashMap<>();
     // Old player held alive during swap-wait so activeView stays visible; released after new frame confirmed
     private androidx.media3.exoplayer.ExoPlayer pendingOldPlayer;
     // Native-first rendering mode (OptiSigns-style OOM elimination on low-mem Fire TV)
@@ -2462,7 +2469,12 @@ public class MainActivity extends Activity {
                                               @Override public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e,
                                                       Object model, com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target, boolean isFirstResource) {
                                                   android.util.Log.w("DigipalNative", "[schedulerShowImage] Glide failed slide=" + _sid + ": " + (e != null ? e.getMessage() : "null"));
-                                                  try { io.sentry.Sentry.captureMessage("Glide image load failed: slide=" + _sid + " err=" + (e != null ? e.getMessage() : "null"), io.sentry.SentryLevel.WARNING); } catch (Throwable _sbc) {}
+                                                  Long _lastGlideSentryMs = glideFailureLastSentryMs.get(_sid);
+                                                    long _nowGlideMs = System.currentTimeMillis();
+                                                    if (_lastGlideSentryMs == null || (_nowGlideMs - _lastGlideSentryMs) > GLIDE_FAILURE_SENTRY_THROTTLE_MS) {
+                                                        glideFailureLastSentryMs.put(_sid, _nowGlideMs);
+                                                        try { io.sentry.Sentry.captureMessage("Glide image load failed: slide=" + _sid + " err=" + (e != null ? e.getMessage() : "null"), io.sentry.SentryLevel.WARNING); } catch (Throwable _sbc) {}
+                                                    }
                                                   try { io.sentry.Breadcrumb _bc = new io.sentry.Breadcrumb("Glide load failed slide=" + _sid + ": " + (e != null ? e.getMessage() : "null")); _bc.setLevel(io.sentry.SentryLevel.WARNING); _bc.setType("error"); io.sentry.Sentry.addBreadcrumb(_bc); } catch (Throwable ignored) {}
                                                   // Notify scheduler directly — it will retry/skip; no brown square lingers
                                                   if (playlistScheduler != null) playlistScheduler.onRendererError(_sid, "glide_load_failed");
