@@ -134,6 +134,23 @@ public class MainActivity extends Activity {
       // Sentry event is rate-limited to once per slide per window.
       private static final long GLIDE_FAILURE_SENTRY_THROTTLE_MS = 10 * 60 * 1000L;
       private final java.util.Map<String, Long> glideFailureLastSentryMs = new java.util.concurrent.ConcurrentHashMap<>();
+
+        // Throttle repeated non-Glide Sentry reports (video playback errors, playlist rollback,
+        // medium-level reliability recovery) the same way: a persistently-broken slide or a
+        // sustained instability condition can otherwise re-fire the same captureException/
+        // captureMessage call on every playlist loop or recovery attempt. Local Log.w still fires
+        // every time for on-device debugging; only the Sentry event itself is rate-limited to once
+        // per key per window.
+        private static final long SENTRY_REPORT_THROTTLE_MS = 10 * 60 * 1000L;
+        private final java.util.Map<String, Long> sentryReportLastMs = new java.util.concurrent.ConcurrentHashMap<>();
+
+        private boolean shouldReportToSentry(String key) {
+            long now = System.currentTimeMillis();
+            Long last = sentryReportLastMs.get(key);
+            if (last != null && (now - last) < SENTRY_REPORT_THROTTLE_MS) return false;
+            sentryReportLastMs.put(key, now);
+            return true;
+        }
     // Old player held alive during swap-wait so activeView stays visible; released after new frame confirmed
     private androidx.media3.exoplayer.ExoPlayer pendingOldPlayer;
     // Native-first rendering mode (OptiSigns-style OOM elimination on low-mem Fire TV)
@@ -2049,7 +2066,7 @@ public class MainActivity extends Activity {
                           }
                           @Override public void onPlayerError(androidx.media3.common.PlaybackException error) {
                               android.util.Log.w("DigipalMetrics", "[sched preload onPlayerError] slide=" + slideId + " " + error.getMessage());
-                              try { if (!(error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException)) { io.sentry.Sentry.captureException(error); } } catch (Throwable ignored) {}
+                              try { if (!(error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException) && shouldReportToSentry("video_" + slideId)) { io.sentry.Sentry.captureException(error); } } catch (Throwable ignored) {}
                               if (error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException) return; // silence + let 2.5s fallback handle
                               if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
                               stopBufferWatchdog(); // Fix 2
@@ -2176,7 +2193,7 @@ public class MainActivity extends Activity {
                       }
                       @Override public void onPlayerError(androidx.media3.common.PlaybackException error) {
                           android.util.Log.w("DigipalMetrics", "[sched cold onPlayerError] slide=" + slideId + " " + error.getMessage());
-                          try { if (!(error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException)) { io.sentry.Sentry.captureException(error); } } catch (Throwable ignored) {}
+                          try { if (!(error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException) && shouldReportToSentry("video_" + slideId)) { io.sentry.Sentry.captureException(error); } } catch (Throwable ignored) {}
                           if (error.getCause() instanceof androidx.media3.exoplayer.ExoTimeoutException) return; // silence + let 8s fallback handle
                           stopBufferWatchdog(); // Fix 2
                           if (exoPlayer != null) exoPlayer.removeListener(this); nativeVideoListener = null;
@@ -2385,7 +2402,7 @@ public class MainActivity extends Activity {
                                     if (last != null && last.localManifest != null && !last.localManifest.isEmpty()) {
                                         playlistScheduler.setPlaylist(last.localManifest);
                                         android.util.Log.i("DigipalRecovery", "[ROLLBACK] reverted to revision " + last.revisionId);
-                                        try { io.sentry.Sentry.captureMessage("Playlist rollback to revision " + last.revisionId, io.sentry.SentryLevel.WARNING); } catch (Throwable _sbc) {}
+                                        try { if (shouldReportToSentry("rollback_" + last.revisionId)) { io.sentry.Sentry.captureMessage("Playlist rollback to revision " + last.revisionId, io.sentry.SentryLevel.WARNING); } } catch (Throwable _sbc) {}
                                     }
                                 });
                             }
@@ -2879,7 +2896,7 @@ public class MainActivity extends Activity {
                       }
                       @Override public void mediumRecover(String reason) {
                           android.util.Log.w("DigipalReliability", "[medium] " + reason);
-                          try { io.sentry.Sentry.captureMessage("Player medium recover: " + reason, io.sentry.SentryLevel.WARNING); } catch (Throwable _sbc) {}
+                          try { if (shouldReportToSentry("medium_recover_" + reason)) { io.sentry.Sentry.captureMessage("Player medium recover: " + reason, io.sentry.SentryLevel.WARNING); } } catch (Throwable _sbc) {}
                           // Release all media renderers before re-booting — prevents ExoPlayer leaks on long sessions
                           runOnUiThread(() -> releaseAllRenderers());
                           if (playlistScheduler != null) playlistScheduler.boot();
