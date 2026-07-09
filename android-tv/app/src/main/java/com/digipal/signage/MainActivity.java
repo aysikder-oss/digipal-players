@@ -2583,25 +2583,32 @@ public class MainActivity extends Activity {
                                         // timers are paused -- not just Fire TV. pauseTimers() freezes
                                         // setInterval so the WS heartbeat and status polling stop; a Java
                                         // Handler fires evaluateJavascript every 25s instead. The
-                                        if (heartbeatRunnable != null) {
-                                            heartbeatHandler.removeCallbacks(heartbeatRunnable);
-                                            heartbeatRunnable = null;
-                                        }
-                                        heartbeatRunnable = new Runnable() {
-                                            @Override public void run() {
-                                                try {
-                                                    if (webView != null) {
-                                                        webView.evaluateJavascript(
-                                                            "try{window.__digipalHeartbeat&&window.__digipalHeartbeat();}catch(e){}",
-                                                            null
-                                                        );
-                                                    }
-                                                } catch (Throwable ignored2) {}
-                                                heartbeatHandler.postDelayed(this, 25_000);
-                                            }
-                                        };
-                                        heartbeatHandler.postDelayed(heartbeatRunnable, 25_000);
-                                        android.util.Log.d("RendererOwner", "native keepalive started (all devices)");
+                                        if (heartbeatRunnable == null) {
+                                              heartbeatRunnable = new Runnable() {
+                                                  @Override public void run() {
+                                                      try {
+                                                          if (webView != null) {
+                                                              webView.evaluateJavascript(
+                                                                  "try{window.__digipalHeartbeat&&window.__digipalHeartbeat();}catch(e){}",
+                                                                  null
+                                                              );
+                                                          }
+                                                      } catch (Throwable ignored2) {}
+                                                      // v60 fix: keep this Runnable self-scheduling on its own fixed
+                                                      // 25s cadence. Do NOT cancel/recreate it from
+                                                      // schedulerDeactivateWebView() on every slide transition --
+                                                      // playlists advance faster than 25s for most content, which
+                                                      // was resetting this countdown before it ever fired, so the
+                                                      // WS heartbeat was never sent during multi-slide playlists
+                                                      // (screen went "Offline" after ~5 min even though it kept
+                                                      // playing locally). Single content worked because there was
+                                                      // only ever one slide transition to reset the timer.
+                                                      heartbeatHandler.postDelayed(this, 25_000);
+                                                  }
+                                              };
+                                              heartbeatHandler.postDelayed(heartbeatRunnable, 25_000);
+                                              android.util.Log.d("RendererOwner", "native keepalive started (all devices)");
+                                          }
                                     }
                                 } catch (Throwable ignored) {}
                           });
