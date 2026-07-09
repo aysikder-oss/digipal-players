@@ -693,6 +693,15 @@ public class MainActivity extends Activity {
 
             @Override
             public void onShowCustomView(View view, CustomViewCallback callback) {
+                // Defensive null-guards (Sentry: NPE on addView) — a fullscreen video
+                // request can theoretically reach here via a stale WebChromeClient
+                // callback before customViewContainer/webView are (re)initialized,
+                // e.g. across an Activity recreation race. Bail out safely instead
+                // of crashing the whole app.
+                if (view == null || customViewContainer == null || webView == null) {
+                    try { callback.onCustomViewHidden(); } catch (Throwable ignored) {}
+                    return;
+                }
                 if (customView != null) { callback.onCustomViewHidden(); return; }
                 customView = view;
                 customViewContainer.addView(view, new FrameLayout.LayoutParams(
@@ -707,10 +716,12 @@ public class MainActivity extends Activity {
             @Override
             public void onHideCustomView() {
                 if (customView == null) return;
-                customViewContainer.removeView(customView);
+                if (customViewContainer != null) {
+                    customViewContainer.removeView(customView);
+                    customViewContainer.setVisibility(View.GONE);
+                }
                 customView = null;
-                customViewContainer.setVisibility(View.GONE);
-                webView.setVisibility(View.VISIBLE);
+                if (webView != null) webView.setVisibility(View.VISIBLE);
                 hideSystemUI();
             }
         });
