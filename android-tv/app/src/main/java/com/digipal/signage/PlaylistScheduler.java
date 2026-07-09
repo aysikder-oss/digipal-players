@@ -1079,42 +1079,54 @@ public class PlaylistScheduler {
     }
 
     private List<SlidePlan> parseSlides(String json) {
-        List<SlidePlan> result = new ArrayList<>();
-        try {
-            JSONArray arr = new JSONArray(json);
-            for (int i = 0; i < arr.length(); i++) {
-                JSONObject o = arr.getJSONObject(i);
-                SlidePlan s = new SlidePlan();
-                s.slideId    = o.optString("slideId", String.valueOf(o.optInt("contentId", i)));
-                String t     = o.optString("type", "WEBVIEW_URL");
-                SlideType parsedType;
+          List<SlidePlan> result = new ArrayList<>();
+          try {
+              JSONArray arr = new JSONArray(json);
+              for (int i = 0; i < arr.length(); i++) {
+                  // Bug fix: each item is now parsed in its own try/catch. Previously a
+                  // single malformed/unexpected item (bad JSON shape, a field access that
+                  // throws) aborted the ENTIRE outer try block, silently truncating the
+                  // whole playlist to whatever slides had already been added before the
+                  // failure -- e.g. a 6-item playlist collapsing to just slide 0, which
+                  // then looped forever since (currentIndex+1) % slides.size() always
+                  // lands back on itself. One bad item must never take down every slide
+                  // after it; skip and log just that item, keep parsing the rest.
                   try {
-                      parsedType = SlideType.valueOf(t);
-                  } catch (IllegalArgumentException ex) {
-                      // Unknown/legacy type string (e.g. a pre-v3.11 "WEBVIEW_DELEGATED" payload,
-                      // or a future client-side category this APK build predates) --
-                      // fall back to the generic isolated-WebView renderer path rather
-                      // than crashing parseSlides for the whole playlist.
-                      parsedType = SlideType.WEBVIEW_URL;
+                      JSONObject o = arr.getJSONObject(i);
+                      SlidePlan s = new SlidePlan();
+                      s.slideId    = o.optString("slideId", String.valueOf(o.optInt("contentId", i)));
+                      String t     = o.optString("type", "WEBVIEW_URL");
+                      SlideType parsedType;
+                        try {
+                            parsedType = SlideType.valueOf(t);
+                        } catch (IllegalArgumentException ex) {
+                            // Unknown/legacy type string (e.g. a pre-v3.11 "WEBVIEW_DELEGATED" payload,
+                            // or a future client-side category this APK build predates) --
+                            // fall back to the generic isolated-WebView renderer path rather
+                            // than crashing parseSlides for the whole playlist.
+                            parsedType = SlideType.WEBVIEW_URL;
+                        }
+                        s.type       = parsedType;
+                      s.url        = o.optString("url", "");
+                      s.durationMs = (long)(o.optDouble("duration", 10) * 1000);
+                      s.contentId  = o.optInt("contentId", 0);
+                      s.objectFit  = o.optString("objectFit", "contain");
+                      s.loop       = o.optBoolean("loop", true);
+                      s.volume     = (float) o.optDouble("volume", 0.0);
+                      s.scaleType  = o.optString("scaleType", "contain");
+                      s.fallbackUrl= o.optString("fallbackUrl", "");
+                      s.renderMode = o.optString("renderMode", "");
+                      double pdfPageDur = o.optDouble("pdfPageDuration", -1);
+                      s.pdfPageDurationMs = pdfPageDur >= 0 ? (long) (pdfPageDur * 1000) : -1;
+                      result.addAll(expandPdfIfPrerendered(s));
+                  } catch (Exception itemEx) {
+                      Log.e(TAG, "parseSlides: skipping malformed item index=" + i + ": " + itemEx.getMessage());
                   }
-                  s.type       = parsedType;
-                s.url        = o.optString("url", "");
-                s.durationMs = (long)(o.optDouble("duration", 10) * 1000);
-                s.contentId  = o.optInt("contentId", 0);
-                s.objectFit  = o.optString("objectFit", "contain");
-                s.loop       = o.optBoolean("loop", true);
-                s.volume     = (float) o.optDouble("volume", 0.0);
-                s.scaleType  = o.optString("scaleType", "contain");
-                s.fallbackUrl= o.optString("fallbackUrl", "");
-                s.renderMode = o.optString("renderMode", "");
-                double pdfPageDur = o.optDouble("pdfPageDuration", -1);
-                s.pdfPageDurationMs = pdfPageDur >= 0 ? (long) (pdfPageDur * 1000) : -1;
-                result.addAll(expandPdfIfPrerendered(s));
-            }
-        } catch (Exception e) { Log.e(TAG, "parseSlides: " + e.getMessage()); }
-        return result;
-    }
-
+              }
+          } catch (Exception e) { Log.e(TAG, "parseSlides: " + e.getMessage()); }
+          return result;
+      }
+  
     /**
        * Task #1891: WEBVIEW_PDF slides whose PDF has been downloaded + prerendered to
        * page JPEGs (PdfPrerenderer, triggered from PlaylistRepository right after download)
