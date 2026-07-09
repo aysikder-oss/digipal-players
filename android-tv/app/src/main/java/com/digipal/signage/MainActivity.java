@@ -306,6 +306,9 @@ public class MainActivity extends Activity {
         nativeImageView.setVisibility(View.INVISIBLE);
         root.addView(nativeImageView, new FrameLayout.LayoutParams(1, 1));
         // Dual-buffer B image view â preloaded image loads here while A is visible
+        nativeImageViewB = new RecyclingSafeImageView(this);
+        nativeImageViewB.setVisibility(View.INVISIBLE);
+        root.addView(nativeImageViewB, new FrameLayout.LayoutParams(1, 1));
 
         // P0 Fix 5: native debug overlay TextView, added above every other renderer
         // (including any isolated per-slide WebView created later, task #1875) so the
