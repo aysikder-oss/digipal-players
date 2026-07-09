@@ -239,8 +239,17 @@ public class PlaylistScheduler {
     private int rendererReadyTimeoutGen = -1;
     /** Safety runnable: starts advance timer if renderer never calls onRendererReady(). */
     private Runnable rendererReadyTimeout;
+      /** Set true for exactly one slide -- the first slide dispatched after a playlist
+       *  structural change -- so showCurrent() can grant it a longer cold-start timeout. */
+      private volatile boolean coldRevisionFirstSlide = false;
     /** Max time to wait for first-frame signal before starting the slide timer anyway (native VIDEO/IMAGE). */
       private static final long RENDERER_READY_TIMEOUT_NATIVE_MS = 3_000L;
+        /** Task fix: brand-new playlist revisions may contain images/videos this device has
+         *  never downloaded before (no local cache warm from a prior play). The normal 3s
+         *  native-decode timeout is tuned for cached/local assets and is too tight for a truly
+         *  cold network fetch (DNS + TLS + signed-URL redirect + decode) on real-world Wi-Fi.
+         *  Applied only to the first slide immediately after a playlist switch. */
+        private static final long RENDERER_READY_TIMEOUT_NATIVE_COLD_MS = 8_000L;
       /** Bug fix (Android review): isolated WebView pages need longer than native decode —
        *  IsolatedWebRenderer's own LOAD_TIMEOUT_MS/policy.readyTimeoutMs is 8s by default, so this
        *  safety net must be set slightly higher or it fires first and starts the advance timer
@@ -421,13 +430,33 @@ public class PlaylistScheduler {
         }
 
         // Clear the was-stopped flag — real content is incoming.
-        if (prefs != null) prefs.edit().remove(KEY_PLS_WAS_STOPPED).apply();
-        stop();
-        slides = newSlides;
-        currentIndex = 0;
-        consecutiveFailures = 0;
+          if (prefs != null) prefs.edit().remove(KEY_PLS_WAS_STOPPED).apply();
+          stop();
+          slides = newSlides;
+          currentIndex = 0;
+          consecutiveFailures = 0;
+          coldRevisionFirstSlide = true;
 
-        final String finalJson = json;
+          // Task fix: warm Glide/ExoPlayer's cache for every upcoming slide of this NEW
+          // revision right away, not just "the next one" (schedulePreload() only preloads
+          // one slide ahead once the current one reaches PLAYING). Without this, slide 0
+          // is a cold network fetch racing the renderer-ready timeout, and slide 1+ don't
+          // even start downloading until slide 0 finishes -- compounding timeouts across
+          // an entire freshly-switched playlist. Index 0 is intentionally skipped here;
+          // it's dispatched normally by showCurrent() below with the extended cold timeout.
+          if (delegate != null) {
+              for (int i = 1; i < newSlides.size(); i++) {
+                  final SlidePlan warmSlide = newSlides.get(i);
+                  if (warmSlide.url == null || warmSlide.url.isEmpty()) continue;
+                  if (warmSlide.type == SlideType.VIDEO) {
+                      delegate.schedulerPreloadVideo(warmSlide);
+                  } else if (warmSlide.type == SlideType.IMAGE) {
+                      delegate.schedulerPreloadImage(warmSlide);
+                  }
+              }
+          }
+
+          final String finalJson = json;
         dbExec.execute(() -> {
               repository.startRevisionPipeline("default", finalJson, new PlaylistRepository.OnRevisionReady() {
                   @Override
@@ -801,9 +830,14 @@ public class PlaylistScheduler {
         // Bug fix (Android review): isolated WebView pages take longer to first-paint than
           // native decode; using one timeout for both types starts the advance timer for
           // WEBVIEW_* slides before the page has actually rendered, truncating visible duration.
-          final long rendererReadyTimeoutMs = isWebviewSlide
-                  ? RENDERER_READY_TIMEOUT_WEBVIEW_MS
-                  : RENDERER_READY_TIMEOUT_NATIVE_MS;
+          // Task fix: grant the first slide of a freshly-switched revision extra headroom
+            // for a cold, never-cached network fetch; every slide after it uses the normal
+            // (tighter) timeout since it was already warming in the background above.
+            final boolean isColdStartSlide = coldRevisionFirstSlide;
+            coldRevisionFirstSlide = false;
+            final long rendererReadyTimeoutMs = isWebviewSlide
+                    ? RENDERER_READY_TIMEOUT_WEBVIEW_MS
+                    : (isColdStartSlide ? RENDERER_READY_TIMEOUT_NATIVE_COLD_MS : RENDERER_READY_TIMEOUT_NATIVE_MS);
           if (needsReadyGate) {
             pendingAdvanceDurationMs = dur;
             rendererReadyTimeoutGen = generation;
