@@ -159,7 +159,6 @@ public class MainActivity extends Activity {
       // and the server disconnects the screen after its 300s WebSocket timeout.
       private final android.os.Handler heartbeatHandler = new android.os.Handler(android.os.Looper.getMainLooper());
       private Runnable heartbeatRunnable;
-      private volatile int webViewKeepaliveMissCount = 0;
     // Native-first playlist engine (v3.11.0) — PlaylistScheduler replaces JS timer
     private PlaylistRepository      playlistRepository;
     private TelemetryManager        telemetryManager;
@@ -2570,36 +2569,18 @@ public class MainActivity extends Activity {
                                         // timers are paused -- not just Fire TV. pauseTimers() freezes
                                         // setInterval so the WS heartbeat and status polling stop; a Java
                                         // Handler fires evaluateJavascript every 25s instead. The
-                                        // ValueCallback doubles as a liveness probe: two consecutive
-                                        // silent ticks mean the WebView renderer is wedged, so we resume
-                                        // timers and force a fresh reload.
                                         if (heartbeatRunnable != null) {
                                             heartbeatHandler.removeCallbacks(heartbeatRunnable);
                                             heartbeatRunnable = null;
                                         }
-                                        webViewKeepaliveMissCount = 0;
                                         heartbeatRunnable = new Runnable() {
                                             @Override public void run() {
                                                 try {
                                                     if (webView != null) {
-                                                        final boolean[] acked = new boolean[] { false };
                                                         webView.evaluateJavascript(
-                                                            "try{window.__digipalHeartbeat&&window.__digipalHeartbeat();}catch(e){};1",
-                                                            value -> { acked[0] = true; webViewKeepaliveMissCount = 0; }
+                                                            "try{window.__digipalHeartbeat&&window.__digipalHeartbeat();}catch(e){}",
+                                                            null
                                                         );
-                                                        heartbeatHandler.postDelayed(() -> {
-                                                            if (acked[0]) return;
-                                                            if (heartbeatRunnable == null) return;
-                                                            if (webViewRecoveryInProgress) return;
-                                    webViewKeepaliveMissCount++;
-                                                            android.util.Log.w("RendererOwner", "keepalive miss " + webViewKeepaliveMissCount);
-                                                            if (webViewKeepaliveMissCount >= 2) {
-                                                                webViewKeepaliveMissCount = 0;
-                                                                android.util.Log.e("RendererOwner", "WebView unresponsive during native loop -- forcing fresh reload");
-                                                                try { if (webView != null) webView.resumeTimers(); } catch (Throwable ignored3) {}
-                                                                forcePlayerReload();
-                                                            }
-                                                        }, 10_000);
                                                     }
                                                 } catch (Throwable ignored2) {}
                                                 heartbeatHandler.postDelayed(this, 25_000);
