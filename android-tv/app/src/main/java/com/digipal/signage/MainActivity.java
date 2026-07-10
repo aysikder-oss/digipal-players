@@ -193,6 +193,10 @@ public class MainActivity extends Activity {
     private static final int    BUF_WATCHDOG_STALL_TICKS = 3;        // 3 × 5s = 15s threshold
     // Native content loop — drives video/image slides via NativePlaylistManager without WebView
     private volatile String pendingNativePlaylistJson; // Codex fix 7: buffered playlist JSON until PlaylistScheduler is constructed
+    private volatile String lastAppliedContentRevision = "";
+    private volatile long lastNativePlaylistSetAtMs = 0L;
+    private final android.os.Handler contentRevisionHandler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
       // Native heartbeat for Fire TV: when WebView is paused (timers frozen), a Java
       // Handler fires evaluateJavascript every 25s to keep the WebSocket alive.
       // Without this, Amazon WebView's pauseTimers() suspends setInterval-based heartbeats
@@ -1952,6 +1956,7 @@ public class MainActivity extends Activity {
                 public void setNativePlaylist(String token, String json) {
                     if (!isValidBridgeToken(token)) return;
                     if (json == null || json.isEmpty()) return;
+                    lastNativePlaylistSetAtMs = System.currentTimeMillis();
                     if (playlistScheduler != null) {
                         playlistScheduler.setPlaylist(json);
                         android.util.Log.i("DigipalNative", "[nativeLoop] setNativePlaylist → PlaylistScheduler");
@@ -2369,6 +2374,46 @@ public class MainActivity extends Activity {
          *  nativeImageView/nativeImageViewB sit above TextureView/PlayerView in the
          *  FrameLayout, so they must be explicitly hidden or they cover the video.
          *  Call at every video-visible swap point (first frame ready / immediate swap). */
+        private void applyContentRevisionFromNativeHeartbeat(String revision) {
+            if (revision == null || revision.trim().isEmpty()) return;
+
+            final String rev = revision.trim();
+            if (rev.equals(lastAppliedContentRevision)) return;
+
+            lastAppliedContentRevision = rev;
+            final long before = lastNativePlaylistSetAtMs;
+
+            if (webView != null) {
+                String safeRevision = rev.replace("\\", "\\\\").replace("'", "\\'");
+                webView.evaluateJavascript(
+                        "try{" +
+                                "if(window.__digipalApplyContentRevision){" +
+                                "window.__digipalApplyContentRevision('" + safeRevision + "');" +
+                                "}else{" +
+                                "window.location.reload();" +
+                                "}" +
+                                "}catch(e){window.location.reload();}",
+                        null);
+            }
+
+            contentRevisionHandler.postDelayed(() -> {
+                if (lastNativePlaylistSetAtMs <= before) {
+                    android.util.Log.w("DigipalNative",
+                            "[revision] JS did not apply revision " + rev + " - forcing shell reload");
+                    try {
+                        if (webView != null) {
+                            webView.resumeTimers();
+                            webView.evaluateJavascript("try{window.location.reload();}catch(e){}", null);
+                        }
+                    } catch (Throwable ignored) {}
+
+                    try {
+                        forcePlayerReload();
+                    } catch (Throwable ignored) {}
+                }
+            }, 10_000L);
+        }
+
         private void hideNativeImagesForVideo() {
             try { com.bumptech.glide.Glide.with(this).clear(nativeImageView);  } catch (Throwable ignored) {}
             try { com.bumptech.glide.Glide.with(this).clear(nativeImageViewB); } catch (Throwable ignored) {}
@@ -2388,13 +2433,7 @@ public class MainActivity extends Activity {
                   // (proven by the existing 25s __digipalHeartbeat call below), so this
                   // reaches the frozen JS context without depending on the WebView's own
                   // networking (fetch/WS) working under freeze.
-                  revision -> runOnUiThread(() -> {
-                      if (webView == null) return;
-                      String safeRevision = revision.replace("\\", "\\\\").replace("'", "\\'");
-                      webView.evaluateJavascript(
-                          "try{window.__digipalApplyContentRevision&&window.__digipalApplyContentRevision('" + safeRevision + "');}catch(e){}",
-                          null);
-                  }));
+                  revision -> runOnUiThread(() -> applyContentRevisionFromNativeHeartbeat(revision)));
               if (cachedPairingCode != null) telemetryManager.setPairingCode(cachedPairingCode);
               telemetryManager.start();
 
@@ -2680,7 +2719,7 @@ public class MainActivity extends Activity {
                                   if (webView != null) {
                                       webView.setAlpha(0f);
                                       webView.setVisibility(View.INVISIBLE);
-                                      webView.pauseTimers();
+                                      // Do not pause timers here. The hidden shell must keep receiving assignment updates.
                                         // v59 Fix 11: proof-of-pairing log. Every pauseTimers() call here
                                         // MUST be matched by a resumeTimers() call in
                                         // schedulerActivateIsolatedRenderer() before that WebView is asked
