@@ -725,7 +725,25 @@ public class PlaylistScheduler {
         onRendererError(slideId, "isolated_renderer_failed: " + reason);
     }
 
-    private void showCurrent() {
+    /**
+     * Codex fix item 6 (atomic playlist assignment): showCurrent()/advance() read
+     * `slides` + `currentIndex` together as a pair to pick "the current slide", but
+     * setPlaylist() writes that same pair under `synchronized(this)` from whatever
+     * thread the JS bridge call arrives on (WebView's JS-interface thread, not the
+     * handler/main thread these two run on). Without matching synchronization here,
+     * a structural playlist swap landing between the `slides` read and the
+     * `currentIndex` read (or between either read and JIT-cached/stale field
+     * visibility across threads) could show/advance to a slide index from the OLD
+     * list against the NEW list (or vice-versa) — e.g. index-out-of-bounds masked
+     * by an unrelated bounds clamp, or briefly playing a stale slide from a
+     * superseded revision. Marking both methods `synchronized` on the same monitor
+     * setPlaylist()/skipCurrentSlide()/retryCurrentSlide()/stop()/pause()/resume()
+     * already use makes every slides+currentIndex read-or-write here atomic with
+     * respect to a concurrent setPlaylist() call. Java's intrinsic lock is
+     * reentrant, so existing same-thread call chains (setPlaylist -> showCurrent,
+     * advance -> showCurrent) are unaffected.
+     */
+    private synchronized void showCurrent() {
         if (!running || slides.isEmpty()) return;
         if (currentIndex >= slides.size()) currentIndex = 0;
 
@@ -993,7 +1011,8 @@ public class PlaylistScheduler {
         handler.postDelayed(advanceRunnable, dur);
     }
 
-    private void advance() {
+    /** Codex fix item 6: synchronized to match showCurrent() — see the comment there. */
+    private synchronized void advance() {
         if (!running) return;
         final SlidePlan cur = currentIndex < slides.size() ? slides.get(currentIndex) : null;
         final boolean curIsNative = cur != null
