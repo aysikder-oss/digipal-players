@@ -40,12 +40,36 @@ public class PdfPrerenderer {
     }
 
     /** Pre-render all pages of pdfLocalPath and persist paths to Room. */
+    private List<File> mediaRoots() {
+        List<File> roots = new ArrayList<>();
+        File ext = ctx.getExternalFilesDir("media");
+        if (ext != null) roots.add(ext);
+        roots.add(new File(ctx.getFilesDir(), "media"));
+        return roots;
+    }
+
+    private String normalizeLocalPath(String path) {
+        if (path == null) return "";
+        if (path.startsWith("file://")) {
+            try {
+                return android.net.Uri.parse(path).getPath();
+            } catch (Throwable ignored) {
+                return path.substring(7);
+            }
+        }
+        return path;
+    }
+
     public void prerender(String assetId, String pdfLocalPath, Callback cb) {
         exec.execute(() -> {
             List<String> paths = new ArrayList<>();
             try {
-                File mediaRoot = new File(ctx.getFilesDir(), "media");
-                File pdf = SafeFiles.existingFileInsideOrNull(mediaRoot, pdfLocalPath);
+                String normalized = normalizeLocalPath(pdfLocalPath);
+                File pdf = null;
+                for (File root : mediaRoots()) {
+                    pdf = SafeFiles.existingFileInsideOrNull(root, normalized);
+                    if (pdf != null) break;
+                }
                 if (pdf == null) { cb.onFailed(assetId, "pdf_not_found"); return; }
 
                 File outDir = new File(ctx.getFilesDir(), "digipal_pdf_pages");
