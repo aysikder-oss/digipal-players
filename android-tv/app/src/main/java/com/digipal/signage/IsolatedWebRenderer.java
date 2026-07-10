@@ -486,9 +486,22 @@ public class IsolatedWebRenderer {
          *  an <img>/<video> src, instead of always hitting the (possibly offline)
          *  remote signed URL. Both methods are null-safe no-ops when this renderer was
          *  constructed without a MediaDownloadManager. */
+        /** Task P2 (Codex fix item 2): getLocalMediaWebUrl/downloadMedia previously had
+         *  no slideId/renderToken gating at all, unlike RenderBridge's ready/error/
+         *  heartbeat/event/requestNavigation/requestExit (see isCurrentGeneration()
+         *  above). A stale/superseded isolated-slide WebView still finishing async JS
+         *  after the scheduler already advanced could resolve or trigger a download
+         *  for a generation it no longer owns — e.g. calling downloadMedia for content
+         *  that belongs to whatever slide is *now* active. Both methods now require
+         *  the same (slideId, renderToken) pair and are silently no-op'd (matching the
+         *  existing stale_*_ignored diagnostic pattern) when the generation is stale. */
         private class DigipalMediaBridge {
             @JavascriptInterface
-            public String getLocalMediaWebUrl(String objectPath) {
+            public String getLocalMediaWebUrl(String objectPath, String slideId, long renderToken) {
+                if (!isCurrentGeneration(slideId, renderToken)) {
+                    logDiagnostic("stale_getLocalMediaWebUrl_ignored", slideId, renderToken, objectPath);
+                    return "";
+                }
                 if (mediaDownloadManager == null || objectPath == null) return "";
                 try {
                     return mediaDownloadManager.getLocalMediaWebUrl(objectPath);
@@ -498,7 +511,11 @@ public class IsolatedWebRenderer {
             }
 
             @JavascriptInterface
-            public void downloadMedia(String objectPath, String signedUrl) {
+            public void downloadMedia(String objectPath, String signedUrl, String slideId, long renderToken) {
+                if (!isCurrentGeneration(slideId, renderToken)) {
+                    logDiagnostic("stale_downloadMedia_ignored", slideId, renderToken, objectPath);
+                    return;
+                }
                 if (mediaDownloadManager == null || objectPath == null || signedUrl == null) return;
                 try {
                     mediaDownloadManager.downloadMedia(objectPath, signedUrl);
