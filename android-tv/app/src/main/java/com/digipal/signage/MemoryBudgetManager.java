@@ -72,6 +72,7 @@ package com.digipal.signage;
 
       private void poll() {
           ActivityManager am = (ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
+          if (am == null) return;
           ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
           am.getMemoryInfo(mi);
 
