@@ -116,6 +116,9 @@ package com.digipal.signage;
           @Query("SELECT * FROM playlist_revisions WHERE status IN ('ACTIVE','SUPERSEDED','ROLLED_BACK') ORDER BY activated_at DESC LIMIT 2")
           List<PlaylistRevisionEntity> getLastTwo();
 
+          @Query("SELECT * FROM playlist_revisions WHERE status IN ('SUPERSEDED','ROLLED_BACK') AND id != :currentId ORDER BY activated_at DESC LIMIT 1")
+          PlaylistRevisionEntity getPreviousKnownGood(long currentId);
+
           @Query("SELECT * FROM playlist_revisions WHERE status='ROLLED_BACK' AND activated_at < :before")
           List<PlaylistRevisionEntity> getRolledBackBefore(long before);
 
