@@ -49,8 +49,8 @@ android {
         applicationId "com.digipal.signage"
         minSdk 21
         targetSdk 35
-        versionCode 78
-        versionName "3.16.64"
+        versionCode 79
+        versionName "3.16.65"
 
         buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
         buildConfigField "String", "SENTRY_DSN", "\"${System.getenv('SENTRY_DSN') ?: ''}\""
@@ -101,8 +101,14 @@ android {
 }
 
 gradle.taskGraph.whenReady { graph ->
-    if (graph.hasTask(':app:assembleRelease') && !hasReleaseSigning) {
-        throw new GradleException("Release signing env vars are required: KEYSTORE_FILE, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD")
+    // Guard BOTH release output tasks (APK and AAB) — previously only
+    // assembleRelease was checked, so `./gradlew bundleRelease` could silently
+    // produce an unsigned release AAB when no signing config was supplied.
+    def buildingUnguardedRelease =
+            (graph.hasTask(':app:assembleRelease') || graph.hasTask(':app:bundleRelease')) &&
+            !hasReleaseSigning
+    if (buildingUnguardedRelease) {
+        throw new GradleException("Release signing env vars are required: KEYSTORE_FILE, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD (or the equivalent android.injected.signing.* -P properties)")
     }
 }
 
