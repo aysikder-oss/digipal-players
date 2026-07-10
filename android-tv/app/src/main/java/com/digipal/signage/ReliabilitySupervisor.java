@@ -169,6 +169,7 @@ public class ReliabilitySupervisor {
         PlaylistScheduler.State curState = schedulerState;
         boolean activelyPlaying = curState == PlaylistScheduler.State.PLAYING
                 || curState == PlaylistScheduler.State.PREPARING_CURRENT
+                || curState == PlaylistScheduler.State.PREPARING_NEXT
                 || curState == PlaylistScheduler.State.TRANSITIONING
                 || curState == PlaylistScheduler.State.DEGRADED_PLAYBACK;
         if (!activelyPlaying) {
