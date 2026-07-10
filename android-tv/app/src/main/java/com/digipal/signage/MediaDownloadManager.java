@@ -84,15 +84,25 @@ package com.digipal.signage;
        */
       public void downloadMediaWithCallback(final String objectPath, final String signedUrl,
                                             final DownloadCallback callback) {
-          // Fast path: already cached locally
+          // Fast path: already cached locally -- but only if the source media hasn't
+          // changed since it was cached (Fix #5). Without this, an updated asset that
+          // reuses the same objectPath (e.g. content re-uploaded to the same slide) would
+          // serve the stale local file forever, since only objectPath was checked before.
           String existing = getLocalMediaPath(objectPath);
           if (!existing.isEmpty()) {
-              if (callback != null) {
-                  JSONObject entry = getManifest().optJSONObject(objectPath);
-                  long size = entry != null ? entry.optLong("size", 0) : 0;
-                  callback.onSuccess(objectPath, existing, size);
+              JSONObject entry = getManifest().optJSONObject(objectPath);
+              String cachedSource = entry != null ? entry.optString("sourceUrl", "") : "";
+              if (sameMediaSource(cachedSource, signedUrl)) {
+                  if (callback != null) {
+                      long size = entry != null ? entry.optLong("size", 0) : 0;
+                      callback.onSuccess(objectPath, existing, size);
+                  }
+                  return;
               }
-              return;
+              android.util.Log.i("MediaDownload", "[cache] source changed for obj=" + objectPath
+                      + " -- invalidating stale local copy and redownloading");
+              removeFromManifest(objectPath);
+              try { new File(existing).delete(); } catch (Exception ignored) {}
           }
 
           // Queue callback; if another download is already in flight just wait.
@@ -230,7 +240,7 @@ package com.digipal.signage;
                       continue; // retry
                   }
               }
-              addToManifest(objectPath, outputFile.getAbsolutePath(), totalRead);
+              addToManifest(objectPath, outputFile.getAbsolutePath(), totalRead, signedUrl);
               notifyDownloadComplete(objectPath, "file://" + outputFile.getAbsolutePath());
 
               } catch (Exception e) {
@@ -473,6 +483,16 @@ package com.digipal.signage;
       }
 
       private void addToManifest(String objectPath, String localPath, long size) {
+          addToManifest(objectPath, localPath, size, null);
+      }
+
+      /**
+       * Fix #5: manifest entries now record the source URL (stripped of query params/signing
+       * tokens) that produced the cached file, so a later request for the same objectPath but
+       * a different underlying asset (URL changed) can be detected as stale instead of serving
+       * the old cached bytes forever.
+       */
+      private void addToManifest(String objectPath, String localPath, long size, String sourceUrl) {
           JSONObject manifest = getManifest();
           try {
               JSONObject entry = new JSONObject();
@@ -480,9 +500,31 @@ package com.digipal.signage;
               entry.put("size", size);
               entry.put("downloadedAt", System.currentTimeMillis());
               entry.put("lastUsed", System.currentTimeMillis());
+              if (sourceUrl != null && !sourceUrl.isEmpty()) {
+                  entry.put("sourceUrl", canonicalMediaSource(sourceUrl));
+              }
               manifest.put(objectPath, entry);
               prefs.edit().putString(KEY_MANIFEST, manifest.toString()).apply();
           } catch (JSONException ignored) {}
+      }
+
+      /** Strips query string/fragment (signed-URL tokens, expiry, etc.) so the same
+       *  underlying object re-signed with a fresh token still compares equal. */
+      private static String canonicalMediaSource(String rawUrl) {
+          if (rawUrl == null) return "";
+          String s = rawUrl.trim();
+          int hash = s.indexOf('#');
+          if (hash >= 0) s = s.substring(0, hash);
+          int q = s.indexOf('?');
+          if (q >= 0) s = s.substring(0, q);
+          return s;
+      }
+
+      private static boolean sameMediaSource(String a, String b) {
+          String ca = canonicalMediaSource(a);
+          String cb = canonicalMediaSource(b);
+          if (ca.isEmpty() || cb.isEmpty()) return true; // unknown -- don't force a redownload
+          return ca.equals(cb);
       }
 
       private void removeFromManifest(String objectPath) {
