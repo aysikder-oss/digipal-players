@@ -392,6 +392,14 @@ package com.digipal.signage;
                     String objectPath = safeAssetKey(contentId, isPdf ? "pdf" : type.toLowerCase(Locale.ROOT));
                     String localPath = paths.get(objectPath);
                     if (localPath != null && !localPath.isEmpty()) {
+                        // Fix #4: preserve the original remote URL as sourceUrl before overwriting
+                        // "url" with the local file path -- downstream fingerprinting (isSameStructure)
+                        // and cache-freshness checks (MediaDownloadManager) need the real source, not
+                        // the local file:// path, to detect that the underlying media changed.
+                        if (!obj.has("sourceUrl") || obj.optString("sourceUrl", "").isEmpty()) {
+                            String originalUrl = obj.optString("url", "");
+                            if (!originalUrl.isEmpty()) obj.put("sourceUrl", originalUrl);
+                        }
                         obj.put("url", localPath);
                         obj.put("localUrl", localPath);
                         obj.put("isLocal", true);
