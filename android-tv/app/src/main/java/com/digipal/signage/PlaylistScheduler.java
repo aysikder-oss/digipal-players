@@ -81,6 +81,9 @@ public class PlaylistScheduler {
         /** PDF-only: per-page duration in ms sent by the client (contentSettings.pdfPageDuration).
          *  -1 means unset -- expandPdfIfPrerendered() falls back to durationMs per page. */
         public long pdfPageDurationMs = -1;
+        /** Identity of the underlying media (independent of signed URL churn) used to
+         *  detect same-shape playlist updates that actually changed content (fix #3). */
+        public String mediaFingerprint = "";
     }
 
     public interface AssetResolver {
@@ -723,7 +726,7 @@ public class PlaylistScheduler {
      */
     public void onSlideNaturalEnd(String slideId) {
         handler.post(() -> {
-            if (state != State.PLAYING) return;
+            if (state != State.PLAYING && state != State.PREPARING_NEXT) return;
             if (slides.isEmpty() || currentIndex >= slides.size()) return;
             if (!slides.get(currentIndex).slideId.equals(slideId)) return;
             Log.i(TAG, "[VideoLoop][Scheduler] naturalEnd reason=naturalEnd slide=" + slideId);
@@ -1085,7 +1088,7 @@ public class PlaylistScheduler {
         if (slides.size() < 2) return;
         final int nextIdx = (currentIndex + 1) % slides.size();
         final SlidePlan next = slides.get(nextIdx);
-        toState(State.PREPARING_NEXT, next.slideId);
+        Log.d(TAG, "[preload] next slide=" + next.slideId);
         final SlideType nextEff = (next.url == null || next.url.isEmpty())
                 && (next.type == SlideType.VIDEO || next.type == SlideType.IMAGE)
                 ? SlideType.WEBVIEW_URL : next.type;
@@ -1192,8 +1195,38 @@ public class PlaylistScheduler {
             if (a.loop != b.loop) return false;
             if (Math.abs(a.volume - b.volume) > 0.001f) return false;
             if (!a.scaleType.equals(b.scaleType)) return false;
+            // Fix #3: a same-shape update that swaps the underlying media (same slideId,
+            // new asset) must NOT be silently ignored just because URL is excluded above.
+            if (!a.slideId.equals(b.slideId)) return false;
+            if (!a.mediaFingerprint.equals(b.mediaFingerprint)) return false;
+            if (!a.renderMode.equals(b.renderMode)) return false;
         }
         return true;
+    }
+
+    private static String mediaFingerprint(JSONObject o, String url) {
+        String explicit = o.optString("mediaFingerprint", "");
+        if (!explicit.isEmpty()) return explicit;
+
+        String[] keys = {"mediaVersion", "assetVersion", "contentRevision", "updatedAt", "updated_at", "objectPath", "storagePath", "sha256", "hash"};
+        for (String key : keys) {
+            String v = o.optString(key, "");
+            if (!v.isEmpty()) return key + ":" + v;
+        }
+
+        String sourceUrl = o.optString("sourceUrl", "");
+        if (!sourceUrl.isEmpty()) return "url:" + stripQuery(sourceUrl);
+        return "url:" + stripQuery(url);
+    }
+
+    private static String stripQuery(String raw) {
+        if (raw == null) return "";
+        String s = raw.trim();
+        int hash = s.indexOf('#');
+        if (hash >= 0) s = s.substring(0, hash);
+        int q = s.indexOf('?');
+        if (q >= 0) s = s.substring(0, q);
+        return s;
     }
 
     private List<SlidePlan> parseSlides(String json) {
@@ -1236,6 +1269,7 @@ public class PlaylistScheduler {
                       s.renderMode = o.optString("renderMode", "");
                       double pdfPageDur = o.optDouble("pdfPageDuration", -1);
                       s.pdfPageDurationMs = pdfPageDur >= 0 ? (long) (pdfPageDur * 1000) : -1;
+                      s.mediaFingerprint = mediaFingerprint(o, s.url);
                       result.addAll(expandPdfIfPrerendered(s));
                   } catch (Exception itemEx) {
                       Log.e(TAG, "parseSlides: skipping malformed item index=" + i + ": " + itemEx.getMessage());
@@ -1319,6 +1353,7 @@ public class PlaylistScheduler {
                 s.renderMode = cfg.optString("renderMode", "");
                 double pdfPageDur = cfg.optDouble("pdfPageDuration", -1);
                 s.pdfPageDurationMs = pdfPageDur >= 0 ? (long) (pdfPageDur * 1000) : -1;
+                s.mediaFingerprint = mediaFingerprint(cfg, s.url);
                 plans.addAll(expandPdfIfPrerendered(s));
             } catch (Exception ex) { Log.w(TAG, "entitiesToPlans: " + ex.getMessage()); }
         }
