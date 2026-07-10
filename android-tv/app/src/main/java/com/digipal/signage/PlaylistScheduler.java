@@ -488,7 +488,17 @@ public class PlaylistScheduler {
             repository.startRevisionPipeline("default", finalJson, new PlaylistRepository.OnRevisionReady() {
                 @Override
                 public void onReady(long revId, String localManifestJson) {
-                    handler.post(() -> commitLocalRevision(mySeq, revId, localManifestJson, finalJson));
+                    // Sentry ANDROID-5 fix: promoteRevisionToActive() runs Room queries/
+                    // transactions and must NOT be called from the main-thread Handler
+                    // callback. onReady() can itself fire from a download-completion
+                    // thread (not guaranteed to be dbExec), so re-dispatch onto dbExec
+                    // explicitly before touching the DB, then hand off to the
+                    // main-thread commitLocalRevision() only for the UI-affecting
+                    // playlist swap (stop/slides/showCurrent).
+                    dbExec.execute(() -> {
+                        repository.promoteRevisionToActive(revId);
+                        handler.post(() -> commitLocalRevision(mySeq, revId, localManifestJson, finalJson));
+                    });
                 }
                 @Override
                 public void onFailed(long revId, String reason) {
@@ -521,7 +531,9 @@ public class PlaylistScheduler {
 
         Log.i(TAG, "[setPlaylist] local revision ready seq=" + seq + " slides=" + local.size());
 
-        repository.promoteRevisionToActive(revId);
+        // Sentry ANDROID-5 fix: promoteRevisionToActive() already ran off-thread
+        // (on dbExec) before this main-thread callback was posted -- do NOT call
+        // it here, this method must stay Room-free since it runs on the main Handler.
         activeRevisionId = revId;
 
         // Only now does the old playlist (if any) actually stop.
