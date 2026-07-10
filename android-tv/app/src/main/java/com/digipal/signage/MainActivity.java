@@ -2345,7 +2345,22 @@ public class MainActivity extends Activity {
         private void initNativeComponents() {
           try {
               playlistRepository = new PlaylistRepository(this);
-              telemetryManager   = new TelemetryManager(this, playlistRepository, getServerUrl());
+              telemetryManager   = new TelemetryManager(this, playlistRepository, getServerUrl(),
+                  // Content/playlist changes not reaching a device whose WebView is frozen
+                  // under pauseTimers() fix: this callback fires from TelemetryManager's
+                  // background executor thread every ~30s heartbeat tick, using a
+                  // contentRevision the server already echoes back in the heartbeat
+                  // response. evaluateJavascript still executes inside a paused WebView
+                  // (proven by the existing 25s __digipalHeartbeat call below), so this
+                  // reaches the frozen JS context without depending on the WebView's own
+                  // networking (fetch/WS) working under freeze.
+                  revision -> runOnUiThread(() -> {
+                      if (webView == null) return;
+                      String safeRevision = revision.replace("\\", "\\\\").replace("'", "\\'");
+                      webView.evaluateJavascript(
+                          "try{window.__digipalApplyContentRevision&&window.__digipalApplyContentRevision('" + safeRevision + "');}catch(e){}",
+                          null);
+                  }));
               if (cachedPairingCode != null) telemetryManager.setPairingCode(cachedPairingCode);
               telemetryManager.start();
 
