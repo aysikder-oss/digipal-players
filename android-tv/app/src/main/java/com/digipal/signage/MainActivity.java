@@ -64,6 +64,22 @@ public class MainActivity extends Activity {
      *  (task #1875) — used to build the isolated-renderer /tv/render/:pairingCode/:contentId URL. */
     private static final String KEY_PAIRING_CODE = "pairing_code";
     private volatile String cachedPairingCode = null;
+    /** Codex fix item 1: per-page-load random token injected into the main WebView as
+     *  window.__digipalBridgeToken and required as the first argument on the
+     *  "Android" JS interface's higher-risk methods (media download/delete, server
+     *  settings, LAN scan, pairing notification, shell invalidation, screenshot,
+     *  native playlist assignment). Without this, any script that ends up executing
+     *  in the main WebView's origin (e.g. a compromised/misconfigured content page
+     *  reachable via WEBVIEW_URL, or a future regression that lets one load) could
+     *  call these directly since addJavascriptInterface() exposes them to the whole
+     *  page, not just our own trusted bundle. Regenerated on every onPageStarted so
+     *  a stale/old page can never replay a captured token against a fresh load. */
+    private volatile String bridgeToken = null;
+
+    private boolean isValidBridgeToken(String token) {
+        String expected = bridgeToken;
+        return expected != null && token != null && token.equals(expected);
+    }
     private IsolatedWebRenderer isolatedWebRenderer;
     /** Local versioned player shell cache (local player shell hardening task) — lets the app
      *  boot from a last-known-good shell snapshot when the configured server is unreachable. */
@@ -555,6 +571,13 @@ public class MainActivity extends Activity {
                 super.onPageStarted(view, url, favicon);
                 hasHttpError = false;
                 appMountConfirmed = false;
+                // Codex fix item 1: fresh token per navigation, injected ASAP (before any
+                // page script runs) so window.__digipalBridgeToken is always set by the time
+                // our own bundle's first Android.* call happens.
+                bridgeToken = java.util.UUID.randomUUID().toString();
+                final String tokenForInjection = bridgeToken;
+                view.evaluateJavascript(
+                        "window.__digipalBridgeToken='" + tokenForInjection + "';", null);
                 if (mountWatchdogRunnable != null) mountWatchdogHandler.removeCallbacks(mountWatchdogRunnable);
             }
 
@@ -837,14 +860,16 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public void downloadMedia(String objectPath, String signedUrl) {
+        public void downloadMedia(String token, String objectPath, String signedUrl) {
+            if (!isValidBridgeToken(token)) return;
             if (mediaDownloadManager != null) {
                 mediaDownloadManager.downloadMedia(objectPath, signedUrl);
             }
         }
 
         @JavascriptInterface
-        public String getLocalMediaPath(String objectPath) {
+        public String getLocalMediaPath(String token, String objectPath) {
+            if (!isValidBridgeToken(token)) return "";
             if (mediaDownloadManager != null) {
                 return mediaDownloadManager.getLocalMediaPath(objectPath);
             }
@@ -856,7 +881,8 @@ public class MainActivity extends Activity {
          *  getLocalMediaPath()'s file:// URLs, these work from an https:// origin page.
          *  WebView-only: ExoPlayer/Glide native overlays cannot fetch these URLs. */
         @JavascriptInterface
-        public String getLocalMediaWebUrl(String objectPath) {
+        public String getLocalMediaWebUrl(String token, String objectPath) {
+            if (!isValidBridgeToken(token)) return "";
             if (mediaDownloadManager != null) {
                 return mediaDownloadManager.getLocalMediaWebUrl(objectPath);
             }
@@ -949,7 +975,8 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public boolean deleteMedia(String objectPath) {
+        public boolean deleteMedia(String token, String objectPath) {
+            if (!isValidBridgeToken(token)) return false;
             if (mediaDownloadManager != null) {
                 return mediaDownloadManager.deleteMedia(objectPath);
             }
@@ -957,7 +984,8 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public int deleteAllMedia() {
+        public int deleteAllMedia(String token) {
+            if (!isValidBridgeToken(token)) return 0;
             if (mediaDownloadManager != null) {
                 return mediaDownloadManager.deleteAllMedia();
             }
@@ -1026,7 +1054,8 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public void openServerSettings() {
+        public void openServerSettings(String token) {
+            if (!isValidBridgeToken(token)) return;
             runOnUiThread(() -> openSetupScreen());
         }
 
@@ -1043,7 +1072,8 @@ public class MainActivity extends Activity {
 
 
           @JavascriptInterface
-          public String scanLocalServers() {
+          public String scanLocalServers(String token) {
+              if (!isValidBridgeToken(token)) return "[]";
               android.net.nsd.NsdManager nsdManager =
                   (android.net.nsd.NsdManager) getSystemService(android.content.Context.NSD_SERVICE);
               if (nsdManager == null) return "[]";
@@ -1109,7 +1139,8 @@ public class MainActivity extends Activity {
           }
 
           @JavascriptInterface
-        public void notifyPaired(String url) {
+        public void notifyPaired(String token, String url) {
+            if (!isValidBridgeToken(token)) return;
             SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
             if (!prefs.getBoolean("cloud_pairing_pending", false)) return;
 
@@ -1147,7 +1178,8 @@ public class MainActivity extends Activity {
          * command (useTvCommands.ts).
          */
         @JavascriptInterface
-        public void invalidateLocalShellAndReload() {
+        public void invalidateLocalShellAndReload(String token) {
+            if (!isValidBridgeToken(token)) return;
             try {
                 if (playerShellManager != null) {
                     try { playerShellManager.invalidateCurrent(); } catch (Throwable ignored) {}
@@ -1167,7 +1199,8 @@ public class MainActivity extends Activity {
         }
 
           @JavascriptInterface
-          public void captureScreenshot(String requestId) {
+          public void captureScreenshot(String token, String requestId) {
+              if (!isValidBridgeToken(token)) return;
               final String quotedId = org.json.JSONObject.quote(requestId == null ? "" : requestId);
               if (webView == null) return;
               if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
@@ -1916,7 +1949,8 @@ public class MainActivity extends Activity {
 
 
                 @android.webkit.JavascriptInterface
-                public void setNativePlaylist(String json) {
+                public void setNativePlaylist(String token, String json) {
+                    if (!isValidBridgeToken(token)) return;
                     if (json == null || json.isEmpty()) return;
                     if (playlistScheduler != null) {
                         playlistScheduler.setPlaylist(json);
