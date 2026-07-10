@@ -305,6 +305,25 @@ package com.digipal.signage;
           }
       }
 
+      private List<File> mediaRoots() {
+          List<File> roots = new ArrayList<>();
+          File ext = appContext.getExternalFilesDir("media");
+          if (ext != null) roots.add(ext);
+          roots.add(new File(appContext.getFilesDir(), "media"));
+          return roots;
+      }
+
+      private void deleteLocalMediaPath(String url) {
+          if (url == null || !url.startsWith("file://")) return;
+          String path;
+          try { path = android.net.Uri.parse(url).getPath(); }
+          catch (Throwable ignored) { path = url.substring(7); }
+
+          for (File root : mediaRoots()) {
+              if (SafeFiles.deleteFileInside(root, path)) return;
+          }
+      }
+
       private void deleteLocalMediaFiles(String localManifestJson) {
           try {
               JSONArray arr = new JSONArray(localManifestJson);
@@ -312,10 +331,7 @@ package com.digipal.signage;
                   JSONObject obj = arr.optJSONObject(i);
                   if (obj == null) continue;
                   String url = obj.optString("url", "");
-                  if (url.startsWith("file://")) {
-                      File root = new File(appContext.getFilesDir(), "media");
-                      SafeFiles.deleteFileInside(root, url.substring(7));
-                  }
+                  deleteLocalMediaPath(url);
               }
           } catch (Exception ignored) {}
       }
@@ -432,8 +448,9 @@ package com.digipal.signage;
       }
 
       public PlaylistDatabase.PlaylistRevisionEntity getLastKnownGood() {
-          List<PlaylistDatabase.PlaylistRevisionEntity> list = db.revisionDao().getLastTwo();
-          return list.isEmpty() ? null : list.get(0);
+          PlaylistDatabase.PlaylistRevisionEntity active = db.revisionDao().getActive();
+          long currentId = active != null ? active.id : -1L;
+          return db.revisionDao().getPreviousKnownGood(currentId);
       }
 
       public void clearActiveRevision() {
