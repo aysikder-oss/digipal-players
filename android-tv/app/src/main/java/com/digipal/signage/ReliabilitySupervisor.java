@@ -182,11 +182,13 @@ public class ReliabilitySupervisor {
 
         // Memory pressure
         ActivityManager am = (ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
-        ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
-        am.getMemoryInfo(mi);
-        if (mi.lowMemory) {
-            Log.w(TAG, "[memory] low memory pressure detected");
-            soft("low_memory");
+        if (am != null) {
+            ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
+            am.getMemoryInfo(mi);
+            if (mi.lowMemory) {
+                Log.w(TAG, "[memory] low memory pressure detected");
+                soft("low_memory");
+            }
         }
 
         // Storage pressure
