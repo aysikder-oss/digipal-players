@@ -2372,8 +2372,8 @@ public class MainActivity extends Activity {
         private void hideNativeImagesForVideo() {
             try { com.bumptech.glide.Glide.with(this).clear(nativeImageView);  } catch (Throwable ignored) {}
             try { com.bumptech.glide.Glide.with(this).clear(nativeImageViewB); } catch (Throwable ignored) {}
-            if (nativeImageView  != null) { nativeImageView.setAlpha(0f);  nativeImageView.setVisibility(View.INVISIBLE);  }
-            if (nativeImageViewB != null) { nativeImageViewB.setAlpha(0f); nativeImageViewB.setVisibility(View.INVISIBLE); }
+            if (nativeImageView  != null) { nativeImageView.setAlpha(1f);  nativeImageView.setVisibility(View.INVISIBLE);  }
+            if (nativeImageViewB != null) { nativeImageViewB.setAlpha(1f); nativeImageViewB.setVisibility(View.INVISIBLE); }
         }
 
         private void initNativeComponents() {
@@ -2542,7 +2542,9 @@ public class MainActivity extends Activity {
                                       // Instant swap — preloaded image already decoded
                                       preloadImgView.setScaleType(st);
                                       preloadImgView.setLayoutParams(_lp);
+                                      preloadImgView.setAlpha(1f);
                                       preloadImgView.setVisibility(View.VISIBLE);
+                                      activeImgView.setAlpha(0f);
                                       activeImgView.setVisibility(View.INVISIBLE);
                                       try { com.bumptech.glide.Glide.get(MainActivity.this).trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE); } catch (Throwable ignored) {}
                                       com.bumptech.glide.Glide.with(MainActivity.this).clear(activeImgView);
@@ -2553,6 +2555,7 @@ public class MainActivity extends Activity {
                                       // Cold load — load directly; keep view INVISIBLE until Glide succeeds
                                       activeImgView.setLayoutParams(_lp);
                                       activeImgView.setScaleType(st);
+                                      activeImgView.setAlpha(1f);
                                       activeImgView.setVisibility(View.INVISIBLE);
                                       com.bumptech.glide.Glide.with(MainActivity.this)
                                           .load(_url)
@@ -2579,6 +2582,7 @@ public class MainActivity extends Activity {
                                                       new android.view.ViewTreeObserver.OnPreDrawListener() {
                                                           @Override public boolean onPreDraw() {
                                                               activeImgView.getViewTreeObserver().removeOnPreDrawListener(this);
+                                                              activeImgView.setAlpha(1f);
                                                               activeImgView.setVisibility(View.VISIBLE);
                                                               if (playlistScheduler != null) playlistScheduler.onRendererReady(_sid);
                                                               try { com.bumptech.glide.Glide.get(MainActivity.this).trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE); } catch (Throwable ignored) {}
@@ -2645,6 +2649,7 @@ public class MainActivity extends Activity {
                                   preloadImgView.setVisibility(View.INVISIBLE);
                                   preloadImgView.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
                                   preloadedImageUrl = _url;
+                                  preloadImgView.setAlpha(1f);
                                   com.bumptech.glide.Glide.with(MainActivity.this).load(_url)
                                       .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
                                           @Override public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e, Object m,
@@ -2875,6 +2880,8 @@ public class MainActivity extends Activity {
                                   // Hide image views directly — no WebView hop
                                   com.bumptech.glide.Glide.with(MainActivity.this).clear(nativeImageView);
                                   com.bumptech.glide.Glide.with(MainActivity.this).clear(nativeImageViewB);
+                                  nativeImageView.setAlpha(1f);
+                                  nativeImageViewB.setAlpha(1f);
                                   nativeImageView.setVisibility(View.INVISIBLE);
                                   nativeImageViewB.setVisibility(View.INVISIBLE);
                                   preloadedImageUrl = null; preloadImageReady = false;
