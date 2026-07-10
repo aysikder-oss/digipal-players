@@ -1895,14 +1895,20 @@ public class MainActivity extends Activity {
                         // outgoing slide are released before ExoPlayer allocates for
                         // the incoming one.  On low-RAM devices (e.g. BHV5AW) this
                         // frees 30-60 MB at the playlist_transition peak.
+                        // Jank fix (v3.16.62): trimMemory(TRIM_MEMORY_UI_HIDDEN) instead of
+                        // clearMemory() — halves the LRU cache (keeps hot entries so the next
+                        // image slide doesn't force a full re-decode on the main thread), and
+                        // the duplicate System.gc() call is dropped (Runtime.getRuntime().gc()
+                        // is the identical hint; doubling it just extends the concurrent GC
+                        // pass that already competes with the transition window).
                         runOnUiThread(() -> {
                             try {
-                                com.bumptech.glide.Glide.get(MainActivity.this).clearMemory();
+                                com.bumptech.glide.Glide.get(MainActivity.this)
+                                    .trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN);
                             } catch (Throwable ignored) {}
                         });
                         Runtime.getRuntime().gc();
-                        System.gc();
-                        android.util.Log.d("DigipalNative", "[gc] requestNativeGC: Glide clearMemory + GC nudged");
+                        android.util.Log.d("DigipalNative", "[gc] requestNativeGC: Glide trimMemory + GC nudged");
                     } catch (Throwable e) {
                         android.util.Log.e("DigipalNative", "requestNativeGC error", e);
                     }
@@ -1922,22 +1928,41 @@ public class MainActivity extends Activity {
                         boolean nativeLoopReleased = false;
                         try { nativeLoopReleased = new org.json.JSONArray(json).length() == 0; } catch (Throwable ignored) {}
                         if (nativeLoopReleased) {
+                            // Jank fix (v3.16.62): the old code stacked resumeTimers() (JS timer
+                            // backlog burst), setVisibility(VISIBLE) (full WebView relayout +
+                            // re-raster after long invisibility) and setRendererPriorityPolicy
+                            // (synchronous renderer-process IPC) into ONE Choreographer frame —
+                            // observed as a 119-skipped-frames (~2s) main-thread stall on Fire TV
+                            // right at "[nativeLoop] empty playlist -> WebView re-activated".
+                            // Split across two main-loop passes: show the WebView first, then
+                            // resume timers + raise renderer priority on the next pass.
                             runOnUiThread(() -> {
                                 try {
-                                    if (heartbeatRunnable != null) {
-                                        heartbeatHandler.removeCallbacks(heartbeatRunnable);
-                                        heartbeatRunnable = null;
-                                    }
                                     if (webView != null) {
-                                        try { webView.resumeTimers(); } catch (Throwable ignored2) {}
                                         webView.setAlpha(1f);
                                         webView.setVisibility(View.VISIBLE);
-                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                                            try { webView.setRendererPriorityPolicy(android.webkit.WebView.RENDERER_PRIORITY_IMPORTANT, false); } catch (Throwable ignored3) {}
-                                        }
                                         android.util.Log.i("DigipalNative", "[nativeLoop] empty playlist -> WebView re-activated");
                                     }
-                                } catch (Throwable ignored4) {}
+                                } catch (Throwable ignored2) {}
+                                new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                                    try {
+                                        // Heartbeat removal stays paired with resumeTimers() —
+                                        // v59 Fix 11 invariant: the Java keepalive exists exactly
+                                        // while WebView timers are paused. A stray heartbeat
+                                        // evaluateJavascript in the one-frame gap is harmless.
+                                        if (heartbeatRunnable != null) {
+                                            heartbeatHandler.removeCallbacks(heartbeatRunnable);
+                                            heartbeatRunnable = null;
+                                        }
+                                        if (webView != null) {
+                                            try { webView.resumeTimers(); } catch (Throwable ignored3) {}
+                                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                                                try { webView.setRendererPriorityPolicy(android.webkit.WebView.RENDERER_PRIORITY_IMPORTANT, false); } catch (Throwable ignored4) {}
+                                            }
+                                            android.util.Log.i("DigipalNative", "[nativeLoop] timers resumed + renderer priority raised (deferred frame)");
+                                        }
+                                    } catch (Throwable ignored5) {}
+                                });
                             });
                         }
                         try { io.sentry.Breadcrumb _plBc = new io.sentry.Breadcrumb("Playlist loaded"); _plBc.setCategory("playlist"); _plBc.setType("info"); _plBc.setLevel(io.sentry.SentryLevel.INFO); try { org.json.JSONArray _slides = new org.json.JSONArray(json); _plBc.setData("slide_count", _slides.length()); } catch (Throwable _pe) {} io.sentry.Sentry.addBreadcrumb(_plBc); } catch (Throwable ignored) {}
