@@ -28,9 +28,24 @@ public class AssetCacheManager {
     private final Context ctx;
     private final PlaylistRepository repo;
     private final OkHttpClient http;
-    private volatile int configuredMax = MAX_CONCURRENT;
-    private final Semaphore sem = new Semaphore(MAX_CONCURRENT, true);
+    private final Object concurrencyLock = new Object();
+    private int configuredMax = MAX_CONCURRENT;
+    private int inFlight = 0;
     private final ExecutorService exec = Executors.newFixedThreadPool(MAX_CONCURRENT + 1);
+
+    private void acquireSlot() throws InterruptedException {
+        synchronized (concurrencyLock) {
+            while (inFlight >= configuredMax) concurrencyLock.wait();
+            inFlight++;
+        }
+    }
+
+    private void releaseSlot() {
+        synchronized (concurrencyLock) {
+            if (inFlight > 0) inFlight--;
+            concurrencyLock.notifyAll();
+        }
+    }
 
     public AssetCacheManager(Context ctx, PlaylistRepository repo) {
         this.ctx = ctx;
@@ -59,11 +74,11 @@ public class AssetCacheManager {
     public void downloadAsync(String assetId, String url, String expectedSha256, DownloadCallback cb) {
         exec.execute(() -> {
             try {
-                sem.acquire();
+                acquireSlot();
                 try {
                     download(assetId, url, expectedSha256, cb);
                 } finally {
-                    sem.release();
+                    releaseSlot();
                 }
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
@@ -278,14 +293,10 @@ public class AssetCacheManager {
     public synchronized void setMaxConcurrency(int max) {
         if (max < 1) max = 1;
         if (max > MAX_CONCURRENT) max = MAX_CONCURRENT;
-        if (max == configuredMax) return;
-        if (max > configuredMax) {
-            sem.release(max - configuredMax);
-        } else {
-            sem.drainPermits();
-            sem.release(max);
+        synchronized (concurrencyLock) {
+            configuredMax = max;
+            concurrencyLock.notifyAll();
         }
-        configuredMax = max;
         Log.d(TAG, "[concurrency] Download concurrency set to " + max);
     }
 
