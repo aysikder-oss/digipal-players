@@ -14,7 +14,13 @@ jobs:
     env:
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-    
+      # Moved to job-level env (from per-step env) so that each step's `if:
+      # env.KEYSTORE_BASE64 != ''` condition can reliably see it. A step's own
+      # `env:` block is only guaranteed to be visible to *its own* run steps,
+      # not necessarily evaluated the same way for that step's `if:` gate on
+      # every runner/actions version — job-level env removes the ambiguity.
+      KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -32,15 +38,11 @@ jobs:
 
       - name: Decode keystore
         if: env.KEYSTORE_BASE64 != ''
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
           echo "$KEYSTORE_BASE64" | base64 -d > android-tv/app/release.keystore
 
       - name: Build Release APK (signed)
         if: env.KEYSTORE_BASE64 != ''
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         working-directory: android-tv
         run: |
           ./gradlew assembleRelease \
@@ -51,8 +53,6 @@ jobs:
 
       - name: Build Release AAB (signed)
         if: env.KEYSTORE_BASE64 != ''
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         working-directory: android-tv
         run: |
           ./gradlew bundleRelease \
@@ -63,15 +63,11 @@ jobs:
 
       - name: Build Debug APK (unsigned)
         if: env.KEYSTORE_BASE64 == ''
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         working-directory: android-tv
         run: ./gradlew assembleDebug
 
       - name: Build Debug AAB (unsigned)
         if: env.KEYSTORE_BASE64 == ''
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         working-directory: android-tv
         run: ./gradlew bundleDebug
 
