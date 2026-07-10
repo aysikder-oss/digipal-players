@@ -226,6 +226,13 @@ public class PlaylistScheduler {
     /** Last JSON passed to setPlaylist(); used to re-parse local manifest on onReady. */
     private String lastSetJson = "";
 
+    /** Item 6 audit fix: monotonically increasing sequence id, incremented once per
+     *  setPlaylist() call that starts (or supersedes) a revision pipeline. commitLocalRevision()
+     *  and handlePipelineFailed() compare their captured seq against the current value and
+     *  no-op if stale, so a superseded setPlaylist() call's async onReady()/onFailed() can never
+     *  clobber a newer one (stale-callback protection). */
+    private long pendingRevisionSeq = 0;
+
     // ── Asset readiness grace period ────────────────────────────────────────
     /** Retry count for empty-URL grace period; resets whenever a slide has a usable URL. */
     private int assetGraceRetries = 0;
@@ -398,6 +405,7 @@ public class PlaylistScheduler {
         lastSetJson = json;
         List<SlidePlan> newSlides = parseSlides(json);
         if (newSlides.isEmpty()) {
+            pendingRevisionSeq++; // invalidate any in-flight pipeline callback for a superseded revision
             stop();
             dbExec.execute(() -> repository.clearActiveRevision());
             // Persist stop signal across device reboots — boot() stays IDLE even when
@@ -410,90 +418,169 @@ public class PlaylistScheduler {
         }
 
         if (isSameStructure(newSlides)) {
-            // Fix 4: check if the active video's signed URL changed — reload ExoPlayer seamlessly
-            // so it doesn't serve an expired URL after ~1 hour of native playback.
+            // Item 6 audit fix (3): `newSlides` here is parsed straight from the raw remote
+            // JSON. Local-file-resolved slides (assigned ONLY by commitLocalRevision() below)
+            // must never be silently overwritten with raw /objects or signed URLs just because
+            // the server sent a structurally-identical refresh -- local resolved slides must
+            // remain preferred. We only ever reassign `slides` here when the currently active
+            // slide is NOT already a resolved local file:// path.
             final SlidePlan activeOld = (currentIndex >= 0 && currentIndex < slides.size()) ? slides.get(currentIndex) : null;
             final SlidePlan activeNew = (currentIndex >= 0 && currentIndex < newSlides.size()) ? newSlides.get(currentIndex) : null;
-            slides = newSlides;
             if (prefs != null) prefs.edit().remove(KEY_PLS_WAS_STOPPED).apply();
+
+            final boolean activeIsLocal = activeOld != null && activeOld.url != null && activeOld.url.startsWith("file://");
             if (activeOld != null && activeNew != null
                     && activeOld.type == SlideType.VIDEO
                     && !activeOld.url.equals(activeNew.url)
+                    && !activeIsLocal
                     && running && delegate != null) {
-                Log.i(TAG, "[setPlaylist] signed URL changed for active video contentId=" + activeNew.contentId + " — reloading ExoPlayer");
+                // Fix 4: the active video's signed URL changed and it wasn't already local --
+                // reload ExoPlayer seamlessly so it doesn't serve an expired URL after ~1 hour
+                // of native playback.
+                slides = newSlides;
+                Log.i(TAG, "[setPlaylist] signed URL changed for active video contentId=" + activeNew.contentId + " — reloading ExoPlayer (remote source)");
                 final Delegate _d = delegate; final SlidePlan _slide = activeNew;
                 handler.post(() -> _d.schedulerPlayVideo(_slide));
             } else {
-                Log.d(TAG, "[setPlaylist] URL refresh -- keeping index=" + currentIndex);
+                Log.d(TAG, "[setPlaylist] URL refresh -- keeping local/current slides, index=" + currentIndex
+                        + " activeIsLocal=" + activeIsLocal);
             }
             return;
         }
 
-        // Clear the was-stopped flag — real content is incoming.
-          if (prefs != null) prefs.edit().remove(KEY_PLS_WAS_STOPPED).apply();
-          stop();
-          slides = newSlides;
-          currentIndex = 0;
-          consecutiveFailures = 0;
-          coldRevisionFirstSlide = true;
+        // Item 6 audit fix (1)+(2): structurally different, non-empty playlist. Do NOT stop()
+        // the currently running playlist and do NOT assign `slides` from the raw remote JSON
+        // here, and do NOT call showCurrent() yet. Whatever is on screen (if anything) keeps
+        // playing untouched until startRevisionPipeline().onReady() delivers a non-empty
+        // localManifestJson that parses into non-empty local slides -- see
+        // commitLocalRevision()/handlePipelineFailed() below, which are the ONLY places
+        // `slides` is reassigned for a structurally-different revision.
+        if (prefs != null) prefs.edit().remove(KEY_PLS_WAS_STOPPED).apply();
+        final long mySeq = ++pendingRevisionSeq;
+        final String finalJson = json;
 
-          // Task fix: warm Glide/ExoPlayer's cache for every upcoming slide of this NEW
-          // revision right away, not just "the next one" (schedulePreload() only preloads
-          // one slide ahead once the current one reaches PLAYING). Without this, slide 0
-          // is a cold network fetch racing the renderer-ready timeout, and slide 1+ don't
-          // even start downloading until slide 0 finishes -- compounding timeouts across
-          // an entire freshly-switched playlist. Index 0 is intentionally skipped here;
-          // it's dispatched normally by showCurrent() below with the extended cold timeout.
-          if (delegate != null) {
-              for (int i = 1; i < newSlides.size(); i++) {
-                  final SlidePlan warmSlide = newSlides.get(i);
-                  if (warmSlide.url == null || warmSlide.url.isEmpty()) continue;
-                  if (warmSlide.type == SlideType.VIDEO) {
-                      delegate.schedulerPreloadVideo(warmSlide);
-                  } else if (warmSlide.type == SlideType.IMAGE) {
-                      delegate.schedulerPreloadImage(warmSlide);
-                  }
-              }
-          }
+        if (running) {
+            Log.i(TAG, "[setPlaylist] pending revision started seq=" + mySeq
+                    + " -- keeping current playlist until local revision ready seq=" + mySeq);
+        } else {
+            Log.i(TAG, "[setPlaylist] pending revision started seq=" + mySeq
+                    + " -- idle, waiting for local revision ready seq=" + mySeq);
+        }
 
-          final String finalJson = json;
+        // Warm Glide/ExoPlayer's cache for every slide of this NEW revision using the raw
+        // remote manifest. This is a pure network/cache pre-warm -- it never touches `slides`
+        // or the active renderer, so it's safe to do while the old playlist keeps playing (or
+        // while idle) and before the local manifest is ready. Index 0 is included here (unlike
+        // the previous implementation) since showCurrent() is no longer called immediately.
+        if (delegate != null) {
+            for (int i = 0; i < newSlides.size(); i++) {
+                final SlidePlan warmSlide = newSlides.get(i);
+                if (warmSlide.url == null || warmSlide.url.isEmpty()) continue;
+                if (warmSlide.type == SlideType.VIDEO) {
+                    delegate.schedulerPreloadVideo(warmSlide);
+                } else if (warmSlide.type == SlideType.IMAGE) {
+                    delegate.schedulerPreloadImage(warmSlide);
+                }
+            }
+        }
+
         dbExec.execute(() -> {
-              repository.startRevisionPipeline("default", finalJson, new PlaylistRepository.OnRevisionReady() {
-                  @Override
-                  public void onReady(long revId, String localManifestJson) {
-                      repository.promoteRevisionToActive(revId);
-                      activeRevisionId = revId;
-                      Log.i(TAG, "[setPlaylist] revision activated revId=" + revId);
-                      // Swap slides to local-file-resolved paths — the ONLY place
-                      // raw /objects/ URLs are replaced with file:// URIs.
-                      if (localManifestJson != null && !localManifestJson.isEmpty()) {
-                          List<SlidePlan> local = parseSlides(localManifestJson);
-                          if (!local.isEmpty()) {
-                              handler.post(() -> {
-                                  synchronized (PlaylistScheduler.this) {
-                                      if (running && activeRevisionId == revId) {
-                                          slides = local;
-                                          Log.i(TAG, "[setPlaylist] slides updated from local manifest ("
-                                                  + local.size() + " items)");
-                                      }
-                                  }
-                              });
-                          }
-                      }
-                  }
-                  @Override
-                  public void onFailed(long revId, String reason) {
-                      Log.w(TAG, "[setPlaylist] pipeline failed revId=" + revId + " reason=" + reason);
-                  }
-              });
-          });
+            repository.startRevisionPipeline("default", finalJson, new PlaylistRepository.OnRevisionReady() {
+                @Override
+                public void onReady(long revId, String localManifestJson) {
+                    handler.post(() -> commitLocalRevision(mySeq, revId, localManifestJson, finalJson));
+                }
+                @Override
+                public void onFailed(long revId, String reason) {
+                    handler.post(() -> handlePipelineFailed(mySeq, revId, reason, finalJson));
+                }
+            });
+        });
+    }
+
+    /**
+     * Item 6 audit fix: the ONLY place `slides` is assigned from a structurally-different
+     * setPlaylist() call. Only invoked once startRevisionPipeline() has delivered a non-empty
+     * localManifestJson that itself parses into non-empty local (file://-resolved) slides.
+     * Guarded by {@code seq != pendingRevisionSeq} so a stale onReady() from a superseded
+     * setPlaylist() call is a silent no-op (stale-callback protection).
+     */
+    private synchronized void commitLocalRevision(long seq, long revId, String localManifestJson, String rawJson) {
+        if (seq != pendingRevisionSeq) {
+            Log.d(TAG, "[setPlaylist] stale onReady ignored seq=" + seq + " current=" + pendingRevisionSeq);
+            return;
+        }
+        List<SlidePlan> local = (localManifestJson != null && !localManifestJson.isEmpty())
+                ? parseSlides(localManifestJson) : new ArrayList<>();
+        if (local.isEmpty()) {
+            Log.w(TAG, "[setPlaylist] local manifest empty/unparseable seq=" + seq + " revId=" + revId
+                    + " -- treating as pipeline failure");
+            handlePipelineFailed(seq, revId, "empty_local_manifest", rawJson);
+            return;
+        }
+
+        Log.i(TAG, "[setPlaylist] local revision ready seq=" + seq + " slides=" + local.size());
+
+        repository.promoteRevisionToActive(revId);
+        activeRevisionId = revId;
+
+        // Only now does the old playlist (if any) actually stop.
+        stop();
+        slides = local;
+        currentIndex = 0;
+        consecutiveFailures = 0;
+        coldRevisionFirstSlide = true;
+        retrySlideId = null; retryCountForSlide = 0; // fresh playlist start -- reset the per-slide retry counter
+        firstSlideRemainingMs = -1L; // fresh start — no wall-clock offset
 
         // Record wall-clock epoch so boot() can resume at the right slide after crash/restart
         if (prefs != null) {
             prefs.edit().putLong(KEY_PLAYLIST_EPOCH, System.currentTimeMillis()).apply();
         }
-        retrySlideId = null; retryCountForSlide = 0; // fresh playlist start -- reset the per-slide retry counter
-        firstSlideRemainingMs = -1L; // fresh start — no wall-clock offset
+
+        running = true;
+        Log.i(TAG, "[setPlaylist] committing local revision seq=" + seq + " revId=" + revId);
+        showCurrent();
+    }
+
+    /**
+     * Item 6 audit fix: fired when startRevisionPipeline() reports a failure (or when
+     * commitLocalRevision() finds an empty local manifest). Falls back to the raw remote JSON
+     * ONLY when nothing else is currently on screen (fallbackToRemote=true) -- an old playlist
+     * that's still playing is left untouched rather than being downgraded to unresolved remote
+     * URLs. Guarded by {@code seq != pendingRevisionSeq} (stale-callback protection).
+     */
+    private synchronized void handlePipelineFailed(long seq, long revId, String reason, String rawJson) {
+        if (seq != pendingRevisionSeq) {
+            Log.d(TAG, "[setPlaylist] stale onFailed ignored seq=" + seq + " current=" + pendingRevisionSeq);
+            return;
+        }
+        final boolean fallbackToRemote = !running;
+        Log.w(TAG, "[setPlaylist] pipeline failed seq=" + seq + " revId=" + revId + " reason=" + reason
+                + " fallbackToRemote=" + fallbackToRemote);
+
+        if (!fallbackToRemote) {
+            // An old playlist is still playing -- keep it running rather than replacing it
+            // with an unresolved/failed revision.
+            return;
+        }
+
+        List<SlidePlan> remote = parseSlides(rawJson);
+        if (remote.isEmpty()) {
+            Log.w(TAG, "[setPlaylist] fallback remote manifest also empty seq=" + seq + " -- staying idle");
+            return;
+        }
+
+        stop();
+        slides = remote;
+        currentIndex = 0;
+        consecutiveFailures = 0;
+        coldRevisionFirstSlide = true;
+        retrySlideId = null; retryCountForSlide = 0;
+        firstSlideRemainingMs = -1L;
+        if (prefs != null) {
+            prefs.edit().putLong(KEY_PLAYLIST_EPOCH, System.currentTimeMillis()).apply();
+        }
         running = true;
         showCurrent();
     }
