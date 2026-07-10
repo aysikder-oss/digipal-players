@@ -40,6 +40,22 @@ public class TelemetryManager {
     private final String appVersion;
     private final ExecutorService exec = Executors.newSingleThreadExecutor();
 
+    /**
+     * Fired whenever a heartbeat response carries a contentRevision string, on
+     * every tick (dedup is left to the JS side). This is the fix for content
+     * changes not reaching a device whose WebView is frozen under
+     * WebView.pauseTimers(): sendHeartbeat() runs entirely off the WebView (plain
+     * HttpURLConnection on a background thread), so it keeps working even when
+     * the WebView's own fetch()/WS/timers are paused. Previously the heartbeat
+     * response BODY was discarded entirely (postJson only returned the HTTP
+     * status code) even though the server has always echoed contentRevision
+     * back — MainActivity now forwards it into the WebView via
+     * evaluateJavascript, which (like the existing 25s __digipalHeartbeat call)
+     * still executes under pauseTimers.
+     */
+    public interface RevisionListener { void onContentRevision(String revision); }
+    private final RevisionListener revisionListener;
+
     // Runtime state reported in heartbeat
     private volatile String currentRevisionId = "";
     private volatile String currentSlideId = "";
@@ -74,11 +90,16 @@ public class TelemetryManager {
     }
 
     public TelemetryManager(Context ctx, PlaylistRepository repo, String serverUrl) {
+        this(ctx, repo, serverUrl, null);
+    }
+
+    public TelemetryManager(Context ctx, PlaylistRepository repo, String serverUrl, RevisionListener revisionListener) {
         this.ctx = ctx;
         this.repo = repo;
         this.serverUrl = serverUrl;
         this.deviceId = getOrCreateInstallId(ctx);
         this.appVersion = BuildConfig.VERSION_NAME;
+        this.revisionListener = revisionListener;
     }
 
     public void start() {
@@ -178,7 +199,18 @@ public class TelemetryManager {
     private void sendHeartbeat() {
         try {
             JSONObject payload = buildHeartbeat();
-            postJson(serverUrl + "/api/tv/telemetry/heartbeat", payload.toString());
+            String respBody = postJsonWithResponse(serverUrl + "/api/tv/telemetry/heartbeat", payload.toString());
+            if (respBody != null && revisionListener != null) {
+                try {
+                    JSONObject resp = new JSONObject(respBody);
+                    String remoteRevision = resp.optString("contentRevision", "");
+                    if (!remoteRevision.isEmpty()) {
+                        revisionListener.onContentRevision(remoteRevision);
+                    }
+                } catch (JSONException je) {
+                    Log.w(TAG, "heartbeat response parse failed: " + je.getMessage());
+                }
+            }
         } catch (Exception e) {
             Log.w(TAG, "heartbeat failed: " + e.getMessage());
         }
@@ -274,6 +306,45 @@ public class TelemetryManager {
               int code = conn.getResponseCode();
               if (code >= 400) Log.w(TAG, "POST " + urlStr + " returned " + code);
               return code;
+          } finally {
+              if (conn != null) conn.disconnect();
+          }
+      }
+
+    /**
+     * Same as postJson but also reads and returns the response body (needed to
+     * pick up contentRevision from the heartbeat response). Returns null on any
+     * failure or non-2xx status rather than throwing, since this is best-effort —
+     * the heartbeat itself must not be considered failed just because the body
+     * couldn't be read.
+     */
+    private String postJsonWithResponse(String urlStr, String body) throws Exception {
+          HttpURLConnection conn = null;
+          try {
+              URL url = new URL(urlStr);
+              conn = (HttpURLConnection) url.openConnection();
+              conn.setRequestMethod("POST");
+              conn.setRequestProperty("Content-Type", "application/json");
+              conn.setDoOutput(true);
+              conn.setConnectTimeout(10000);
+              conn.setReadTimeout(10000);
+              try (OutputStream os = conn.getOutputStream()) {
+                  os.write(body.getBytes("UTF-8"));
+              }
+              int code = conn.getResponseCode();
+              if (code >= 400) {
+                  Log.w(TAG, "POST " + urlStr + " returned " + code);
+                  return null;
+              }
+              InputStream is = conn.getInputStream();
+              ByteArrayOutputStream baos = new ByteArrayOutputStream();
+              byte[] buf = new byte[512];
+              int n;
+              while ((n = is.read(buf)) != -1) baos.write(buf, 0, n);
+              return baos.toString("UTF-8");
+          } catch (Exception e) {
+              Log.w(TAG, "postJsonWithResponse failed: " + e.getMessage());
+              return null;
           } finally {
               if (conn != null) conn.disconnect();
           }
