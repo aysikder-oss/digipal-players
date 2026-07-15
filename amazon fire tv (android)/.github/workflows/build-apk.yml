@@ -51,11 +51,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: nexuscast-v1.0.${{ github.run_number }}
-          name: Digipal Player nexuscast-v1.0.${{ github.run_number }}
+          name: NexusCast Player v1.0.${{ github.run_number }}
           files: release/NexusCastPlayer.apk
           make_latest: true
           body: |
-            Digipal Player nexuscast-v1.0.${{ github.run_number }}
+            NexusCast Player v1.0.${{ github.run_number }}
             
             Includes native local media storage for offline playback.
             
