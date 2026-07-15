@@ -26,7 +26,7 @@ def hasInjectedSigning =
 def hasReleaseSigning = hasEnvSigning || hasInjectedSigning
 
 android {
-    namespace 'com.digipal.signage'
+    namespace 'com.nexuscast.player'
     compileSdk 35
 
     signingConfigs {
@@ -41,7 +41,7 @@ android {
     }
 
     defaultConfig {
-        applicationId "com.digipal.signage"
+        applicationId "com.nexuscast.player"
         minSdk 21
         targetSdk 35
         versionCode 1
