@@ -16,9 +16,7 @@ def hasEnvSigning =
         System.getenv("KEY_ALIAS") &&
         System.getenv("KEY_PASSWORD")
 
-// CI (build-android-tv.yml) injects signing credentials via Gradle -P properties
-// (android.injected.signing.*) rather than env vars — recognize that path too so
-// release builds in CI are not incorrectly blocked.
+// CI injects signing credentials via Gradle -P properties
 def hasInjectedSigning =
         project.hasProperty("android.injected.signing.store.file") &&
         project.hasProperty("android.injected.signing.store.password") &&
@@ -39,9 +37,6 @@ android {
                 keyAlias System.getenv("KEY_ALIAS")
                 keyPassword System.getenv("KEY_PASSWORD")
             }
-            // When only hasInjectedSigning is true, leave fields unset here — the
-            // Android Gradle Plugin auto-populates them from the injected
-            // android.injected.signing.* properties passed via -P on the CLI.
         }
     }
 
@@ -49,13 +44,13 @@ android {
         applicationId "com.digipal.signage"
         minSdk 21
         targetSdk 35
-        versionCode 83
-        versionName "3.16.69"
+        versionCode 1
+        versionName "1.0.0"
 
         buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
-        buildConfigField "String", "SENTRY_DSN", "\"${System.getenv('SENTRY_DSN') ?: ''}\""
+        buildConfigField "String", "SENTRY_DSN", "\"${System.getenv('SENTRY_DSN') ?: ''}\")"
         buildConfigField "String", "GIT_SHA", "\"${gitSha}\""
-        buildConfigField "String", "BUILD_FLAVOR", "\"android-tv\""
+        buildConfigField "String", "BUILD_FLAVOR", "\"amazon-fire-tv\""
 
         javaCompileOptions {
             annotationProcessorOptions {
@@ -101,9 +96,6 @@ android {
 }
 
 gradle.taskGraph.whenReady { graph ->
-    // Guard BOTH release output tasks (APK and AAB) — previously only
-    // assembleRelease was checked, so `./gradlew bundleRelease` could silently
-    // produce an unsigned release AAB when no signing config was supplied.
     def buildingUnguardedRelease =
             (graph.hasTask(':app:assembleRelease') || graph.hasTask(':app:bundleRelease')) &&
             !hasReleaseSigning
@@ -116,23 +108,16 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'androidx.webkit:webkit:1.9.0'
     implementation 'com.google.android.material:material:1.11.0'
-    // ExoPlayer (Media3) — native video overlay via PlayerView
     implementation 'androidx.media3:media3-exoplayer:1.3.1'
     implementation 'androidx.media3:media3-ui:1.3.1'
     implementation 'androidx.media3:media3-common:1.3.1'
-    // ExoPlayer on-disk video cache
     implementation 'androidx.media3:media3-datasource:1.3.1'
-    // Glide — native image overlay
     implementation 'com.github.bumptech.glide:glide:4.16.0'
     annotationProcessor 'com.github.bumptech.glide:compiler:4.16.0'
-    // Room — offline playlist cache + native playlist DB
     implementation 'androidx.room:room-runtime:2.6.1'
     annotationProcessor 'androidx.room:room-compiler:2.6.1'
-    // WorkManager — crash recovery with back-off
     implementation 'androidx.work:work-runtime:2.9.0'
-    // OkHttp — asset downloader with SHA256 + ETag + Range resume
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
-    // Sentry — crash & ANR reporting
     implementation 'io.sentry:sentry-android:7.14.0'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.robolectric:robolectric:4.12.2'
@@ -143,10 +128,6 @@ dependencies {
 }
 
 sentry {
-    // Only upload ProGuard mapping when SENTRY_AUTH_TOKEN is available AND we're
-    // running in CI — a local dev machine that happens to have the token exported
-    // should not also attempt this upload (its paths/sourcemaps aren't CI-shaped, so
-    // it can fail spuriously outside a real CI run).
     def sentryToken = System.getenv("SENTRY_AUTH_TOKEN") ?: ""
     def isCi = System.getenv("CI") == "true" || System.getenv("GITHUB_ACTIONS") == "true"
     autoUploadProguardMapping = isCi && !sentryToken.isEmpty()
@@ -155,10 +136,6 @@ sentry {
     projectName = "android"
     authToken = sentryToken
     telemetry = false
-    // We only use manual Sentry.captureException()/breadcrumbs — disable ASM bytecode
-    // auto-instrumentation (OkHttp/Compose/FileIO tracing) to avoid corrupting unrelated
-    // classes it can't fully resolve (seen as "ASM Instrumentation... wasn't able to
-    // resolve some classes" in build output).
     tracingInstrumentation {
         enabled = false
     }
