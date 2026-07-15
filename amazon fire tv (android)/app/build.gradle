@@ -48,7 +48,7 @@ android {
         versionName "1.0.0"
 
         buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
-        buildConfigField "String", "SENTRY_DSN", "\"${System.getenv('SENTRY_DSN') ?: ''}\")"
+        buildConfigField "String", "SENTRY_DSN", "\"${System.getenv('SENTRY_DSN') ?: ''}\")
         buildConfigField "String", "GIT_SHA", "\"${gitSha}\""
         buildConfigField "String", "BUILD_FLAVOR", "\"amazon-fire-tv\""
 
