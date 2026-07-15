@@ -37,25 +37,25 @@ jobs:
       - name: Rename APK
         run: |
           mkdir -p release
-          cp app/build/outputs/apk/debug/app-debug.apk release/DigipalPlayer-v3.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release/NexusCastPlayer.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v5
         with:
-          name: DigipalPlayer-v3
-          path: release/DigipalPlayer-v3.apk
+          name: NexusCastPlayer
+          path: release/NexusCastPlayer.apk
           retention-days: 90
 
       - name: Create Release
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.0.${{ github.run_number }}
-          name: Digipal Player v3.0.${{ github.run_number }}
-          files: release/DigipalPlayer-v3.apk
+          tag_name: nexuscast-v1.0.${{ github.run_number }}
+          name: Digipal Player nexuscast-v1.0.${{ github.run_number }}
+          files: release/NexusCastPlayer.apk
           make_latest: true
           body: |
-            Digipal Player v3.0.${{ github.run_number }}
+            Digipal Player nexuscast-v1.0.${{ github.run_number }}
             
             Includes native local media storage for offline playback.
             
