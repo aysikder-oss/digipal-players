@@ -1,4 +1,4 @@
-package com.digipal.signage;
+package com.nexuscast.player;
 
 import android.os.Handler;
 import android.os.SystemClock;
