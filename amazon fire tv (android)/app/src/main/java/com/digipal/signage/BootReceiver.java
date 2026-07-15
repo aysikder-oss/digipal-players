@@ -1,4 +1,4 @@
-package com.digipal.signage;
+package com.nexuscast.player;
 
   import android.content.BroadcastReceiver;
   import android.content.Context;
