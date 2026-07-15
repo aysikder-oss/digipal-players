@@ -1,4 +1,4 @@
-package com.digipal.signage;
+package com.nexuscast.player;
 
   import java.io.File;
   import java.io.IOException;
