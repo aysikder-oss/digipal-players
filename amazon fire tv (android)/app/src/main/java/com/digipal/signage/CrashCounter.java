@@ -1,4 +1,4 @@
-package com.digipal.signage;
+package com.nexuscast.player;
 
   import android.annotation.SuppressLint;
   import android.content.Context;
