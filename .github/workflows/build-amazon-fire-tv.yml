@@ -41,7 +41,7 @@ jobs:
         working-directory: "amazon fire tv (android)"
         run: |
           ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=$PWD/app/release.keystore \
+            "-Pandroid.injected.signing.store.file=$PWD/app/release.keystore" \
             -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
             -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
             -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
@@ -51,7 +51,7 @@ jobs:
         working-directory: "amazon fire tv (android)"
         run: |
           ./gradlew bundleRelease \
-            -Pandroid.injected.signing.store.file=$PWD/app/release.keystore \
+            "-Pandroid.injected.signing.store.file=$PWD/app/release.keystore" \
             -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
             -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
             -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
