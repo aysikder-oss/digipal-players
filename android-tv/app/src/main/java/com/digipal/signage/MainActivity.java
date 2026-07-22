@@ -1942,10 +1942,12 @@ public class MainActivity extends Activity {
                 public void setHasBroadcast(boolean active) {
                     // Issue 3 fix: re-show the WebView when a broadcast overlay is active
                     // so it is visible even while ExoPlayer/Glide owns the display surface.
-                    // The WebView sits above native layers in FrameLayout z-order but is
-                    // hidden (INVISIBLE + alpha=0) by schedulerDeactivateWebView() to avoid
-                    // covering native content. When a broadcast fires we must reverse that
-                    // temporarily; when it clears we re-hide if native content is still active.
+                    // The WebView is added at position 0 (bottom of FrameLayout z-order) while
+                    // native ExoPlayer TextureViews and Glide ImageViews sit above it, so simply
+                    // making the WebView VISIBLE is not enough — we must also bring it to the
+                    // front of the child stack so the broadcast/emergency overlay renders on top
+                    // of all native video/image layers. When the broadcast clears we re-hide the
+                    // WebView (INVISIBLE), at which point z-order no longer matters.
                     hasBroadcastActive = active;
                     runOnUiThread(() -> {
                         try {
@@ -1954,7 +1956,9 @@ public class MainActivity extends Activity {
                                 webView.setAlpha(1f);
                                 webView.setVisibility(android.view.View.VISIBLE);
                                 webView.resumeTimers();
-                                android.util.Log.d("DigipalBroadcast", "[broadcast] WebView shown for overlay");
+                                // Bring WebView to front so it renders above native video/image layers.
+                                if (rootLayout != null) rootLayout.bringChildToFront(webView);
+                                android.util.Log.d("DigipalBroadcast", "[broadcast] WebView shown for overlay (z-order raised)");
                             } else if (nativeSchedulerOwnsDisplay) {
                                 // Broadcast cleared but native content is still playing — re-hide.
                                 webView.setAlpha(0f);
