@@ -173,6 +173,14 @@ public class MainActivity extends Activity {
     private boolean nativeFirstRendering = false;
     // Fix 3: generation token to cancel stale WebView recreations.
     private volatile int dormantGeneration = 0;
+    // Broadcast overlay bridge: true while a React BroadcastOverlay is active.
+    // schedulerDeactivateWebView() respects this flag and does NOT hide the WebView
+    // when a broadcast is showing, so the overlay remains visible over native content.
+    private volatile boolean hasBroadcastActive = false;
+    // True while the native PlaylistScheduler is the active display owner
+    // (set in schedulerDeactivateWebView, cleared on IDLE state). Used by
+    // setHasBroadcast() to decide whether to re-hide the WebView after a broadcast clears.
+    private volatile boolean nativeSchedulerOwnsDisplay = false;
     /** Duration (ms) of the currently active native slide. Used by setWebViewDormant
      *  to skip WebView recreation for short slides (Fix 8). */
     private volatile long currentNativeSlideDurationMs = 0L;
@@ -1925,6 +1933,33 @@ public class MainActivity extends Activity {
               }
 
                 @JavascriptInterface
+                public void setHasBroadcast(boolean active) {
+                    // Issue 3 fix: re-show the WebView when a broadcast overlay is active
+                    // so it is visible even while ExoPlayer/Glide owns the display surface.
+                    // The WebView sits above native layers in FrameLayout z-order but is
+                    // hidden (INVISIBLE + alpha=0) by schedulerDeactivateWebView() to avoid
+                    // covering native content. When a broadcast fires we must reverse that
+                    // temporarily; when it clears we re-hide if native content is still active.
+                    hasBroadcastActive = active;
+                    runOnUiThread(() -> {
+                        try {
+                            if (webView == null) return;
+                            if (active) {
+                                webView.setAlpha(1f);
+                                webView.setVisibility(android.view.View.VISIBLE);
+                                webView.resumeTimers();
+                                android.util.Log.d("DigipalBroadcast", "[broadcast] WebView shown for overlay");
+                            } else if (nativeSchedulerOwnsDisplay) {
+                                // Broadcast cleared but native content is still playing — re-hide.
+                                webView.setAlpha(0f);
+                                webView.setVisibility(android.view.View.INVISIBLE);
+                                android.util.Log.d("DigipalBroadcast", "[broadcast] WebView re-hidden, native scheduler active");
+                            }
+                        } catch (Throwable ignored) {}
+                    });
+                }
+
+                @JavascriptInterface
                 public void requestNativeGC() {
                     try {
                         long now = System.currentTimeMillis();
@@ -2723,11 +2758,16 @@ public class MainActivity extends Activity {
                           // Hide WebView + pause timers — enforces single renderer ownership.
                           // WebView sits above native layers in FrameLayout z-order so it must be
                           // INVISIBLE while native video/image is the active renderer.
+                          // Guard: if a broadcast is currently showing, do NOT hide the WebView
+                          // — the BroadcastOverlay lives there and must stay visible.
+                          nativeSchedulerOwnsDisplay = true;
                           runOnUiThread(() -> {
                               try {
                                   if (webView != null) {
-                                      webView.setAlpha(0f);
-                                      webView.setVisibility(View.INVISIBLE);
+                                      if (!hasBroadcastActive) {
+                                          webView.setAlpha(0f);
+                                          webView.setVisibility(View.INVISIBLE);
+                                      }
                                       // Do not pause timers here. The hidden shell must keep receiving assignment updates.
                                         // v59 Fix 11: proof-of-pairing log. Every pauseTimers() call here
                                         // MUST be matched by a resumeTimers() call in
@@ -2938,6 +2978,12 @@ public class MainActivity extends Activity {
                       }
                       @Override public void schedulerOnStateChanged(PlaylistScheduler.State state, String slideId) {
                           android.util.Log.d("DigipalScheduler", "[state] " + state + " slide=" + slideId);
+                          // When the scheduler goes IDLE, native content is no longer playing.
+                          // Clear the flag so setHasBroadcast(false) does not re-hide the WebView
+                          // unnecessarily if a broadcast clears after the scheduler stopped.
+                          if (state == PlaylistScheduler.State.IDLE) {
+                              nativeSchedulerOwnsDisplay = false;
+                          }
                           if (telemetryManager != null) {
                               telemetryManager.setCurrentSlide(
                                   String.valueOf(playlistScheduler.getActiveRevisionId()),
