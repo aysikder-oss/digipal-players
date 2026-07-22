@@ -181,6 +181,11 @@ public class MainActivity extends Activity {
     // (set in schedulerDeactivateWebView, cleared on IDLE state). Used by
     // setHasBroadcast() to decide whether to re-hide the WebView after a broadcast clears.
     private volatile boolean nativeSchedulerOwnsDisplay = false;
+    // True when the WebView is currently dormant (setWebViewDormant(true) was
+    // called and not yet reversed). Used by the revision watchdog to distinguish
+    // a genuinely frozen WebView (needs reload) from an active one (JS will handle
+    // the revision via its normal 30 s poll — no reload needed).
+    private volatile boolean isWebViewCurrentlyDormant = false;
     /** Duration (ms) of the currently active native slide. Used by setWebViewDormant
      *  to skip WebView recreation for short slides (Fix 8). */
     private volatile long currentNativeSlideDurationMs = 0L;
@@ -1879,6 +1884,7 @@ public class MainActivity extends Activity {
                     dormantGeneration++; // Fix 3: cancel any pending delayed WebView recreation
                               }
                           }
+                          isWebViewCurrentlyDormant = dormant;
                           android.util.Log.d("DigipalNative", "[nativeFirst] setWebViewDormant=" + dormant);
                           if (nativeFirstRendering && dormant && currentPlayerUrl != null) {
                               // Per-slide WebView recreation: destroy V8 heap + GPU compositor while native
@@ -2442,16 +2448,21 @@ public class MainActivity extends Activity {
 
             contentRevisionHandler.postDelayed(() -> {
                 if (lastNativePlaylistSetAtMs <= before) {
-                    // If the native PlaylistScheduler owns the display (all active
-                    // slides are VIDEO/IMAGE dispatched to ExoPlayer/Glide), the
-                    // WebView is intentionally dormant under pauseTimers(). The next
-                    // setNativePlaylist() from JS will pick up the new content without
-                    // any shell reload. Forcing a reload here disconnects the WebSocket,
-                    // causing any broadcast delivered during the ~10 s reload/reconnect
-                    // window to be permanently lost.
-                    if (nativeSchedulerOwnsDisplay) {
+                    // Skip the forced reload in two cases:
+                    // (a) Native scheduler owns display: WebView is intentionally dormant
+                    //     under pauseTimers(); setNativePlaylist() will carry new content.
+                    // (b) WebView is currently AWAKE (!isWebViewCurrentlyDormant): JS is
+                    //     running normally and will pick up the new revision on its next
+                    //     30 s tvStatus poll — no reload needed. This is the case for
+                    //     playlists that contain Kiosk/widget items (native scheduler
+                    //     never activates, setNativePlaylist([]) is sent, WebView stays
+                    //     active). Forcing a reload here just disconnects the WebSocket
+                    //     and causes continuous ~60 s reload cycles.
+                    if (nativeSchedulerOwnsDisplay || !isWebViewCurrentlyDormant) {
                         android.util.Log.d("DigipalNative",
-                                "[revision] skipping reload — native scheduler owns display, rev=" + rev);
+                                "[revision] skipping reload — " +
+                                (nativeSchedulerOwnsDisplay ? "native scheduler owns display" : "WebView is awake") +
+                                ", rev=" + rev);
                         return;
                     }
                     android.util.Log.w("DigipalNative",
