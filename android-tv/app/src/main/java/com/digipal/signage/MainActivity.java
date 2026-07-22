@@ -2827,12 +2827,12 @@ public class MainActivity extends Activity {
                                           webView.setVisibility(View.INVISIBLE);
                                       }
                                       // Do not pause timers here. The hidden shell must keep receiving assignment updates.
-                                        // v59 Fix 11: proof-of-pairing log. Every pauseTimers() call here
-                                        // MUST be matched by a resumeTimers() call in
-                                        // schedulerActivateIsolatedRenderer() before that WebView is asked
-                                        // to run JS again -- grep logcat for "timers=paused"/"timers=resumed"
-                                        // to confirm no slide is left with frozen JS.
-                                        android.util.Log.d("RendererOwner", "owner=native webView hidden timers=paused");
+                                        // Accurate log: shows whether the broadcast guard skipped the hide,
+                                        // vs. the old misleading "hidden timers=paused" that fired even when
+                                        // hasBroadcastActive=true kept the WebView visible.
+                                        android.util.Log.d("RendererOwner", hasBroadcastActive
+                                            ? "owner=native broadcast-active skip-hide timers=not-paused"
+                                            : "owner=native webView hidden timers=not-paused");
                                         // Keepalive (task 1952): keep WebSocket + JS alive on ALL devices while
                                         // timers are paused -- not just Fire TV. pauseTimers() freezes
                                         // setInterval so the WS heartbeat and status polling stop; a Java
@@ -2883,9 +2883,13 @@ public class MainActivity extends Activity {
                             runOnUiThread(() -> {
                                 try {
                                     if (webView != null) {
-                                        webView.setAlpha(0f);
-                                        webView.setVisibility(View.INVISIBLE);
-                                        android.util.Log.d("RendererOwner", "owner=isolated webView hidden (timers not paused)");
+                                        if (!hasBroadcastActive) {
+                                            webView.setAlpha(0f);
+                                            webView.setVisibility(View.INVISIBLE);
+                                            android.util.Log.d("RendererOwner", "owner=isolated webView hidden (timers not paused)");
+                                        } else {
+                                            android.util.Log.d("RendererOwner", "owner=isolated broadcast-active skip-hide (timers not paused)");
+                                        }
                                     }
                                 } catch (Throwable ignored) {}
                             });
@@ -3041,6 +3045,23 @@ public class MainActivity extends Activity {
                           // unnecessarily if a broadcast clears after the scheduler stopped.
                           if (state == PlaylistScheduler.State.IDLE) {
                               nativeSchedulerOwnsDisplay = false;
+                              // Re-show the WebView so React can render content after the native
+                              // scheduler stops (e.g. schedule transition from native video/image
+                              // to a non-native design/website playlist). schedulerDeactivateWebView()
+                              // hid the WebView when native playback started; this restores it so
+                              // the JS player can immediately take over without a black screen.
+                              // Safe as a no-op if the WebView was never hidden (boot-time IDLE).
+                              runOnUiThread(() -> {
+                                  try {
+                                      if (webView != null) {
+                                          webView.setAlpha(1f);
+                                          webView.setVisibility(View.VISIBLE);
+                                          webView.setTranslationZ(0f);
+                                          webView.resumeTimers();
+                                          android.util.Log.d("DigipalScheduler", "[state] IDLE: WebView restored (alpha=1 VISIBLE z=0)");
+                                      }
+                                  } catch (Throwable ignored) {}
+                              });
                           }
                           if (telemetryManager != null) {
                               telemetryManager.setCurrentSlide(
@@ -4176,4 +4197,5 @@ public class MainActivity extends Activity {
       }
   
 }
+
 
