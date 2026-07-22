@@ -1881,6 +1881,14 @@ public class MainActivity extends Activity {
               public void setWebViewDormant(boolean dormant) {
                   runOnUiThread(() -> {
                       try {
+                          if (dormant && hasBroadcastActive) {
+                              isWebViewCurrentlyDormant = false;
+                              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                  webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false);
+                              }
+                              showWebViewAboveNativeLayers("broadcast active; ignore dormant=true");
+                              return;
+                          }
                           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                               if (dormant) {
                                   webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_BOUND, false);
@@ -1945,50 +1953,14 @@ public class MainActivity extends Activity {
 
                 @JavascriptInterface
                 public void setHasBroadcast(boolean active) {
-                    // Broadcast z-order management:
-                    // The WebView lives at child index 0 (bottom of FrameLayout). Native
-                    // ExoPlayer TextureViews and Glide ImageViews are added at higher indices
-                    // and naturally render on top. To show a broadcast/emergency overlay ABOVE
-                    // all native layers we elevate the WebView via setTranslationZ(1000f) rather
-                    // than bringChildToFront() — elevation-based z-ordering does not reorder
-                    // children, so restoring translationZ(0f) naturally returns the WebView
-                    // behind all native layers (index 0 = rendered first = behind index 1+).
                     hasBroadcastActive = active;
-                    runOnUiThread(() -> {
-                        try {
-                            if (webView == null) return;
-                            if (active) {
-                                webView.setAlpha(1f);
-                                webView.setVisibility(android.view.View.VISIBLE);
-                                webView.resumeTimers();
-                                // Elevate WebView above native video/image layers.
-                                webView.setTranslationZ(1000f);
-                                android.util.Log.d("DigipalBroadcast", "[broadcast] WebView shown for overlay (z-order raised)");
-                            } else {
-                                // Broadcast cleared — restore WebView behind native layers.
-                                webView.setTranslationZ(0f);
-                                // Also correct child-index order in case a prior bringChildToFront
-                                // (v3.16.75) moved WebView to the last position; re-insert at
-                                // index 0 so native layers at higher indices render on top again.
-                                if (rootLayout != null && rootLayout.indexOfChild(webView) > 0) {
-                                    android.view.ViewGroup.LayoutParams lp = webView.getLayoutParams();
-                                    rootLayout.removeView(webView);
-                                    rootLayout.addView(webView, 0, lp != null ? lp :
-                                        new android.widget.FrameLayout.LayoutParams(
-                                            android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
-                                            android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
-                                }
-                                if (nativeSchedulerOwnsDisplay) {
-                                    // Scheduler owns display — also hide WebView entirely.
-                                    webView.setAlpha(0f);
-                                    webView.setVisibility(android.view.View.INVISIBLE);
-                                    android.util.Log.d("DigipalBroadcast", "[broadcast] WebView re-hidden, native scheduler active");
-                                } else {
-                                    android.util.Log.d("DigipalBroadcast", "[broadcast] WebView z-order restored behind native layers");
-                                }
-                            }
-                        } catch (Throwable ignored) {}
-                    });
+                    if (active) {
+                        try { if (playlistScheduler != null) playlistScheduler.pause(); } catch (Throwable ignored) {}
+                        showWebViewAboveNativeLayers("setHasBroadcast(true)");
+                    } else {
+                        restoreWebViewAfterBroadcast("setHasBroadcast(false)");
+                        try { if (playlistScheduler != null) playlistScheduler.resume(); } catch (Throwable ignored) {}
+                    }
                 }
 
                 @JavascriptInterface
@@ -2044,6 +2016,8 @@ public class MainActivity extends Activity {
                         // revision watchdog can skip a reload during PREPARING state.
                         hasActiveNativePlaylist = !nativeLoopReleased;
                         if (nativeLoopReleased) {
+                            nativeSchedulerOwnsDisplay = false;
+                            currentNativeSlideDurationMs = 0L;
                             // Jank fix (v3.16.62): the old code stacked resumeTimers() (JS timer
                             // backlog burst), setVisibility(VISIBLE) (full WebView relayout +
                             // re-raster after long invisibility) and setRendererPriorityPolicy
@@ -2453,6 +2427,41 @@ public class MainActivity extends Activity {
          *  nativeImageView/nativeImageViewB sit above TextureView/PlayerView in the
          *  FrameLayout, so they must be explicitly hidden or they cover the video.
          *  Call at every video-visible swap point (first frame ready / immediate swap). */
+        private void showWebViewAboveNativeLayers(String reason) {
+            Runnable r = () -> {
+                if (webView == null) return;
+                webView.resumeTimers();
+                webView.setAlpha(1f);
+                webView.setVisibility(View.VISIBLE);
+                webView.setTranslationZ(10000f);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) webView.setElevation(10000f);
+                if (rootLayout != null) rootLayout.bringChildToFront(webView);
+                webView.invalidate();
+                if (rootLayout != null) rootLayout.invalidate();
+                android.util.Log.d("DigipalBroadcast", "[broadcast] WebView above native layers: " + reason);
+            };
+            if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) r.run(); else runOnUiThread(r);
+        }
+
+        private void restoreWebViewAfterBroadcast(String reason) {
+            Runnable r = () -> {
+                if (webView == null) return;
+                webView.setTranslationZ(0f);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) webView.setElevation(0f);
+                if (rootLayout != null && rootLayout.indexOfChild(webView) > 0) {
+                    android.view.ViewGroup.LayoutParams lp = webView.getLayoutParams();
+                    rootLayout.removeView(webView);
+                    rootLayout.addView(webView, 0, lp);
+                }
+                if (nativeSchedulerOwnsDisplay) {
+                    webView.setAlpha(0f);
+                    webView.setVisibility(View.INVISIBLE);
+                }
+                android.util.Log.d("DigipalBroadcast", "[broadcast] WebView restored: " + reason);
+            };
+            if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) r.run(); else runOnUiThread(r);
+        }
+
         private void applyContentRevisionFromNativeHeartbeat(String revision) {
             if (revision == null || revision.trim().isEmpty()) return;
 
@@ -2492,12 +2501,27 @@ public class MainActivity extends Activity {
                     //     never activates, setNativePlaylist([]) is sent, WebView stays
                     //     active). Forcing a reload here just disconnects the WebSocket
                     //     and causes continuous ~60 s reload cycles.
-                    if (nativeSchedulerOwnsDisplay || !isWebViewCurrentlyDormant || hasActiveNativePlaylist) {
-                        android.util.Log.d("DigipalNative",
-                                "[revision] skipping reload — " +
-                                (nativeSchedulerOwnsDisplay ? "native scheduler owns display" :
-                                 hasActiveNativePlaylist ? "native playlist is active" : "WebView is awake") +
-                                ", rev=" + rev);
+                    if (nativeSchedulerOwnsDisplay || hasActiveNativePlaylist) {
+                        android.util.Log.w("DigipalNative",
+                            "[revision] releasing stale native playlist for content revision " + rev);
+                        hasActiveNativePlaylist = false;
+                        nativeSchedulerOwnsDisplay = false;
+                        currentNativeSlideDurationMs = 0L;
+                        try { if (playlistScheduler != null) playlistScheduler.setPlaylist("[]"); } catch (Throwable ignored) {}
+                        try {
+                            if (webView != null) {
+                                webView.resumeTimers();
+                                webView.setAlpha(1f);
+                                webView.setVisibility(View.VISIBLE);
+                                webView.evaluateJavascript("try{window.location.reload();}catch(e){}", null);
+                            }
+                        } catch (Throwable ignored) {}
+                        try { forcePlayerReload(); } catch (Throwable ignored) {}
+                        return;
+                    }
+
+                    if (!isWebViewCurrentlyDormant) {
+                        android.util.Log.d("DigipalNative", "[revision] skipping reload - WebView is awake, rev=" + rev);
                         return;
                     }
                     android.util.Log.w("DigipalNative",
@@ -2819,6 +2843,10 @@ public class MainActivity extends Activity {
                           // Guard: if a broadcast is currently showing, do NOT hide the WebView
                           // — the BroadcastOverlay lives there and must stay visible.
                           nativeSchedulerOwnsDisplay = true;
+                          if (hasBroadcastActive) {
+                              showWebViewAboveNativeLayers("schedulerDeactivateWebView while broadcast active");
+                              return;
+                          }
                           runOnUiThread(() -> {
                               try {
                                   if (webView != null) {
