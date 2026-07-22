@@ -41,6 +41,7 @@ import java.util.concurrent.Executors;
 public class PlaylistScheduler {
 
     private static final String TAG = "PlaylistScheduler";
+    private static final String BRIDGE_TAG = "DigipalBridge";
     private static final int MAX_FAILURES = 3;
     private static final int MAX_SLIDE_RETRIES = 3;
     private static final long FALLBACK_EXTEND_MS = 5_000L;
@@ -274,11 +275,36 @@ public class PlaylistScheduler {
         this.prefs = prefs;
           // Task #1891 fix: reload the active revision from Room the instant a WEBVIEW_PDF's
           // pages finish prerendering, instead of waiting for the next full playlist refresh.
-          this.repository.setPdfPrerenderReadyListener(assetId -> reloadActiveRevisionFromRoom());
+          if (repository != null) {
+              this.repository.setPdfPrerenderReadyListener(assetId -> reloadActiveRevisionFromRoom());
+          }
+    }
+
+    /** Test-only constructor — bypasses Room (repository=null). */
+    PlaylistScheduler(Delegate delegate) {
+        this(delegate, null, null, null);
+    }
+
+    /** Test-only: directly start playing a pre-built slide list, bypassing the Room pipeline.
+     *  Call from unit tests after constructing with PlaylistScheduler(Delegate). */
+    synchronized void startPlayingForTest(List<SlidePlan> testSlides) {
+        this.slides = new ArrayList<>(testSlides);
+        this.currentIndex = 0;
+        this.consecutiveFailures = 0;
+        this.retrySlideId = null;
+        this.retryCountForSlide = 0;
+        this.coldRevisionFirstSlide = true;
+        this.firstSlideRemainingMs = -1L;
+        generation++;
+        if (advanceRunnable != null) { handler.removeCallbacks(advanceRunnable); advanceRunnable = null; }
+        if (rendererReadyTimeout != null) { handler.removeCallbacks(rendererReadyTimeout); rendererReadyTimeout = null; }
+        running = true;
+        showCurrent();
     }
 
     /** Called from MainActivity.onCreate() -- restores last playlist from Room if available. */
     public void boot() {
+        Log.d(BRIDGE_TAG, "[" + android.os.SystemClock.elapsedRealtime() + "ms] boot()");
         toState(State.BOOTING, "");
         dbExec.execute(() -> {
             // Task #1892: a live setPlaylist() call (either a buffered playlist flushed
@@ -405,12 +431,13 @@ public class PlaylistScheduler {
      * does not restore stale content after a commanded page reload.
      */
     public synchronized void setPlaylist(String json) {
+        Log.d(BRIDGE_TAG, "[" + android.os.SystemClock.elapsedRealtime() + "ms] setPlaylist len=" + (json == null ? 0 : json.length()) + " gen=" + generation);
         lastSetJson = json;
         List<SlidePlan> newSlides = parseSlides(json);
         if (newSlides.isEmpty()) {
             pendingRevisionSeq++; // invalidate any in-flight pipeline callback for a superseded revision
             stop();
-            dbExec.execute(() -> repository.clearActiveRevision());
+            dbExec.execute(() -> { if (repository != null) repository.clearActiveRevision(); });
             // Persist stop signal across device reboots — boot() stays IDLE even when
             // the server is unreachable, preventing a removed video from ghost-playing.
             if (prefs != null) {
@@ -1115,6 +1142,7 @@ public class PlaylistScheduler {
 
     /** Codex fix item 6: synchronized to match showCurrent() — see the comment there. */
     private synchronized void advance() {
+        Log.d(BRIDGE_TAG, "[" + android.os.SystemClock.elapsedRealtime() + "ms] advance idx=" + currentIndex + " gen=" + generation);
         if (!running) return;
         final SlidePlan cur = currentIndex < slides.size() ? slides.get(currentIndex) : null;
         final boolean curIsNative = cur != null
@@ -1291,6 +1319,7 @@ public class PlaylistScheduler {
        */
       private List<SlidePlan> expandPdfIfPrerendered(SlidePlan pdfSlide) {
           if (pdfSlide.type != SlideType.WEBVIEW_PDF) return Collections.singletonList(pdfSlide);
+          if (repository == null) return Collections.singletonList(pdfSlide); // null in test path
           try {
               String assetId = "native_asset_" + pdfSlide.contentId + "_pdf";
               PlaylistDatabase.AssetEntity ae = repository.getAsset(assetId);
