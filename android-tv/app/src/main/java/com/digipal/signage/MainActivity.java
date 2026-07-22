@@ -2440,9 +2440,14 @@ public class MainActivity extends Activity {
                                 "if(window.__digipalApplyContentRevision){" +
                                 "window.__digipalApplyContentRevision('" + safeRevision + "');" +
                                 "}else{" +
-                                "window.location.reload();" +
+                                // Not defined yet — page still loading. Next heartbeat retries.
+                                // Reloading here creates a cascade: every reload fires another
+                                // heartbeat tick before the function is defined => infinite reloads.
+                                "console.warn('[DigipalNative] revision fn not ready, retrying next tick');" +
                                 "}" +
-                                "}catch(e){window.location.reload();}",
+                                "}catch(e){" +
+                                "console.warn('[DigipalNative] revision fn error: '+e);" +
+                                "}",
                         null);
             }
 
