@@ -186,6 +186,11 @@ public class MainActivity extends Activity {
     // a genuinely frozen WebView (needs reload) from an active one (JS will handle
     // the revision via its normal 30 s poll — no reload needed).
     private volatile boolean isWebViewCurrentlyDormant = false;
+    // True while the PlaylistScheduler holds a non-empty playlist.  Set in
+    // setNativePlaylist() so the revision watchdog can skip a reload during
+    // PREPARING state (before schedulerDeactivateWebView fires and sets
+    // nativeSchedulerOwnsDisplay=true).  Cleared when an empty playlist arrives.
+    private volatile boolean hasActiveNativePlaylist = false;
     /** Duration (ms) of the currently active native slide. Used by setWebViewDormant
      *  to skip WebView recreation for short slides (Fix 8). */
     private volatile long currentNativeSlideDurationMs = 0L;
@@ -2035,6 +2040,9 @@ public class MainActivity extends Activity {
                         // device is left on a permanent black screen.
                         boolean nativeLoopReleased = false;
                         try { nativeLoopReleased = new org.json.JSONArray(json).length() == 0; } catch (Throwable ignored) {}
+                        // Track whether the scheduler holds live content so the
+                        // revision watchdog can skip a reload during PREPARING state.
+                        hasActiveNativePlaylist = !nativeLoopReleased;
                         if (nativeLoopReleased) {
                             // Jank fix (v3.16.62): the old code stacked resumeTimers() (JS timer
                             // backlog burst), setVisibility(VISIBLE) (full WebView relayout +
@@ -2484,10 +2492,11 @@ public class MainActivity extends Activity {
                     //     never activates, setNativePlaylist([]) is sent, WebView stays
                     //     active). Forcing a reload here just disconnects the WebSocket
                     //     and causes continuous ~60 s reload cycles.
-                    if (nativeSchedulerOwnsDisplay || !isWebViewCurrentlyDormant) {
+                    if (nativeSchedulerOwnsDisplay || !isWebViewCurrentlyDormant || hasActiveNativePlaylist) {
                         android.util.Log.d("DigipalNative",
                                 "[revision] skipping reload — " +
-                                (nativeSchedulerOwnsDisplay ? "native scheduler owns display" : "WebView is awake") +
+                                (nativeSchedulerOwnsDisplay ? "native scheduler owns display" :
+                                 hasActiveNativePlaylist ? "native playlist is active" : "WebView is awake") +
                                 ", rev=" + rev);
                         return;
                     }
