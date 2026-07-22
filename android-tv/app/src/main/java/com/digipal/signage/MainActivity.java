@@ -1940,14 +1940,14 @@ public class MainActivity extends Activity {
 
                 @JavascriptInterface
                 public void setHasBroadcast(boolean active) {
-                    // Issue 3 fix: re-show the WebView when a broadcast overlay is active
-                    // so it is visible even while ExoPlayer/Glide owns the display surface.
-                    // The WebView is added at position 0 (bottom of FrameLayout z-order) while
-                    // native ExoPlayer TextureViews and Glide ImageViews sit above it, so simply
-                    // making the WebView VISIBLE is not enough — we must also bring it to the
-                    // front of the child stack so the broadcast/emergency overlay renders on top
-                    // of all native video/image layers. When the broadcast clears we re-hide the
-                    // WebView (INVISIBLE), at which point z-order no longer matters.
+                    // Broadcast z-order management:
+                    // The WebView lives at child index 0 (bottom of FrameLayout). Native
+                    // ExoPlayer TextureViews and Glide ImageViews are added at higher indices
+                    // and naturally render on top. To show a broadcast/emergency overlay ABOVE
+                    // all native layers we elevate the WebView via setTranslationZ(1000f) rather
+                    // than bringChildToFront() — elevation-based z-ordering does not reorder
+                    // children, so restoring translationZ(0f) naturally returns the WebView
+                    // behind all native layers (index 0 = rendered first = behind index 1+).
                     hasBroadcastActive = active;
                     runOnUiThread(() -> {
                         try {
@@ -1956,14 +1956,31 @@ public class MainActivity extends Activity {
                                 webView.setAlpha(1f);
                                 webView.setVisibility(android.view.View.VISIBLE);
                                 webView.resumeTimers();
-                                // Bring WebView to front so it renders above native video/image layers.
-                                if (rootLayout != null) rootLayout.bringChildToFront(webView);
+                                // Elevate WebView above native video/image layers.
+                                webView.setTranslationZ(1000f);
                                 android.util.Log.d("DigipalBroadcast", "[broadcast] WebView shown for overlay (z-order raised)");
-                            } else if (nativeSchedulerOwnsDisplay) {
-                                // Broadcast cleared but native content is still playing — re-hide.
-                                webView.setAlpha(0f);
-                                webView.setVisibility(android.view.View.INVISIBLE);
-                                android.util.Log.d("DigipalBroadcast", "[broadcast] WebView re-hidden, native scheduler active");
+                            } else {
+                                // Broadcast cleared — restore WebView behind native layers.
+                                webView.setTranslationZ(0f);
+                                // Also correct child-index order in case a prior bringChildToFront
+                                // (v3.16.75) moved WebView to the last position; re-insert at
+                                // index 0 so native layers at higher indices render on top again.
+                                if (rootLayout != null && rootLayout.indexOfChild(webView) > 0) {
+                                    android.view.ViewGroup.LayoutParams lp = webView.getLayoutParams();
+                                    rootLayout.removeView(webView);
+                                    rootLayout.addView(webView, 0, lp != null ? lp :
+                                        new android.widget.FrameLayout.LayoutParams(
+                                            android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                                            android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
+                                }
+                                if (nativeSchedulerOwnsDisplay) {
+                                    // Scheduler owns display — also hide WebView entirely.
+                                    webView.setAlpha(0f);
+                                    webView.setVisibility(android.view.View.INVISIBLE);
+                                    android.util.Log.d("DigipalBroadcast", "[broadcast] WebView re-hidden, native scheduler active");
+                                } else {
+                                    android.util.Log.d("DigipalBroadcast", "[broadcast] WebView z-order restored behind native layers");
+                                }
                             }
                         } catch (Throwable ignored) {}
                     });
