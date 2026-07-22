@@ -3395,7 +3395,12 @@ public class MainActivity extends Activity {
                   .build();
           androidx.media3.exoplayer.DefaultRenderersFactory renderersFactory =
                 new androidx.media3.exoplayer.DefaultRenderersFactory(this)
-                    .setExtensionRendererMode(androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER);
+                    .setExtensionRendererMode(androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+                    // Fall back to the next available decoder (e.g. software) when the
+                    // primary hardware MediaCodecVideoRenderer fails (avc1.640032 H.264
+                    // High L5.0 1080p on low-end Android TV boxes). Without this flag
+                    // ExoPlayer surfaces the error directly and the slide goes black.
+                    .setEnableDecoderFallback(true);
             androidx.media3.exoplayer.ExoPlayer player =
                 new androidx.media3.exoplayer.ExoPlayer.Builder(this, renderersFactory)
                     .setMediaSourceFactory(new androidx.media3.exoplayer.source.DefaultMediaSourceFactory(cacheFactory))
