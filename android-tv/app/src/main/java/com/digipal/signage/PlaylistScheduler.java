@@ -514,6 +514,19 @@ public class PlaylistScheduler {
             }
         }
 
+        // Schedule-transition fix: post a 30s hard timeout. If the download pipeline
+        // hasn't called onReady/onFailed by then, treat it as a pipeline failure so we
+        // fall back to remote URLs immediately rather than leaving a stale schedule on
+        // screen indefinitely. The stale-seq guard in handlePipelineFailed cancels this
+        // automatically if onReady fires first (or if a newer setPlaylist() call fires).
+        final long timeoutSeq = mySeq;
+        handler.postDelayed(() -> {
+            if (timeoutSeq == pendingRevisionSeq) {
+                Log.w(TAG, "[setPlaylist] pipeline timeout seq=" + timeoutSeq + " after 30s — falling back to remote");
+                handlePipelineFailed(timeoutSeq, -1L, "pipeline_timeout", finalJson);
+            }
+        }, 30_000L);
+
         dbExec.execute(() -> {
             repository.startRevisionPipeline("default", finalJson, new PlaylistRepository.OnRevisionReady() {
                 @Override
@@ -597,15 +610,14 @@ public class PlaylistScheduler {
             Log.d(TAG, "[setPlaylist] stale onFailed ignored seq=" + seq + " current=" + pendingRevisionSeq);
             return;
         }
-        final boolean fallbackToRemote = !running;
+        // Schedule-transition fix: always fall back to remote URLs on pipeline failure.
+        // Previously this was gated on !running (only fallback when idle), which silently
+        // kept the OLD playlist running when a schedule activated new content and the
+        // download pipeline failed or timed out.  The remote HTTPS URLs from the server
+        // are valid and ExoPlayer/Glide handles them fine — using them is better than
+        // leaving a stale schedule on screen indefinitely.
         Log.w(TAG, "[setPlaylist] pipeline failed seq=" + seq + " revId=" + revId + " reason=" + reason
-                + " fallbackToRemote=" + fallbackToRemote);
-
-        if (!fallbackToRemote) {
-            // An old playlist is still playing -- keep it running rather than replacing it
-            // with an unresolved/failed revision.
-            return;
-        }
+                + " running=" + running + " -- falling back to remote URLs");
 
         List<SlidePlan> remote = parseSlides(rawJson);
         if (remote.isEmpty()) {
