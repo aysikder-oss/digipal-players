@@ -192,6 +192,11 @@ public class MainActivity extends Activity {
     private static final long   BUF_WATCHDOG_INTERVAL_MS = 5_000L;   // check every 5s
     private static final int    BUF_WATCHDOG_STALL_TICKS = 3;        // 3 × 5s = 15s threshold
     // Native content loop — drives video/image slides via NativePlaylistManager without WebView
+    /** Test-only hook: set before launching Activity to record bridge calls with timestamps.
+     *  Production code never reads this; it is always null in releases. */
+    static volatile com.digipal.signage.BridgeCallRecorder __testBridgeRecorder = null;
+
+    private static final String BRIDGE_TAG = "DigipalBridge";
     private volatile String pendingNativePlaylistJson; // Codex fix 7: buffered playlist JSON until PlaylistScheduler is constructed
     private volatile String lastAppliedContentRevision = "";
     private volatile long lastNativePlaylistSetAtMs = 0L;
@@ -1957,6 +1962,8 @@ public class MainActivity extends Activity {
                     if (!isValidBridgeToken(token)) return;
                     if (json == null || json.isEmpty()) return;
                     lastNativePlaylistSetAtMs = System.currentTimeMillis();
+                    android.util.Log.d(BRIDGE_TAG, "[" + android.os.SystemClock.elapsedRealtime() + "ms] setNativePlaylist len=" + json.length());
+                    if (__testBridgeRecorder != null) __testBridgeRecorder.record("setNativePlaylist", json);
                     if (playlistScheduler != null) {
                         playlistScheduler.setPlaylist(json);
                         android.util.Log.i("DigipalNative", "[nativeLoop] setNativePlaylist → PlaylistScheduler");
@@ -2039,6 +2046,8 @@ public class MainActivity extends Activity {
                 public void reloadNativePlaylist() {
                     // JS will call setNativePlaylist again with refreshed slide data
                     android.util.Log.i("DigipalNative", "[nativeLoop] reloadNativePlaylist signal received");
+                    android.util.Log.d(BRIDGE_TAG, "[" + android.os.SystemClock.elapsedRealtime() + "ms] reloadNativePlaylist");
+                    if (__testBridgeRecorder != null) __testBridgeRecorder.record("reloadNativePlaylist", "{}");
                       if (playlistScheduler != null) {
                           playlistScheduler.reloadActiveRevisionFromRoom();
                       }
