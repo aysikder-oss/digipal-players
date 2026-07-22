@@ -2442,6 +2442,18 @@ public class MainActivity extends Activity {
 
             contentRevisionHandler.postDelayed(() -> {
                 if (lastNativePlaylistSetAtMs <= before) {
+                    // If the native PlaylistScheduler owns the display (all active
+                    // slides are VIDEO/IMAGE dispatched to ExoPlayer/Glide), the
+                    // WebView is intentionally dormant under pauseTimers(). The next
+                    // setNativePlaylist() from JS will pick up the new content without
+                    // any shell reload. Forcing a reload here disconnects the WebSocket,
+                    // causing any broadcast delivered during the ~10 s reload/reconnect
+                    // window to be permanently lost.
+                    if (nativeSchedulerOwnsDisplay) {
+                        android.util.Log.d("DigipalNative",
+                                "[revision] skipping reload — native scheduler owns display, rev=" + rev);
+                        return;
+                    }
                     android.util.Log.w("DigipalNative",
                             "[revision] JS did not apply revision " + rev + " - forcing shell reload");
                     try {
