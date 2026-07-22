@@ -195,6 +195,10 @@ public class MainActivity extends Activity {
     private volatile String pendingNativePlaylistJson; // Codex fix 7: buffered playlist JSON until PlaylistScheduler is constructed
     private volatile String lastAppliedContentRevision = "";
     private volatile long lastNativePlaylistSetAtMs = 0L;
+    private volatile boolean hasBroadcastActive = false;
+    private volatile boolean nativeSchedulerOwnsDisplay = false;
+    private volatile boolean hasActiveNativePlaylist = false;
+    private volatile boolean isWebViewCurrentlyDormant = false;
     private final android.os.Handler contentRevisionHandler =
             new android.os.Handler(android.os.Looper.getMainLooper());
       // Native heartbeat for Fire TV: when WebView is paused (timers frozen), a Java
@@ -1858,6 +1862,15 @@ public class MainActivity extends Activity {
               public void setWebViewDormant(boolean dormant) {
                   runOnUiThread(() -> {
                       try {
+                          if (dormant && hasBroadcastActive) {
+                              isWebViewCurrentlyDormant = false;
+                              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                  webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false);
+                              }
+                              showWebViewAboveNativeLayers("broadcast active; ignore dormant=true");
+                              return;
+                          }
+                          isWebViewCurrentlyDormant = dormant;
                           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                               if (dormant) {
                                   webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_BOUND, false);
@@ -1920,6 +1933,18 @@ public class MainActivity extends Activity {
               }
 
                 @JavascriptInterface
+                public void setHasBroadcast(boolean active) {
+                    hasBroadcastActive = active;
+                    if (active) {
+                        try { if (playlistScheduler != null) playlistScheduler.pause(); } catch (Throwable ignored) {}
+                        showWebViewAboveNativeLayers("setHasBroadcast(true)");
+                    } else {
+                        restoreWebViewAfterBroadcast("setHasBroadcast(false)");
+                        try { if (playlistScheduler != null) playlistScheduler.resume(); } catch (Throwable ignored) {}
+                    }
+                }
+
+                @JavascriptInterface
                 public void requestNativeGC() {
                     try {
                         long now = System.currentTimeMillis();
@@ -1966,7 +1991,9 @@ public class MainActivity extends Activity {
                         // device is left on a permanent black screen.
                         boolean nativeLoopReleased = false;
                         try { nativeLoopReleased = new org.json.JSONArray(json).length() == 0; } catch (Throwable ignored) {}
+                        hasActiveNativePlaylist = !nativeLoopReleased;
                         if (nativeLoopReleased) {
+                            nativeSchedulerOwnsDisplay = false;
                             // Jank fix (v3.16.62): the old code stacked resumeTimers() (JS timer
                             // backlog burst), setVisibility(VISIBLE) (full WebView relayout +
                             // re-raster after long invisibility) and setRendererPriorityPolicy
@@ -2374,6 +2401,41 @@ public class MainActivity extends Activity {
          *  nativeImageView/nativeImageViewB sit above TextureView/PlayerView in the
          *  FrameLayout, so they must be explicitly hidden or they cover the video.
          *  Call at every video-visible swap point (first frame ready / immediate swap). */
+        private void showWebViewAboveNativeLayers(String reason) {
+            Runnable r = () -> {
+                if (webView == null) return;
+                webView.resumeTimers();
+                webView.setAlpha(1f);
+                webView.setVisibility(View.VISIBLE);
+                webView.setTranslationZ(10000f);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) webView.setElevation(10000f);
+                if (rootLayout != null) rootLayout.bringChildToFront(webView);
+                webView.invalidate();
+                if (rootLayout != null) rootLayout.invalidate();
+                android.util.Log.d("DigipalBroadcast", "[broadcast] WebView above native layers: " + reason);
+            };
+            if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) r.run(); else runOnUiThread(r);
+        }
+
+        private void restoreWebViewAfterBroadcast(String reason) {
+            Runnable r = () -> {
+                if (webView == null) return;
+                webView.setTranslationZ(0f);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) webView.setElevation(0f);
+                if (rootLayout != null && rootLayout.indexOfChild(webView) > 0) {
+                    android.view.ViewGroup.LayoutParams lp = webView.getLayoutParams();
+                    rootLayout.removeView(webView);
+                    rootLayout.addView(webView, 0, lp);
+                }
+                if (nativeSchedulerOwnsDisplay) {
+                    webView.setAlpha(0f);
+                    webView.setVisibility(View.INVISIBLE);
+                }
+                android.util.Log.d("DigipalBroadcast", "[broadcast] WebView restored: " + reason);
+            };
+            if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) r.run(); else runOnUiThread(r);
+        }
+
         private void applyContentRevisionFromNativeHeartbeat(String revision) {
             if (revision == null || revision.trim().isEmpty()) return;
 
@@ -2398,6 +2460,27 @@ public class MainActivity extends Activity {
 
             contentRevisionHandler.postDelayed(() -> {
                 if (lastNativePlaylistSetAtMs <= before) {
+                    if (nativeSchedulerOwnsDisplay || hasActiveNativePlaylist) {
+                        android.util.Log.w("DigipalNative",
+                            "[revision] releasing stale native playlist for content revision " + rev);
+                        hasActiveNativePlaylist = false;
+                        nativeSchedulerOwnsDisplay = false;
+                        try { if (playlistScheduler != null) playlistScheduler.setPlaylist("[]"); } catch (Throwable ignored) {}
+                        try {
+                            if (webView != null) {
+                                webView.resumeTimers();
+                                webView.setAlpha(1f);
+                                webView.setVisibility(View.VISIBLE);
+                                webView.evaluateJavascript("try{window.location.reload();}catch(e){}", null);
+                            }
+                        } catch (Throwable ignored) {}
+                        try { forcePlayerReload(); } catch (Throwable ignored) {}
+                        return;
+                    }
+                    if (!isWebViewCurrentlyDormant) {
+                        android.util.Log.d("DigipalNative", "[revision] skipping reload - WebView is awake, rev=" + rev);
+                        return;
+                    }
                     android.util.Log.w("DigipalNative",
                             "[revision] JS did not apply revision " + rev + " - forcing shell reload");
                     try {
@@ -2714,6 +2797,11 @@ public class MainActivity extends Activity {
                           // Hide WebView + pause timers — enforces single renderer ownership.
                           // WebView sits above native layers in FrameLayout z-order so it must be
                           // INVISIBLE while native video/image is the active renderer.
+                          nativeSchedulerOwnsDisplay = true;
+                          if (hasBroadcastActive) {
+                              showWebViewAboveNativeLayers("schedulerDeactivateWebView while broadcast active");
+                              return;
+                          }
                           runOnUiThread(() -> {
                               try {
                                   if (webView != null) {
