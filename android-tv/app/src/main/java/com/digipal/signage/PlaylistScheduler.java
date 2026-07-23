@@ -236,6 +236,11 @@ public class PlaylistScheduler {
      *  no-op if stale, so a superseded setPlaylist() call's async onReady()/onFailed() can never
      *  clobber a newer one (stale-callback protection). */
     private long pendingRevisionSeq = 0;
+    /** Tracks the seq of the most recently completed (committed or failed) revision so
+     *  the 30s hard-timeout cannot fire for a revision that already succeeded via
+     *  commitLocalRevision(). Without this guard the timeout fires regardless and
+     *  handlePipelineFailed() stops a working playlist and falls back to remote URLs. */
+    private long completedRevisionSeq = -1L;
 
     // ── Asset readiness grace period ────────────────────────────────────────
     /** Retry count for empty-URL grace period; resets whenever a slide has a usable URL. */
@@ -521,7 +526,9 @@ public class PlaylistScheduler {
         // automatically if onReady fires first (or if a newer setPlaylist() call fires).
         final long timeoutSeq = mySeq;
         handler.postDelayed(() -> {
-            if (timeoutSeq == pendingRevisionSeq) {
+            // completedRevisionSeq guard: if commitLocalRevision() already succeeded for
+            // this seq the playlist is playing normally — do NOT call handlePipelineFailed.
+            if (timeoutSeq == pendingRevisionSeq && completedRevisionSeq != timeoutSeq) {
                 Log.w(TAG, "[setPlaylist] pipeline timeout seq=" + timeoutSeq + " after 30s — falling back to remote");
                 handlePipelineFailed(timeoutSeq, -1L, "pipeline_timeout", finalJson);
             }
@@ -563,6 +570,13 @@ public class PlaylistScheduler {
             Log.d(TAG, "[setPlaylist] stale onReady ignored seq=" + seq + " current=" + pendingRevisionSeq);
             return;
         }
+        // Idempotency guard: commitLocalRevision can theoretically be posted more than once
+        // (e.g. a double onReady from the pipeline). The first call sets completedRevisionSeq;
+        // subsequent calls for the same seq are safe no-ops.
+        if (completedRevisionSeq == seq) {
+            Log.d(TAG, "[setPlaylist] duplicate onReady ignored seq=" + seq + " already committed");
+            return;
+        }
         List<SlidePlan> local = (localManifestJson != null && !localManifestJson.isEmpty())
                 ? parseSlides(localManifestJson) : new ArrayList<>();
         if (local.isEmpty()) {
@@ -594,8 +608,26 @@ public class PlaylistScheduler {
         }
 
         running = true;
+        // Mark this seq as completed so the 30s timeout postDelayed no-ops even if it
+        // fires after showCurrent() has started rendering the playlist.
+        completedRevisionSeq = seq;
         Log.i(TAG, "[setPlaylist] committing local revision seq=" + seq + " revId=" + revId);
         showCurrent();
+    }
+
+    /** Test-only: set pendingRevisionSeq and completedRevisionSeq to {@code seq}, simulating
+     *  the state that exists after commitLocalRevision() has succeeded for that seq.
+     *  Used by PlaylistSchedulerTest to verify the 30s timeout guard. */
+    synchronized void forTestOnly_markRevisionCompleted(long seq) {
+        pendingRevisionSeq = seq;
+        completedRevisionSeq = seq;
+    }
+
+    /** Test-only: invoke handlePipelineFailed() for {@code seq}, exactly as the 30s
+     *  postDelayed timeout does. Used by PlaylistSchedulerTest to verify that a previously
+     *  committed revision causes handlePipelineFailed to no-op (completedRevisionSeq guard). */
+    synchronized void forTestOnly_invokePipelineFailed(long seq) {
+        handlePipelineFailed(seq, -1L, "pipeline_timeout_test", "[]");
     }
 
     /**
@@ -610,6 +642,15 @@ public class PlaylistScheduler {
             Log.d(TAG, "[setPlaylist] stale onFailed ignored seq=" + seq + " current=" + pendingRevisionSeq);
             return;
         }
+        // completedRevisionSeq guard: if commitLocalRevision() already succeeded for this
+        // seq the playlist is playing normally. The 30s timeout can still reach here (it
+        // bypasses the outer stale-seq check because pendingRevisionSeq hasn't changed).
+        // Returning here prevents stop() + remote-URL fallback from disrupting good playback.
+        if (completedRevisionSeq == seq) {
+            Log.d(TAG, "[setPlaylist] pipeline timeout ignored — revision seq=" + seq + " already committed successfully");
+            return;
+        }
+        completedRevisionSeq = seq;
         // Schedule-transition fix: always fall back to remote URLs on pipeline failure.
         // Previously this was gated on !running (only fallback when idle), which silently
         // kept the OLD playlist running when a schedule activated new content and the
