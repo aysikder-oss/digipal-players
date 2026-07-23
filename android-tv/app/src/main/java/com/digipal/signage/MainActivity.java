@@ -2501,22 +2501,15 @@ public class MainActivity extends Activity {
                     //     never activates, setNativePlaylist([]) is sent, WebView stays
                     //     active). Forcing a reload here just disconnects the WebSocket
                     //     and causes continuous ~60 s reload cycles.
+                    // Case (a): native scheduler owns the display (ExoPlayer/Glide playing).
+                    // The comment block above correctly says we should SKIP the reload here —
+                    // the WebView is intentionally dormant under pauseTimers() and the next
+                    // setNativePlaylist() from JS will carry the new revision when it arrives.
+                    // Previously this branch cleared all native state and forced a reload,
+                    // which produced a black screen over live video content.
                     if (nativeSchedulerOwnsDisplay || hasActiveNativePlaylist) {
-                        android.util.Log.w("DigipalNative",
-                            "[revision] releasing stale native playlist for content revision " + rev);
-                        hasActiveNativePlaylist = false;
-                        nativeSchedulerOwnsDisplay = false;
-                        currentNativeSlideDurationMs = 0L;
-                        try { if (playlistScheduler != null) playlistScheduler.setPlaylist("[]"); } catch (Throwable ignored) {}
-                        try {
-                            if (webView != null) {
-                                webView.resumeTimers();
-                                webView.setAlpha(1f);
-                                webView.setVisibility(View.VISIBLE);
-                                webView.evaluateJavascript("try{window.location.reload();}catch(e){}", null);
-                            }
-                        } catch (Throwable ignored) {}
-                        try { forcePlayerReload(); } catch (Throwable ignored) {}
+                        android.util.Log.d("DigipalNative",
+                            "[revision] native playlist active; keeping last-good playback for revision " + rev);
                         return;
                     }
 
@@ -2538,6 +2531,29 @@ public class MainActivity extends Activity {
                     } catch (Throwable ignored) {}
                 }
             }, 10_000L);
+        }
+
+        /**
+         * Package-private for unit testing: pure decision function for the 10s revision
+         * watchdog. Returns true only when a WebView reload is warranted — that is, the
+         * WebView is dormant AND native playback is NOT active.
+         *
+         * <ul>
+         *   <li>If native owns the display, JS will carry the new revision via the next
+         *       {@code setNativePlaylist()} call — no reload needed.</li>
+         *   <li>If the WebView is awake, JS picks up the revision on its next tvStatus
+         *       poll (30 s cadence) — no reload needed.</li>
+         *   <li>Only if the WebView is truly dormant AND native is idle is a forced
+         *       reload the right recovery action.</li>
+         * </ul>
+         */
+        static boolean revisionWatchdogShouldReload(
+                boolean nativeOwnsDisplay,
+                boolean hasNativePlaylist,
+                boolean isWebViewDormant) {
+            if (nativeOwnsDisplay || hasNativePlaylist) return false;
+            if (!isWebViewDormant) return false;
+            return true;
         }
 
         private void hideNativeImagesForVideo() {
