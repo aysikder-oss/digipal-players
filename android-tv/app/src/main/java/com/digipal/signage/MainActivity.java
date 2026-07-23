@@ -3840,6 +3840,18 @@ public class MainActivity extends Activity {
 
     private void forcePlayerReload() {
         try { io.sentry.Breadcrumb _frBc = new io.sentry.Breadcrumb("Player page forced reload"); _frBc.setCategory("lifecycle"); _frBc.setType("info"); _frBc.setLevel(io.sentry.SentryLevel.WARNING); io.sentry.Sentry.addBreadcrumb(_frBc); } catch (Throwable _sbc) {}
+        // Guard: do not flash a blank loading WebView over live ExoPlayer/Glide content.
+        // HealthMonitor fires this callback without knowing whether native is playing.
+        // If native owns the display, the scheduler will self-recover or HealthMonitor
+        // will escalate through rendererRebuild → hardRestart instead.
+        // Note: the applyContentRevisionFromNativeHeartbeat call site already clears
+        // nativeSchedulerOwnsDisplay and hasActiveNativePlaylist before calling here,
+        // so the guard evaluates to false there and the reload still proceeds normally.
+        if (nativeSchedulerOwnsDisplay || hasActiveNativePlaylist) {
+            android.util.Log.w("DigipalNative",
+                "[forcePlayerReload] skipped — native scheduler owns display; ExoPlayer/Glide uninterrupted");
+            return;
+        }
         runOnUiThread(() -> {
             try {
                 if (errorContainer != null) errorContainer.setVisibility(View.GONE);
