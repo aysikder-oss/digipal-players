@@ -442,13 +442,18 @@ public class PlaylistScheduler {
         if (newSlides.isEmpty()) {
             pendingRevisionSeq++; // invalidate any in-flight pipeline callback for a superseded revision
             stop();
-            dbExec.execute(() -> { if (repository != null) repository.clearActiveRevision(); });
+            // clearActiveRevision() removed: KEY_PLS_WAS_STOPPED already prevents
+            // ghost-playing across reboots (boot() checks it and stays IDLE). Keeping
+            // the Room revision means when a schedule override ends and the real playlist
+            // arrives, isSameStructure() returns true → immediate resume, no re-download.
+            // Previously every schedule handoff wiped Room and forced a full pipeline
+            // re-download on every transition back.
             // Persist stop signal across device reboots — boot() stays IDLE even when
             // the server is unreachable, preventing a removed video from ghost-playing.
             if (prefs != null) {
                 prefs.edit().putBoolean(KEY_PLS_WAS_STOPPED, true).apply();
             }
-            Log.i(TAG, "[setPlaylist] empty -- stopped and cleared active revision");
+            Log.i(TAG, "[setPlaylist] empty -- stopped");
             return;
         }
 
