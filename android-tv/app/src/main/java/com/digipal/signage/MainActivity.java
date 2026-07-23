@@ -2220,7 +2220,10 @@ public class MainActivity extends Activity {
                   }
               } else {
                   // Cold load
-                  if (preloadPlayer != null) { try { preloadPlayer.release(); } catch (Throwable ignored) {} preloadPlayer = null; preloadedVideoUrl = null; preloadVideoReady = false; preloadView.setPlayer(null); }
+                  // Fix: call clearVideoOutput first so setVideoTextureView(null) queues before release —
+                  // otherwise the async ExoPlayer release leaves the SurfaceTexture connected and the
+                  // new coldPlayer.setVideoTextureView() hits err -22 (SurfaceTexture already connected).
+                  if (preloadPlayer != null) { clearVideoOutput(preloadPlayer); try { preloadPlayer.release(); } catch (Throwable ignored) {} preloadPlayer = null; preloadedVideoUrl = null; preloadVideoReady = false; preloadView.setPlayer(null); }
                   final androidx.media3.exoplayer.ExoPlayer coldPlayer = buildCachedExoPlayer();
                   if (useTexture) {
                       preloadView.setPlayer(null);
@@ -2329,6 +2332,14 @@ public class MainActivity extends Activity {
                           if (webView != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                               try { webView.setRendererPriorityPolicy(android.webkit.WebView.RENDERER_PRIORITY_IMPORTANT, false); } catch (Throwable ignored) {}
                           }
+                          // Restore WebView visibility — schedulerDeactivateWebView() hid it when
+                          // schedulerPlayVideo fired. Without this the screen stays black during retry/
+                          // degraded recovery because WebView only re-shows on IDLE state, but retries
+                          // never reach IDLE. schedulerDeactivateWebView() will re-hide it on the next
+                          // retry attempt (500 ms later), so the WebView is only briefly visible.
+                          if (webView != null) { webView.setAlpha(1f); webView.setVisibility(View.VISIBLE); webView.resumeTimers(); }
+                          nativeSchedulerOwnsDisplay = false;
+                          hasActiveNativePlaylist = false;
                           // Failed native video must report failure to the scheduler, not
                             // pretend to be ready via the retired legacy __digipalGotoSlide WebView
                             // hop. onRendererError() lets the scheduler retry/skip/advance and
@@ -3064,6 +3075,9 @@ public class MainActivity extends Activity {
                                   }
                                   releaseVideoPlayer(exoPlayer); exoPlayer = null;
                                   if (pendingOldPlayer != null) { releaseVideoPlayer(pendingOldPlayer); pendingOldPlayer = null; }
+                                  // Fix: also clear+release preloadPlayer — it may be attached to incomingTexView;
+                                  // skipping clearVideoOutput() here causes SurfaceTexture -22 on next playlist assign.
+                                  if (preloadPlayer != null) { clearVideoOutput(preloadPlayer); try { preloadPlayer.stop(); preloadPlayer.release(); } catch (Throwable ignored) {} preloadPlayer = null; preloadedVideoUrl = null; preloadVideoReady = false; }
                                   hideNativeVideoSurfaces();
                               } catch (Throwable ignored) {}
                           });
