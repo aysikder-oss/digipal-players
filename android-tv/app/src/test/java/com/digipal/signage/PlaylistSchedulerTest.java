@@ -263,9 +263,50 @@ public class PlaylistSchedulerTest {
     }
 
     /**
-     * T8: stop() then startPlayingForTest() — verifies the scheduler restarts cleanly
-     * without double-advance or leftover timer from the previous generation.
+     * T7: Regression — 30s pipeline timeout must NOT fire after commitLocalRevision() succeeds.
+     *
+     * Bug: pendingRevisionSeq was never updated after a successful commit, so the 30s
+     * postDelayed timeout always fired and called handlePipelineFailed(), which stopped
+     * the working playlist and fell back to remote URLs every 30 seconds.
+     *
+     * Fix: completedRevisionSeq is set by commitLocalRevision(); handlePipelineFailed
+     * returns early when completedRevisionSeq == seq (timeout is for a seq that already
+     * completed). Uses forTestOnly_markRevisionCompleted + forTestOnly_invokePipelineFailed
+     * shims because startPlayingForTest() bypasses setPlaylist() and never posts the
+     * real 30s Runnable — we invoke the timeout's body directly instead.
      */
+    @Test
+    public void pipeline_timeout_does_not_fire_after_commit() {
+        RecordingDelegate d = new RecordingDelegate();
+        PlaylistScheduler sched = new PlaylistScheduler(d);
+
+        List<PlaylistScheduler.SlidePlan> slides = Collections.singletonList(
+                slide("vid1", PlaylistScheduler.SlideType.VIDEO, "http://example.com/a.mp4", 60_000));
+        sched.startPlayingForTest(slides);
+        drainMain(0);
+        sched.onRendererReady("vid1");
+        drainMain(0);
+
+        assertEquals("Precondition: scheduler must be PLAYING",
+                PlaylistScheduler.State.PLAYING, sched.getState());
+        d.calls.clear();
+
+        // Simulate commitLocalRevision() having succeeded for seq=1
+        sched.forTestOnly_markRevisionCompleted(1L);
+
+        // Simulate the 30s postDelayed timeout body firing for the same seq.
+        // Before the fix this called stop() → stopVideo(), disrupting the playlist.
+        // After the fix completedRevisionSeq == seq → handlePipelineFailed returns early.
+        sched.forTestOnly_invokePipelineFailed(1L);
+        drainMain(0);
+
+        assertFalse("30s timeout must NOT call stopVideo after a committed revision — " +
+                "completedRevisionSeq guard not working. Calls: " + d.calls,
+                d.hasCalled("stopVideo"));
+        assertEquals("Scheduler must still be PLAYING after the suppressed timeout",
+                PlaylistScheduler.State.PLAYING, sched.getState());
+    }
+
     @Test
     public void stopThenRestart_cleansUpOldGeneration() {
         RecordingDelegate d = new RecordingDelegate();
