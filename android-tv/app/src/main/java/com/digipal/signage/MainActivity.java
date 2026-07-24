@@ -2445,6 +2445,49 @@ public class MainActivity extends Activity {
             try { p.stop(); p.release(); } catch (Throwable ignored) {}
         }
 
+        /**
+         * Task #2119: Amlogic codec drain-before-release.
+         *
+         * On Amlogic (c2.amlogic.avc.decoder), calling player.release() while the
+         * codec's background dequeue thread still has pending buffer tasks causes:
+         *   C2VdecDequeueThreadUtil: onAllocBufferTask failed. thread stopped
+         *   MessageQueue: Handler sending message to a Handler on a dead thread
+         *
+         * Fix: call stop() to signal codec flush, then release() 150ms later (or
+         * immediately when STATE_IDLE fires, whichever is first).  clearVideoOutput()
+         * detaches the surface first so the SurfaceTexture is not held by the draining
+         * player — prevents -22 (EINVAL) on the next video slide's surface attach.
+         */
+        private void drainAndRelease(androidx.media3.exoplayer.ExoPlayer p) {
+            if (p == null) return;
+            clearVideoOutput(p);
+            // Already idle — codec has no pending buffers; release immediately.
+            if (p.getPlaybackState() == androidx.media3.common.Player.STATE_IDLE) {
+                try { p.release(); } catch (Throwable ignored) {}
+                return;
+            }
+            final boolean[] released = {false};
+            final android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
+            final Runnable timeoutRelease = () -> {
+                if (released[0]) return;
+                released[0] = true;
+                try { p.release(); } catch (Throwable ignored) {}
+            };
+            p.addListener(new androidx.media3.common.Player.Listener() {
+                @Override public void onPlaybackStateChanged(int state) {
+                    if (state == androidx.media3.common.Player.STATE_IDLE) {
+                        if (released[0]) return;
+                        released[0] = true;
+                        h.removeCallbacks(timeoutRelease);
+                        try { p.removeListener(this); } catch (Throwable ignored) {}
+                        try { p.release(); } catch (Throwable ignored) {}
+                    }
+                }
+            });
+            try { p.stop(); } catch (Throwable ignored) {}
+            h.postDelayed(timeoutRelease, 150);
+        }
+
         /** Hide both native image views when video becomes the active renderer.
          *  nativeImageView/nativeImageViewB sit above TextureView/PlayerView in the
          *  FrameLayout, so they must be explicitly hidden or they cover the video.
@@ -3087,11 +3130,15 @@ public class MainActivity extends Activity {
                                       if (exoPlayer != null) exoPlayer.removeListener(nativeVideoListener);
                                       nativeVideoListener = null;
                                   }
-                                  releaseVideoPlayer(exoPlayer); exoPlayer = null;
-                                  if (pendingOldPlayer != null) { releaseVideoPlayer(pendingOldPlayer); pendingOldPlayer = null; }
-                                  // Fix: also clear+release preloadPlayer — it may be attached to incomingTexView;
-                                  // skipping clearVideoOutput() here causes SurfaceTexture -22 on next playlist assign.
-                                  if (preloadPlayer != null) { clearVideoOutput(preloadPlayer); try { preloadPlayer.stop(); preloadPlayer.release(); } catch (Throwable ignored) {} preloadPlayer = null; preloadedVideoUrl = null; preloadVideoReady = false; }
+                                  // Task #2119: cancel buffer watchdog BEFORE release so it cannot
+                                  // fire onRendererError() against a player that is already draining.
+                                  stopBufferWatchdog();
+                                  drainAndRelease(exoPlayer); exoPlayer = null;
+                                  if (pendingOldPlayer != null) { drainAndRelease(pendingOldPlayer); pendingOldPlayer = null; }
+                                  // Fix: also drain+release preloadPlayer — it may be attached to
+                                  // incomingTexView; skipping clearVideoOutput() causes SurfaceTexture
+                                  // -22 on the next playlist's surface attach.
+                                  if (preloadPlayer != null) { drainAndRelease(preloadPlayer); preloadPlayer = null; preloadedVideoUrl = null; preloadVideoReady = false; }
                                   hideNativeVideoSurfaces();
                               } catch (Throwable ignored) {}
                           });
@@ -4111,19 +4158,20 @@ public class MainActivity extends Activity {
                   }
                   nativeVideoListener = null;
               }
-              // Release active ExoPlayer
+              // Release active ExoPlayer — drainAndRelease gives the Amlogic codec
+              // dequeue thread 150ms to flush pending buffers before MediaCodec is torn down.
               if (exoPlayer != null) {
-                  try { exoPlayer.stop(); exoPlayer.release(); } catch (Throwable ignored) {}
+                  drainAndRelease(exoPlayer);
                   exoPlayer = null;
               }
               // Release preload ExoPlayer (was missing from onDestroy — OOM source on long sessions)
               if (preloadPlayer != null) {
-                  try { preloadPlayer.stop(); preloadPlayer.release(); } catch (Throwable ignored) {}
+                  drainAndRelease(preloadPlayer);
                   preloadPlayer = null; preloadedVideoUrl = null; preloadVideoReady = false;
               }
               // Release pending-old ExoPlayer (held during dual-buffer swap)
               if (pendingOldPlayer != null) {
-                  try { pendingOldPlayer.stop(); pendingOldPlayer.release(); } catch (Throwable ignored) {}
+                  drainAndRelease(pendingOldPlayer);
                   pendingOldPlayer = null;
               }
               // Detach players from all video surfaces and hide everything
