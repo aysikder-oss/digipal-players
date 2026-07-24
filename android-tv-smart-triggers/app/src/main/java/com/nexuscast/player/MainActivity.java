@@ -1712,7 +1712,8 @@ import android.os.Looper;
                                       nativeVideoListener = null;
                                   }
                                   if (exoPlayer != null) { try { exoPlayer.stop(); exoPlayer.clearMediaItems(); } catch (Throwable ignored) {} }
-                                  if (pendingOldPlayer != null) { try { pendingOldPlayer.stop(); pendingOldPlayer.release(); } catch (Throwable ignored) {} pendingOldPlayer = null; }
+                                  // Task #2119: drain before release to let Amlogic codec flush buffers.
+                                  if (pendingOldPlayer != null) { drainAndRelease(pendingOldPlayer); pendingOldPlayer = null; }
                                   final androidx.media3.ui.PlayerView activeView = activeVideoViewIsA ? nativeVideoView : nativeVideoViewB;
                                   final androidx.media3.ui.PlayerView inactiveView = activeVideoViewIsA ? nativeVideoViewB : nativeVideoView;
                                   activeView.setVisibility(View.INVISIBLE);
@@ -2369,6 +2370,38 @@ import android.os.Looper;
        * Call from onDestroy(), WebView crash recovery, and mediumRecover() to prevent
        * ExoPlayer SurfaceView leaks that cause OOM on long Fire TV sessions.
        */
+      /**
+       * Task #2119: Amlogic codec drain-before-release.
+       * Mirrors the android-tv variant — see that file for full comment.
+       */
+      private void drainAndRelease(androidx.media3.exoplayer.ExoPlayer p) {
+          if (p == null) return;
+          if (p.getPlaybackState() == androidx.media3.common.Player.STATE_IDLE) {
+              try { p.release(); } catch (Throwable ignored) {}
+              return;
+          }
+          final boolean[] released = {false};
+          final android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
+          final Runnable timeoutRelease = () -> {
+              if (released[0]) return;
+              released[0] = true;
+              try { p.release(); } catch (Throwable ignored) {}
+          };
+          p.addListener(new androidx.media3.common.Player.Listener() {
+              @Override public void onPlaybackStateChanged(int state) {
+                  if (state == androidx.media3.common.Player.STATE_IDLE) {
+                      if (released[0]) return;
+                      released[0] = true;
+                      h.removeCallbacks(timeoutRelease);
+                      try { p.removeListener(this); } catch (Throwable ignored) {}
+                      try { p.release(); } catch (Throwable ignored) {}
+                  }
+              }
+          });
+          try { p.stop(); } catch (Throwable ignored) {}
+          h.postDelayed(timeoutRelease, 150);
+      }
+
       private void releaseAllRenderers() {
           try {
               if (videoReadyHandler != null && videoReadyRunnable != null) {
@@ -2381,16 +2414,17 @@ import android.os.Looper;
                   }
                   nativeVideoListener = null;
               }
+              // Task #2119: drain before release — Amlogic codec buffer flush.
               if (exoPlayer != null) {
-                  try { exoPlayer.stop(); exoPlayer.release(); } catch (Throwable ignored) {}
+                  drainAndRelease(exoPlayer);
                   exoPlayer = null;
               }
               if (preloadPlayer != null) {
-                  try { preloadPlayer.stop(); preloadPlayer.release(); } catch (Throwable ignored) {}
+                  drainAndRelease(preloadPlayer);
                   preloadPlayer = null; preloadedVideoUrl = null; preloadVideoReady = false;
               }
               if (pendingOldPlayer != null) {
-                  try { pendingOldPlayer.stop(); pendingOldPlayer.release(); } catch (Throwable ignored) {}
+                  drainAndRelease(pendingOldPlayer);
                   pendingOldPlayer = null;
               }
               if (nativeVideoView != null) { try { nativeVideoView.setPlayer(null); } catch (Throwable ignored) {} nativeVideoView.setVisibility(View.INVISIBLE); }
