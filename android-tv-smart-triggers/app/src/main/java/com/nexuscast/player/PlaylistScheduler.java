@@ -44,7 +44,7 @@ public class PlaylistScheduler {
 
     public enum State {
         IDLE, BOOTING, RESTORING_LAST_GOOD,
-        PREPARING_CURRENT, PLAYING,
+        PREPARING_CURRENT, WAITING_FOR_WEBVIEW_READY, PLAYING,
         PREPARING_NEXT, TRANSITIONING,
         DEGRADED_PLAYBACK, RECOVERING_RENDERER
     }
@@ -143,6 +143,8 @@ public class PlaylistScheduler {
     private int rendererReadyTimeoutGen = -1;
     /** Safety runnable: starts advance timer if renderer never calls onRendererReady(). */
     private Runnable rendererReadyTimeout;
+    private Runnable webViewReadyTimeout;
+    private static final long WEBVIEW_READY_TIMEOUT_MS = 3_000L;
       /** Set true for exactly one slide -- the first slide dispatched after a playlist
        *  structural change -- so showCurrent() can grant it a longer cold-start timeout. */
       private volatile boolean coldRevisionFirstSlide = false;
@@ -292,6 +294,10 @@ public class PlaylistScheduler {
             rendererReadyTimeout = null;
         }
         rendererReadyTimeoutGen = -1;
+        if (webViewReadyTimeout != null) {
+            handler.removeCallbacks(webViewReadyTimeout);
+            webViewReadyTimeout = null;
+        }
         toState(State.IDLE, "");
     }
 
@@ -344,8 +350,30 @@ public class PlaylistScheduler {
                 rendererReadyTimeout = null;
             }
             rendererReadyTimeoutGen = -1;
-            toState(State.PLAYING, slideId);
-            startAdvanceTimer(generation, pendingAdvanceDurationMs);
+            if ("isolated_webview".equals(currentRendererKind)) {
+                toState(State.WAITING_FOR_WEBVIEW_READY, slideId);
+                final int myGen = generation;
+                final String mySlideId = slideId;
+                final long dur = pendingAdvanceDurationMs;
+                if (webViewReadyTimeout != null) handler.removeCallbacks(webViewReadyTimeout);
+                webViewReadyTimeout = () -> {
+                    if (generation != myGen) return;
+                    Log.w(TAG, "[webview_ready_timeout] no JS webViewSlideReady for slide="
+                            + mySlideId + " after " + WEBVIEW_READY_TIMEOUT_MS + "ms — advancing anyway");
+                    if (telemetry != null) telemetry.logEvent("webview_ready_timeout", mySlideId,
+                            "{"timeoutMs":" + WEBVIEW_READY_TIMEOUT_MS + "}");
+                    webViewReadyTimeout = null;
+                    if (state == State.WAITING_FOR_WEBVIEW_READY) {
+                        toState(State.PLAYING, mySlideId);
+                        startAdvanceTimer(myGen, dur);
+                        schedulePreload(null);
+                    }
+                };
+                handler.postDelayed(webViewReadyTimeout, WEBVIEW_READY_TIMEOUT_MS);
+            } else {
+                toState(State.PLAYING, slideId);
+                startAdvanceTimer(generation, pendingAdvanceDurationMs);
+            }
         }
     }
 
@@ -354,7 +382,30 @@ public class PlaylistScheduler {
      * Retries the same slide up to MAX_SLIDE_RETRIES times before advancing.
      * Goes DEGRADED only after MAX_FAILURES consecutive failures.
      */
+    public void onWebViewSlideReady() {
+        handler.post(() -> {
+            if (state != State.WAITING_FOR_WEBVIEW_READY) return;
+            if (slides.isEmpty() || currentIndex >= slides.size()) return;
+            final String slideId = slides.get(currentIndex).slideId;
+            long readyMs = SystemClock.elapsedRealtime() - slideStartMs;
+            Log.d(TAG, "[webview_ready] JS signal for slide=" + slideId + " in " + readyMs + "ms");
+            if (telemetry != null) telemetry.logEvent("webview_ready", slideId,
+                    "{\"readyMs\":" + readyMs + ",\"source\":\"js_signal\"}");
+            if (webViewReadyTimeout != null) {
+                handler.removeCallbacks(webViewReadyTimeout);
+                webViewReadyTimeout = null;
+            }
+            toState(State.PLAYING, slideId);
+            startAdvanceTimer(generation, pendingAdvanceDurationMs);
+            schedulePreload(null);
+        });
+    }
+
     public void onRendererError(String slideId, String error) {
+        if (webViewReadyTimeout != null) {
+            handler.removeCallbacks(webViewReadyTimeout);
+            webViewReadyTimeout = null;
+        }
         Log.w(TAG, "[error] " + slideId + ": " + error + " (slideRetry=" + slideRetryCount + ")");
         slideRetryCount++;
         consecutiveFailures++;
