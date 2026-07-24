@@ -1311,6 +1311,17 @@ import android.os.Looper;
                     if (playlistScheduler != null) playlistScheduler.onRendererReady(slideId);
                 }
 
+                /**
+                 * Task #2118: called by React's notifyContentVisible() via bridge.webViewSlideReady()
+                 * when a WEBVIEW_* slide's content is fully visible (widget data fetched, design
+                 * rendered). Signals PlaylistScheduler to start the advance timer only then —
+                 * not at isolated-renderer first-paint — so the full duration is visible content.
+                 */
+                @android.webkit.JavascriptInterface
+                public void webViewSlideReady() {
+                    if (playlistScheduler != null) playlistScheduler.onWebViewSlideReady();
+                }
+
                 @android.webkit.JavascriptInterface
                 public void onNativeRendererError(String slideId, String error) {
                     if (playlistScheduler != null) playlistScheduler.onRendererError(slideId, error);
