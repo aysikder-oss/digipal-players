@@ -242,6 +242,15 @@ public class PlaylistScheduler {
      *  handlePipelineFailed() stops a working playlist and falls back to remote URLs. */
     private long completedRevisionSeq = -1L;
 
+    /** Epoch-ms nonce set by {@link #setPlaylistRevisionId} immediately before each
+     *  {@link #setPlaylist} call.  Consumed (reset to 0) at the start of setPlaylist
+     *  so we can compare it against lastCommittedRevisionNonce. */
+    private long pendingRevisionNonce = 0L;
+    /** Highest nonce seen from a setPlaylist() call that was not rejected.  Any subsequent
+     *  setPlaylist() call whose nonce is lower (older coordinator effect) is a stale Phase 1
+     *  that the JS cancelled flag may have missed; it is silently ignored. */
+    private long lastCommittedRevisionNonce = 0L;
+
     // ── Asset readiness grace period ────────────────────────────────────────
     /** Retry count for empty-URL grace period; resets whenever a slide has a usable URL. */
     private int assetGraceRetries = 0;
@@ -431,12 +440,48 @@ public class PlaylistScheduler {
       }
 
       /**
+    /**
+     * Called from JS immediately before each {@code setNativePlaylist} bridge call.
+     * Stores the coordinator's revision nonce (epoch-ms, generated once per coordinator
+     * effect invocation) so the subsequent {@link #setPlaylist} can detect and discard
+     * stale Phase 1 payloads from superseded effects.  Both Phase 1 and Phase 2 within
+     * the same coordinator effect share the same nonce; only cross-effect stale calls are
+     * rejected.  No-op for APKs that pre-date this method (optional bridge capability).
+     */
+    @android.webkit.JavascriptInterface
+    public synchronized void setPlaylistRevisionId(String revisionId) {
+        try {
+            long nonce = Long.parseLong(revisionId);
+            if (nonce > 0L) {
+                pendingRevisionNonce = nonce;
+                Log.d(BRIDGE_TAG, "[setPlaylistRevisionId] nonce=" + nonce);
+            }
+        } catch (NumberFormatException e) {
+            Log.w(BRIDGE_TAG, "[setPlaylistRevisionId] unparseable: " + revisionId);
+        }
+    }
+
      * Called from setNativePlaylist JS bridge.
      * Passing "[]" stops playback and clears the active Room revision so boot()
      * does not restore stale content after a commanded page reload.
      */
     public synchronized void setPlaylist(String json) {
         Log.d(BRIDGE_TAG, "[" + android.os.SystemClock.elapsedRealtime() + "ms] setPlaylist len=" + (json == null ? 0 : json.length()) + " gen=" + generation);
+        // Consume the nonce set by the immediately preceding setPlaylistRevisionId() call.
+        // A stale nonce (from an old coordinator effect whose JS `cancelled` flag fired after
+        // the bridge call was already enqueued) is silently rejected to prevent a superseded
+        // Phase 1 payload from overwriting a newer committed revision.
+        // Phase 1 and Phase 2 of the SAME effect share the same nonce → both are allowed.
+        final long incomingNonce = pendingRevisionNonce;
+        pendingRevisionNonce = 0L;
+        if (incomingNonce > 0L && incomingNonce < lastCommittedRevisionNonce) {
+            Log.i(TAG, "[setPlaylist] stale nonce=" + incomingNonce
+                    + " < last=" + lastCommittedRevisionNonce + " — ignored");
+            return;
+        }
+        if (incomingNonce > lastCommittedRevisionNonce) {
+            lastCommittedRevisionNonce = incomingNonce;
+        }
         lastSetJson = json;
         List<SlidePlan> newSlides = parseSlides(json);
         if (newSlides.isEmpty()) {
@@ -1481,4 +1526,5 @@ public class PlaylistScheduler {
     }
 
 }
+
 
