@@ -867,7 +867,7 @@ public class PlaylistScheduler {
                             + mySlideId + " after " + WEBVIEW_READY_TIMEOUT_MS
                             + "ms — starting advance timer anyway");
                     if (telemetry != null) telemetry.logEvent("webview_ready_timeout", mySlideId,
-                            "{"timeoutMs":" + WEBVIEW_READY_TIMEOUT_MS + "}");
+                            "{\"timeoutMs\":" + WEBVIEW_READY_TIMEOUT_MS + "}");
                     webViewReadyTimeout = null;
                     if (state == State.WAITING_FOR_WEBVIEW_READY) {
                         toState(State.PLAYING, mySlideId);
@@ -917,7 +917,7 @@ public class PlaylistScheduler {
             long readyMs = SystemClock.elapsedRealtime() - slideStartMs;
             Log.d(TAG, "[webview_ready] JS signal for slide=" + slideId + " in " + readyMs + "ms");
             if (telemetry != null) telemetry.logEvent("webview_ready", slideId,
-                    "{"readyMs":" + readyMs + ","source":"js_signal"}");
+                    "{\"readyMs\":" + readyMs + ",\"source\":\"js_signal\"}");
             if (webViewReadyTimeout != null) {
                 handler.removeCallbacks(webViewReadyTimeout);
                 webViewReadyTimeout = null;
