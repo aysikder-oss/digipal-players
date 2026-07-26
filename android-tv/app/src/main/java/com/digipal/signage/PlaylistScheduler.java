@@ -466,6 +466,7 @@ public class PlaylistScheduler {
         }
     }
 
+    /**
      * Called from setNativePlaylist JS bridge.
      * Passing "[]" stops playback and clears the active Room revision so boot()
      * does not restore stale content after a commanded page reload.
