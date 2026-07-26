@@ -1898,6 +1898,13 @@ public class MainActivity extends Activity {
                               }
                           }
                           isWebViewCurrentlyDormant = dormant;
+                          // Fix: also manage WebView visibility so Glide/ExoPlayer frames are
+                          // visible in JS-controlled mixed playlists where PlaylistScheduler is
+                          // stopped (setNativePlaylist("[]")) and schedulerDeactivateWebView()
+                          // is never called.  Without this the WebView always sits on top of
+                          // native image/video views and the user sees the React background (black).
+                          webView.setAlpha(dormant ? 0f : 1f);
+                          webView.setVisibility(dormant ? View.INVISIBLE : View.VISIBLE);
                           android.util.Log.d("DigipalNative", "[nativeFirst] setWebViewDormant=" + dormant);
                           if (nativeFirstRendering && dormant && currentPlayerUrl != null) {
                               // Per-slide WebView recreation: destroy V8 heap + GPU compositor while native
