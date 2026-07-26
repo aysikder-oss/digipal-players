@@ -31,6 +31,10 @@ public final class DigipalGlideModule extends AppGlideModule {
                 .setMemoryCacheScreens(screens)
                 .build();
         builder.setMemorySizeCalculator(calculator);
+        // Verbose Glide logging in debug builds — filter: adb logcat -s Glide
+        if (BuildConfig.DEBUG) {
+            builder.setLogLevel(android.util.Log.VERBOSE);
+        }
     }
 
     @Override

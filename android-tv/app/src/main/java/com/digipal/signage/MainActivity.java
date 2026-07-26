@@ -191,6 +191,7 @@ public class MainActivity extends Activity {
     // PREPARING state (before schedulerDeactivateWebView fires and sets
     // nativeSchedulerOwnsDisplay=true).  Cleared when an empty playlist arrives.
     private volatile boolean hasActiveNativePlaylist = false;
+    private DebugHudManager debugHudManager;
     /** Duration (ms) of the currently active native slide. Used by setWebViewDormant
      *  to skip WebView recreation for short slides (Fix 8). */
     private volatile long currentNativeSlideDurationMs = 0L;
@@ -259,6 +260,7 @@ public class MainActivity extends Activity {
           final Thread.UncaughtExceptionHandler _prevCrashHandler = Thread.getDefaultUncaughtExceptionHandler();
           Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
               try { AppRecoverManager.scheduleRecovery(getApplicationContext()); } catch (Throwable ignored) {}
+              if (BuildConfig.DEBUG) { try { DebugTools.writeCrashReport(getApplicationContext(), thread, throwable); } catch (Throwable ignored2) {} }
               if (_prevCrashHandler != null) _prevCrashHandler.uncaughtException(thread, throwable);
               else android.os.Process.killProcess(android.os.Process.myPid());
           });
@@ -400,6 +402,28 @@ public class MainActivity extends Activity {
         debugOverlayParams.topMargin = 24;
         debugOverlayParams.leftMargin = 24;
         root.addView(nativeDebugOverlay, debugOverlayParams);
+
+        // Debug HUD (debug builds only) — toggle with remote Info key
+        if (BuildConfig.DEBUG) {
+            debugHudManager = new DebugHudManager(root, this);
+            debugHudManager.setDataProvider(() -> {
+                StringBuilder sb = new StringBuilder();
+                sb.append("=== Digipal Debug HUD ===\n");
+                sb.append("app  : ").append(BuildConfig.VERSION_NAME).append(" (").append(BuildConfig.GIT_SHA).append(")\n");
+                sb.append("webV : vis=").append(webView != null ? webView.getVisibility() : -1)
+                  .append(" dormant=").append(isWebViewCurrentlyDormant)
+                  .append(" nativePl=").append(hasActiveNativePlaylist).append("\n");
+                sb.append("exo  : state=").append(exoPlayer != null ? exoPlayer.getPlaybackState() : -1)
+                  .append(" pos=").append(exoPlayer != null ? exoPlayer.getCurrentPosition() : -1).append("ms\n");
+                sb.append("broadcast=").append(hasBroadcastActive)
+                  .append("  schOwns=").append(nativeSchedulerOwnsDisplay).append("\n");
+                sb.append(DebugTools.getMemoryStats(getApplicationContext())).append("\n");
+                long hbAgo = System.currentTimeMillis() - lastHeartbeatMs;
+                sb.append("hb   : ").append(hbAgo < 60_000 ? hbAgo + "ms ago" : "STALE").append("\n");
+                sb.append("Info key = toggle HUD");
+                return sb.toString();
+            });
+        }
 
         setContentView(root);
 
@@ -1316,6 +1340,7 @@ public class MainActivity extends Activity {
 
               @android.webkit.JavascriptInterface
               public void playNativeVideo(String url, float x, float y, float w, float h, String objectFit, boolean loop, float volume, String contentId) {
+                if (BuildConfig.DEBUG) DebugTools.logBridgeCall("playNativeVideo", "contentId=" + contentId + " loop=" + loop + " vol=" + volume + " url=" + (url.length() > 60 ? url.substring(0, 60) : url));
                 runOnUiThread(() -> {
                     try {
                         boolean fromPreload = url.equals(preloadedVideoUrl) && preloadPlayer != null;
@@ -1628,6 +1653,7 @@ public class MainActivity extends Activity {
 
           @android.webkit.JavascriptInterface
             public void showNativeImage(String url, float x, float y, float w, float h, String scaleType, String contentIdStr) {
+                if (BuildConfig.DEBUG) DebugTools.logBridgeCall("showNativeImage", "contentId=" + contentIdStr + " scale=" + scaleType + " url=" + (url != null && url.length() > 60 ? url.substring(0, 60) : url));
                 runOnUiThread(() -> {
                     try {
                         // Fix 2: safe-quote contentIdStr so JS key lookup is always valid.
@@ -1879,6 +1905,7 @@ public class MainActivity extends Activity {
 
               @android.webkit.JavascriptInterface
               public void setWebViewDormant(boolean dormant) {
+                if (BuildConfig.DEBUG) DebugTools.logBridgeCall("setWebViewDormant", "dormant=" + dormant);
                   runOnUiThread(() -> {
                       try {
                           if (dormant && hasBroadcastActive) {
@@ -2271,6 +2298,12 @@ public class MainActivity extends Activity {
                       }
                       @Override public void onRenderedFirstFrame(androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime t, Object output, long renderMs) {
                           android.util.Log.i("DigipalVideo", "[cold diag] onRenderedFirstFrame renderMs=" + renderMs + " pvAlpha=" + (preloadView != null ? preloadView.getAlpha() : -1f) + " texAlpha=" + (incomingTexView != null ? incomingTexView.getAlpha() : -1f));
+                      }
+                      @Override public void onPlayerError(androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime t, androidx.media3.common.PlaybackException error) {
+                          android.util.Log.e("ExoDebug", "[cold] playerError code=" + error.errorCode + " msg=" + error.getMessage() + " slideId=" + slideId);
+                      }
+                      @Override public void onIsLoadingChanged(androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime t, boolean isLoading) {
+                          if (BuildConfig.DEBUG) android.util.Log.v("ExoDebug", "[cold] isLoading=" + isLoading + " pos=" + t.currentPlaybackPositionMs + "ms slideId=" + slideId);
                       }
                   });
                   final androidx.media3.exoplayer.ExoPlayer oldPlayer = exoPlayer;
@@ -4071,6 +4104,10 @@ public class MainActivity extends Activity {
               // Back is a no-op in kiosk/signage mode â swallow to prevent accidental navigation.
               return true;
           }
+        if (keyCode == KeyEvent.KEYCODE_INFO) {
+            if (BuildConfig.DEBUG && debugHudManager != null) debugHudManager.toggle();
+            return true;
+        }
           if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
                   || keyCode == KeyEvent.KEYCODE_ENTER
                   || keyCode == KeyEvent.KEYCODE_BUTTON_A
@@ -4201,6 +4238,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (debugHudManager != null) { debugHudManager.stop(); debugHudManager = null; }
         stopAnrWatchdog();
         stopHeartbeatWatchdog();
         if (memoryBudgetManager != null) { memoryBudgetManager.stop(); memoryBudgetManager = null; }
