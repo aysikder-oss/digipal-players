@@ -71,28 +71,29 @@ jobs:
 
       - name: Rename artifacts for clarity
         run: |
-          # Rename debug APK
+          TAG="${GITHUB_REF_NAME:-dev}"
+          # Rename debug APK with -debug suffix so it is distinguishable from release
           for f in android-tv/app/build/outputs/apk/debug/*.apk; do
             if [ -f "$f" ]; then
-              mv "$f" "android-tv/app/build/outputs/apk/debug/DigipalPlayer-v3.2.0.apk"
+              mv "$f" "android-tv/app/build/outputs/apk/debug/DigipalPlayer-${TAG}-debug.apk"
             fi
           done
           # Rename debug AAB
           for f in android-tv/app/build/outputs/bundle/debug/*.aab; do
             if [ -f "$f" ]; then
-              mv "$f" "android-tv/app/build/outputs/bundle/debug/DigipalPlayer-v3.2.0.aab"
+              mv "$f" "android-tv/app/build/outputs/bundle/debug/DigipalPlayer-${TAG}-debug.aab"
             fi
           done
           # Rename release APK if exists
           for f in android-tv/app/build/outputs/apk/release/*.apk; do
             if [ -f "$f" ]; then
-              mv "$f" "android-tv/app/build/outputs/apk/release/DigipalPlayer-v3.2.0.apk"
+              mv "$f" "android-tv/app/build/outputs/apk/release/DigipalPlayer-${TAG}.apk"
             fi
           done
           # Rename release AAB if exists
           for f in android-tv/app/build/outputs/bundle/release/*.aab; do
             if [ -f "$f" ]; then
-              mv "$f" "android-tv/app/build/outputs/bundle/release/DigipalPlayer-v3.2.0.aab"
+              mv "$f" "android-tv/app/build/outputs/bundle/release/DigipalPlayer-${TAG}.aab"
             fi
           done
 
