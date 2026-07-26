@@ -61,13 +61,11 @@ jobs:
             -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
             -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
 
-      - name: Build Debug APK (unsigned)
-        if: env.KEYSTORE_BASE64 == ''
+      - name: Build Debug APK
         working-directory: android-tv
         run: ./gradlew assembleDebug
 
-      - name: Build Debug AAB (unsigned)
-        if: env.KEYSTORE_BASE64 == ''
+      - name: Build Debug AAB
         working-directory: android-tv
         run: ./gradlew bundleDebug
 
