@@ -10,6 +10,7 @@ package com.digipal.signage;
   import android.os.Build;
   import android.content.pm.ServiceInfo;
   import android.os.IBinder;
+import android.util.Log;
   import android.os.SystemClock;
 
   /**
@@ -28,8 +29,54 @@ package com.digipal.signage;
       private static final String CHANNEL_ID = "digipal_boot";
       private static final int NOTIF_ID = 1001;
 
-      @Override
-      public int onStartCommand(Intent intent, int flags, int startId) {
+      /**
+     * Request code for WebView-recovery / package-update relaunches.
+     * Distinct from boot (1001) and watchdog restart (2) so alarms do not clobber each other.
+     */
+    private static final int REQ_PACKAGE_UPDATE = 1003;
+
+    /**
+     * Static helper — schedule a MainActivity relaunch via AlarmManager after delayMs.
+     * Safe to call from any BroadcastReceiver or Service (no Context lifecycle concerns).
+     * Uses ELAPSED_REALTIME_WAKEUP + setWindow() — no SCHEDULE_EXACT_ALARM permission needed.
+     *
+     * @param context   Application or receiver context
+     * @param reason    Free-form label logged by MainActivity on launch (e.g. "webview_package_replaced")
+     * @param delayMs   Minimum milliseconds before the alarm fires (fires within delayMs + 5000)
+     */
+    public static void schedulePlayerLaunch(Context context, String reason, long delayMs) {
+        try {
+            Log.i("DigipalRecovery", "BootLaunchService.schedulePlayerLaunch:"
+                    + " reason=" + reason + " delayMs=" + delayMs);
+
+            Intent launch = new Intent(context, MainActivity.class);
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                    | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            launch.putExtra("relaunchReason", reason);
+
+            int piFlags = PendingIntent.FLAG_UPDATE_CURRENT
+                    | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                       ? PendingIntent.FLAG_IMMUTABLE : 0);
+
+            PendingIntent pi = PendingIntent.getActivity(
+                    context, REQ_PACKAGE_UPDATE, launch, piFlags);
+            AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+            if (am == null) {
+                Log.w("DigipalRecovery", "BootLaunchService.schedulePlayerLaunch: AlarmManager null");
+                return;
+            }
+            long earliest = SystemClock.elapsedRealtime() + delayMs;
+            am.setWindow(AlarmManager.ELAPSED_REALTIME_WAKEUP, earliest, 5_000L, pi);
+            Log.i("DigipalRecovery", "BootLaunchService.schedulePlayerLaunch: alarm set"
+                    + " requestCode=" + REQ_PACKAGE_UPDATE + " at+" + delayMs + "ms");
+        } catch (Exception e) {
+            Log.w("DigipalRecovery", "schedulePlayerLaunch failed", e);
+        }
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
           ensureChannel();
           // API 34+ requires a declared foreground-service type.
           // shortService is correct for a short-lived boot-launch helper.
@@ -44,7 +91,11 @@ package com.digipal.signage;
               stopSelf();
               return START_NOT_STICKY;
           }
-          scheduleLaunch();
+          // Forward relaunchReason from whoever started this service (WatchdogService
+          // deadman alarm, PackageUpdateReceiver, etc.) into the MainActivity launch intent.
+          String reason = (intent != null) ? intent.getStringExtra("relaunchReason") : null;
+          Log.i("DigipalRecovery", "BootLaunchService fired, reason=" + (reason != null ? reason : "boot"));
+          scheduleLaunch(reason);
           // WatchdogService is started in MainActivity.onCreate() after the
           // Activity is visible. Android 15 blocks mediaPlayback FGS from
           // the BOOT_COMPLETED chain, so we must not start it here.
@@ -53,11 +104,16 @@ package com.digipal.signage;
       }
 
       private void scheduleLaunch() {
+          scheduleLaunch(null);
+      }
+
+      private void scheduleLaunch(String reason) {
           try {
               Intent launch = new Intent(this, MainActivity.class);
               launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                       | Intent.FLAG_ACTIVITY_CLEAR_TOP
                       | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+              if (reason != null) launch.putExtra("relaunchReason", reason);
 
               int piFlags = PendingIntent.FLAG_UPDATE_CURRENT
                       | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
