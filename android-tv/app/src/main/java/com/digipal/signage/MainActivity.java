@@ -1697,8 +1697,23 @@ public class MainActivity extends Activity {
                             preloadedImageUrl = null; preloadImageReady = false; preloadedImageView = null;
                             // Fix 1: content-scoped ready callback — deferred one frame via post() so Android
                             // has drawn the promoted view before JS receives onReady (prevents race).
+                            // Additionally verify the view is actually visible before signaling ready:
+                            // if something (e.g. cancelNativePreload or hideNativeImage) cleared the view
+                            // between the swap and the post() dispatch, onReady would fire on a black frame.
                             final String _cbJs = "try{var _f=window['__digipalNativeImageReady_'+" + safeContentId + "];if(typeof _f==='function')_f();else if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady();}catch(e){}";
-                            preloadImgView.post(() -> webView.evaluateJavascript(_cbJs, null));
+                            final android.widget.ImageView _verifyView = preloadImgView;
+                            _verifyView.post(() -> {
+                                boolean _vOk = _verifyView.getVisibility() == View.VISIBLE;
+                                boolean _aOk = _verifyView.getAlpha() > 0.99f;
+                                boolean _dOk = _verifyView.getDrawable() != null;
+                                boolean _sOk = _verifyView.isShown();
+                                android.util.Log.d("DigipalNative", "[showNativeImage] pre-ready vis=" + _vOk + " alpha=" + _aOk + " drawable=" + _dOk + " isShown=" + _sOk);
+                                if (_vOk && _aOk && _dOk && _sOk) {
+                                    webView.evaluateJavascript(_cbJs, null);
+                                } else {
+                                    android.util.Log.w("DigipalNative", "[showNativeImage] ABORT ready callback — view not visible after swap; will fall back via grace timer");
+                                }
+                            });
                         } else {
                               // Cold fallback: load into inactive (preload) view — old content stays visible until first draw confirmed
                               com.bumptech.glide.Glide.with(MainActivity.this).clear(preloadImgView);
@@ -1756,6 +1771,7 @@ public class MainActivity extends Activity {
 
 
             public void hideNativeImage() {
+                if (BuildConfig.DEBUG) DebugTools.logBridgeCall("hideNativeImage", "caller=" + new Throwable().getStackTrace()[1]);
                 runOnUiThread(() -> {
                     try {
                         com.bumptech.glide.Glide.with(MainActivity.this).clear(nativeImageView);
@@ -1875,6 +1891,7 @@ public class MainActivity extends Activity {
 
             @android.webkit.JavascriptInterface
               public void cancelNativePreload() {
+                  if (BuildConfig.DEBUG) DebugTools.logBridgeCall("cancelNativePreload", "");
                   runOnUiThread(() -> {
                       try {
                           if (preloadPlayer != null) { try { preloadPlayer.release(); } catch (Throwable ignored) {} preloadPlayer = null; }
@@ -1955,6 +1972,22 @@ public class MainActivity extends Activity {
                           // stopped (setNativePlaylist("[]")) and schedulerDeactivateWebView()
                           // is never called.  Without this the WebView always sits on top of
                           // native image/video views and the user sees the React background (black).
+                          //
+                          // Guard: before hiding the WebView for dormant=true, verify that at least
+                          // one native visual layer is actually visible. If not (e.g. hideNativeImage
+                          // was called right before this), skipping dormancy prevents a black frame
+                          // where both the WebView and the native layers are invisible simultaneously.
+                          if (dormant) {
+                              boolean _imgVisible = (nativeImageView != null && nativeImageView.getVisibility() == View.VISIBLE && nativeImageView.getAlpha() > 0.01f)
+                                      || (nativeImageViewB != null && nativeImageViewB.getVisibility() == View.VISIBLE && nativeImageViewB.getAlpha() > 0.01f);
+                              boolean _vidVisible = (nativeVideoView != null && nativeVideoView.getVisibility() == View.VISIBLE && nativeVideoView.getAlpha() > 0.01f)
+                                      || (nativeVideoViewB != null && nativeVideoViewB.getVisibility() == View.VISIBLE && nativeVideoViewB.getAlpha() > 0.01f);
+                              if (!_imgVisible && !_vidVisible) {
+                                  android.util.Log.w("DigipalNative", "[nativeFirst] skip dormant=true: no visible native layer — keeping WebView awake to avoid all-black frame");
+                                  isWebViewCurrentlyDormant = false;
+                                  return;
+                              }
+                          }
                           webView.setAlpha(dormant ? 0f : 1f);
                           webView.setVisibility(dormant ? View.INVISIBLE : View.VISIBLE);
                           android.util.Log.d("DigipalNative", "[nativeFirst] setWebViewDormant=" + dormant);
