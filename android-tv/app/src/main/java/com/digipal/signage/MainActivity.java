@@ -131,6 +131,7 @@ public class MainActivity extends Activity {
     private boolean preloadVideoReady = false;
     private String preloadedImageUrl;
     private boolean preloadImageReady = false;
+    private android.widget.ImageView preloadedImageView = null; // which view holds the current preload
     // Dual-buffer B views â preloaded content renders here silently while A is visible
     private androidx.media3.ui.PlayerView nativeVideoViewB;
     private android.widget.ImageView nativeImageViewB;
@@ -1667,7 +1668,21 @@ public class MainActivity extends Activity {
                             android.widget.ImageView.ScaleType.FIT_CENTER;
                         final android.widget.ImageView activeImgView  = activeImageViewIsA ? nativeImageView : nativeImageViewB;
                         final android.widget.ImageView preloadImgView = activeImageViewIsA ? nativeImageViewB : nativeImageView;
-                        if (url.equals(preloadedImageUrl) && preloadImageReady) {
+                        // Guard: verify the stored preload view is the correct instance and still
+                        // has a drawable. hideNativeImagesForVideo() clears Glide from both views
+                        // but historically left preloadedImageUrl/preloadImageReady set, causing the
+                        // instant-swap to promote an empty view → black screen.
+                        boolean _pDrawableOk = preloadImgView == preloadedImageView
+                                && preloadImgView.getDrawable() != null;
+                        if (BuildConfig.DEBUG) android.util.Log.d("DigipalNative",
+                            "[showNativeImage] urlMatch=" + url.equals(preloadedImageUrl)
+                            + " imgReady=" + preloadImageReady
+                            + " viewMatch=" + (preloadImgView == preloadedImageView)
+                            + " hasDrawable=" + (preloadImgView.getDrawable() != null)
+                            + " incomingAlpha=" + preloadImgView.getAlpha()
+                            + " incomingVis=" + preloadImgView.getVisibility()
+                            + " url=" + (url != null ? url.substring(0, Math.min(60, url.length())) : "null"));
+                        if (url.equals(preloadedImageUrl) && preloadImageReady && _pDrawableOk) {
                             // Instant swap â image already decoded into preloadImgView
                             preloadImgView.setScaleType(st);
                             preloadImgView.setLayoutParams(lp);
@@ -1679,7 +1694,7 @@ public class MainActivity extends Activity {
                             try { com.bumptech.glide.Glide.get(MainActivity.this).trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE); } catch (Throwable ignored) {}
                             com.bumptech.glide.Glide.with(MainActivity.this).clear(activeImgView);
                             activeImageViewIsA = !activeImageViewIsA;
-                            preloadedImageUrl = null; preloadImageReady = false;
+                            preloadedImageUrl = null; preloadImageReady = false; preloadedImageView = null;
                             // Fix 1: content-scoped ready callback — deferred one frame via post() so Android
                             // has drawn the promoted view before JS receives onReady (prevents race).
                             final String _cbJs = "try{var _f=window['__digipalNativeImageReady_'+" + safeContentId + "];if(typeof _f==='function')_f();else if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady();}catch(e){}";
@@ -1687,7 +1702,7 @@ public class MainActivity extends Activity {
                         } else {
                               // Cold fallback: load into inactive (preload) view — old content stays visible until first draw confirmed
                               com.bumptech.glide.Glide.with(MainActivity.this).clear(preloadImgView);
-                              preloadedImageUrl = null; preloadImageReady = false;
+                              preloadedImageUrl = null; preloadImageReady = false; preloadedImageView = null;
                               final android.widget.ImageView incoming = preloadImgView;
                               final android.widget.ImageView outgoing = activeImgView;
                               incoming.setLayoutParams(lp);
@@ -1747,7 +1762,7 @@ public class MainActivity extends Activity {
                         com.bumptech.glide.Glide.with(MainActivity.this).clear(nativeImageViewB);
                         nativeImageView.setVisibility(View.INVISIBLE);
                         nativeImageViewB.setVisibility(View.INVISIBLE);
-                        preloadedImageUrl = null; preloadImageReady = false;
+                        preloadedImageUrl = null; preloadImageReady = false; preloadedImageView = null;
                     } catch (Exception e) {}
                 });
             }
@@ -1830,6 +1845,11 @@ public class MainActivity extends Activity {
                           preloadImgView.setLayoutParams(new FrameLayout.LayoutParams(
                               FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
                           preloadedImageUrl = url;
+                          preloadedImageView = preloadImgView; // track which view owns this preload
+                          if (BuildConfig.DEBUG) android.util.Log.d("DigipalNative",
+                              "[preloadNativeImage] view=" + (preloadImgView == nativeImageView ? "A" : "B")
+                              + " alpha=" + preloadImgView.getAlpha()
+                              + " url=" + (url != null ? url.substring(0, Math.min(60, url.length())) : "null"));
                           com.bumptech.glide.Glide.with(MainActivity.this)
                               .load(url)
                               .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
@@ -1837,7 +1857,7 @@ public class MainActivity extends Activity {
                                   public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e,
                                           Object model, com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
                                           boolean isFirstResource) {
-                                      if (url.equals(preloadedImageUrl)) { preloadImageReady = false; }
+                                      if (url.equals(preloadedImageUrl)) { preloadImageReady = false; preloadedImageView = null; }
                                       return false;
                                   }
                                   @Override
@@ -1865,7 +1885,7 @@ public class MainActivity extends Activity {
                           // Clear both image views
                           try { com.bumptech.glide.Glide.with(MainActivity.this).clear(nativeImageView); } catch (Throwable ignored) {}
                           try { com.bumptech.glide.Glide.with(MainActivity.this).clear(nativeImageViewB); } catch (Throwable ignored) {}
-                          preloadedImageUrl = null; preloadImageReady = false;
+                          preloadedImageUrl = null; preloadImageReady = false; preloadedImageView = null;
                       } catch (Exception e) {}
                   });
               }
@@ -2671,6 +2691,9 @@ public class MainActivity extends Activity {
             try { com.bumptech.glide.Glide.with(this).clear(nativeImageViewB); } catch (Throwable ignored) {}
             if (nativeImageView  != null) { nativeImageView.setAlpha(1f);  nativeImageView.setVisibility(View.INVISIBLE);  }
             if (nativeImageViewB != null) { nativeImageViewB.setAlpha(1f); nativeImageViewB.setVisibility(View.INVISIBLE); }
+            // Clear preload state — Glide drawables are now gone; any pending preload
+            // is invalid and showNativeImage must not take the instant-swap path.
+            preloadedImageUrl = null; preloadImageReady = false; preloadedImageView = null;
         }
 
         private void initNativeComponents() {
@@ -2832,7 +2855,14 @@ public class MainActivity extends Activity {
                                   FrameLayout.LayoutParams _lp = new FrameLayout.LayoutParams(_dm.widthPixels, _dm.heightPixels);
                                   final android.widget.ImageView activeImgView  = activeImageViewIsA ? nativeImageView : nativeImageViewB;
                                   final android.widget.ImageView preloadImgView = activeImageViewIsA ? nativeImageViewB : nativeImageView;
-                                  if (_url.equals(preloadedImageUrl) && preloadImageReady) {
+                                  boolean _sDrOk = preloadImgView == preloadedImageView
+                                          && preloadImgView.getDrawable() != null;
+                                  if (BuildConfig.DEBUG) android.util.Log.d("DigipalNative",
+                                      "[schedulerShowImage] urlMatch=" + _url.equals(preloadedImageUrl)
+                                      + " imgReady=" + preloadImageReady
+                                      + " viewMatch=" + (preloadImgView == preloadedImageView)
+                                      + " hasDrawable=" + (preloadImgView.getDrawable() != null));
+                                  if (_url.equals(preloadedImageUrl) && preloadImageReady && _sDrOk) {
                                       // Instant swap — preloaded image already decoded
                                       preloadImgView.setScaleType(st);
                                       preloadImgView.setLayoutParams(_lp);
@@ -2843,7 +2873,7 @@ public class MainActivity extends Activity {
                                       try { com.bumptech.glide.Glide.get(MainActivity.this).trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE); } catch (Throwable ignored) {}
                                       com.bumptech.glide.Glide.with(MainActivity.this).clear(activeImgView);
                                       activeImageViewIsA = !activeImageViewIsA;
-                                      preloadedImageUrl = null; preloadImageReady = false;
+                                      preloadedImageUrl = null; preloadImageReady = false; preloadedImageView = null;
                                       if (playlistScheduler != null) playlistScheduler.onRendererReady(_sid);
                                   } else {
                                       // Cold load — load directly; keep view INVISIBLE until Glide succeeds
@@ -2943,12 +2973,13 @@ public class MainActivity extends Activity {
                                   preloadImgView.setVisibility(View.INVISIBLE);
                                   preloadImgView.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
                                   preloadedImageUrl = _url;
+                                  preloadedImageView = preloadImgView; // track which view owns this preload
                                   preloadImgView.setAlpha(1f);
                                   com.bumptech.glide.Glide.with(MainActivity.this).load(_url)
                                       .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
                                           @Override public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e, Object m,
                                                   com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> t, boolean f) {
-                                              if (_url.equals(preloadedImageUrl)) preloadImageReady = false; return false;
+                                              if (_url.equals(preloadedImageUrl)) { preloadImageReady = false; preloadedImageView = null; } return false;
                                           }
                                           @Override public boolean onResourceReady(android.graphics.drawable.Drawable r, Object m,
                                                   com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> t,
@@ -3198,7 +3229,7 @@ public class MainActivity extends Activity {
                                   nativeImageViewB.setAlpha(1f);
                                   nativeImageView.setVisibility(View.INVISIBLE);
                                   nativeImageViewB.setVisibility(View.INVISIBLE);
-                                  preloadedImageUrl = null; preloadImageReady = false;
+                                  preloadedImageUrl = null; preloadImageReady = false; preloadedImageView = null;
                               } catch (Throwable ignored) {}
                           });
                       }
