@@ -67,10 +67,32 @@
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"
-            android:exported="true">
+            android:exported="true"
+            android:directBootAware="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Recovers from WebView provider package replacement (SIGKILL with no onDestroy).
+             Schedules a 3-second relaunch via BootLaunchService.schedulePlayerLaunch()
+             when the WebView provider or Digipal APK itself is updated/replaced. -->
+        <receiver
+            android:name=".PackageUpdateReceiver"
+            android:enabled="true"
+            android:exported="true"
+            android:directBootAware="true">
+            <intent-filter>
+                <!-- Digipal APK itself was updated. No <data> needed for MY_PACKAGE_REPLACED. -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+            <intent-filter>
+                <!-- WebView provider / Chrome / Trichrome updated or replaced. -->
+                <action android:name="android.intent.action.PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.PACKAGE_ADDED" />
+                <action android:name="android.intent.action.PACKAGE_CHANGED" />
+                <data android:scheme="package" />
             </intent-filter>
         </receiver>
         <!-- Foreground service that safely opens MainActivity on boot (API 29+ fix). -->
