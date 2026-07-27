@@ -60,14 +60,15 @@ import android.util.Log;
                     | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
                        ? PendingIntent.FLAG_IMMUTABLE : 0);
 
-            // Android 14 (API 34) Background Activity Launch (BAL) restrictions block
-            // AlarmManager-fired PendingIntents from starting activities unless the
-            // PendingIntent explicitly opts in via ActivityOptions.
-            // MODE_BACKGROUND_ACTIVITY_START_ALLOWED = 1 (added in API 34).
+            // Android 15 (API 35) Background Activity Launch (BAL): AlarmManager fires
+            // the PendingIntent as the SYSTEM, so the *creator-side* option is required.
+            // setPendingIntentCreatorBackgroundActivityStartMode was added in API 35.
+            // The sender-side method (setPendingIntentBackgroundActivityStartMode, API 34)
+            // is intentionally NOT used — it has no effect when the system is the sender.
             android.os.Bundle activityOpts = null;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            if (Build.VERSION.SDK_INT >= 35) {
                 android.app.ActivityOptions ao = android.app.ActivityOptions.makeBasic();
-                ao.setPendingIntentBackgroundActivityStartMode(
+                ao.setPendingIntentCreatorBackgroundActivityStartMode(
                         android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
                 activityOpts = ao.toBundle();
             }
@@ -131,11 +132,13 @@ import android.util.Log;
                       | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
                          ? PendingIntent.FLAG_IMMUTABLE : 0);
 
-              // Android 14 BAL fix (same as schedulePlayerLaunch above).
+              // Android 15 (API 35) BAL — same reasoning as schedulePlayerLaunch.
+              // Must use setPendingIntentCreatorBackgroundActivityStartMode (creator side)
+              // because AlarmManager fires the PendingIntent as the system, not the app.
               android.os.Bundle bootActivityOpts = null;
-              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+              if (Build.VERSION.SDK_INT >= 35) {
                   android.app.ActivityOptions ao = android.app.ActivityOptions.makeBasic();
-                  ao.setPendingIntentBackgroundActivityStartMode(
+                  ao.setPendingIntentCreatorBackgroundActivityStartMode(
                           android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
                   bootActivityOpts = ao.toBundle();
               }
