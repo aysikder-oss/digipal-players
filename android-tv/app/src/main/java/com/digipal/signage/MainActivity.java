@@ -196,6 +196,14 @@ public class MainActivity extends Activity {
     // PREPARING state (before schedulerDeactivateWebView fires and sets
     // nativeSchedulerOwnsDisplay=true).  Cleared when an empty playlist arrives.
     private volatile boolean hasActiveNativePlaylist = false;
+    /**
+     * True while a JS-driven (single-content) showNativeImage() or playNativeVideo()
+     * call is in-flight or actively displaying. This is distinct from
+     * nativeSchedulerOwnsDisplay (PlaylistScheduler) and hasActiveNativePlaylist.
+     * Used by the revision watchdog to skip forcePlayerReload() when Glide or ExoPlayer
+     * is loading for a standalone native image/video (e.g. schedule-end default content).
+     */
+    private volatile boolean nativeSingleContentActive = false;
     private DebugHudManager debugHudManager;
     /** Duration (ms) of the currently active native slide. Used by setWebViewDormant
      *  to skip WebView recreation for short slides (Fix 8). */
@@ -1351,6 +1359,8 @@ public class MainActivity extends Activity {
               @android.webkit.JavascriptInterface
               public void playNativeVideo(String url, float x, float y, float w, float h, String objectFit, boolean loop, float volume, String contentId) {
                 if (BuildConfig.DEBUG) DebugTools.logBridgeCall("playNativeVideo", "contentId=" + contentId + " loop=" + loop + " vol=" + volume + " url=" + (url.length() > 60 ? url.substring(0, 60) : url));
+                // Mark single-content native video active so revision watchdog skips reload while ExoPlayer loads.
+                nativeSingleContentActive = true;
                 runOnUiThread(() -> {
                     try {
                         boolean fromPreload = url.equals(preloadedVideoUrl) && preloadPlayer != null;
@@ -1611,6 +1621,7 @@ public class MainActivity extends Activity {
 
           @android.webkit.JavascriptInterface
             public void stopNativeVideo() {
+                nativeSingleContentActive = false;
                 runOnUiThread(() -> {
                     try {
                         if (videoReadyHandler != null && videoReadyRunnable != null) {
@@ -1664,6 +1675,9 @@ public class MainActivity extends Activity {
           @android.webkit.JavascriptInterface
             public void showNativeImage(String url, float x, float y, float w, float h, String scaleType, String contentIdStr) {
                 if (BuildConfig.DEBUG) DebugTools.logBridgeCall("showNativeImage", "contentId=" + contentIdStr + " scale=" + scaleType + " url=" + (url != null && url.length() > 60 ? url.substring(0, 60) : url));
+                // Mark single-content native image as active so the revision watchdog
+                // does not fire forcePlayerReload() while Glide is still loading.
+                nativeSingleContentActive = true;
                 runOnUiThread(() -> {
                     try {
                         // Fix 2: safe-quote contentIdStr so JS key lookup is always valid.
@@ -1781,6 +1795,7 @@ public class MainActivity extends Activity {
 
             public void hideNativeImage() {
                 if (BuildConfig.DEBUG) DebugTools.logBridgeCall("hideNativeImage", "caller=" + new Throwable().getStackTrace()[1]);
+                nativeSingleContentActive = false;
                 runOnUiThread(() -> {
                     try {
                         com.bumptech.glide.Glide.with(MainActivity.this).clear(nativeImageView);
@@ -2781,6 +2796,16 @@ public class MainActivity extends Activity {
                         return;
                     }
 
+                    // Single-content native image/video (showNativeImage / playNativeVideo from JS)
+                    // is loading or already visible. The WebView is dormant while Glide/ExoPlayer
+                    // renders; forcing a reload would interrupt the load and show a black screen.
+                    // The image/video will call back via __digipalNativeImageReady once drawn.
+                    if (nativeSingleContentActive) {
+                        android.util.Log.d("DigipalNative",
+                            "[revision] single native content active; deferring reload for revision " + rev);
+                        return;
+                    }
+
                     if (!isWebViewCurrentlyDormant) {
                         android.util.Log.d("DigipalNative", "[revision] skipping reload - WebView is awake, rev=" + rev);
                         return;
@@ -2825,6 +2850,7 @@ public class MainActivity extends Activity {
         }
 
         private void hideNativeImagesForVideo() {
+            nativeSingleContentActive = false;
             try { com.bumptech.glide.Glide.with(this).clear(nativeImageView);  } catch (Throwable ignored) {}
             try { com.bumptech.glide.Glide.with(this).clear(nativeImageViewB); } catch (Throwable ignored) {}
             if (nativeImageView  != null) { nativeImageView.setAlpha(1f);  nativeImageView.setVisibility(View.INVISIBLE);  }
@@ -4139,6 +4165,11 @@ public class MainActivity extends Activity {
         if (nativeSchedulerOwnsDisplay || hasActiveNativePlaylist) {
             android.util.Log.w("DigipalNative",
                 "[forcePlayerReload] skipped — native scheduler owns display; ExoPlayer/Glide uninterrupted");
+            return;
+        }
+        if (nativeSingleContentActive) {
+            android.util.Log.w("DigipalNative",
+                "[forcePlayerReload] skipped — single native content (image/video) active; Glide/ExoPlayer uninterrupted");
             return;
         }
         runOnUiThread(() -> {
