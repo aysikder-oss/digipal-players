@@ -256,6 +256,11 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         activityAlive = true;
+        // Log the relaunch reason so logcat clearly shows why the app was relaunched
+        // (boot, watchdog_deadman, webview_package_replaced, my_package_replaced, etc.)
+        String _relaunchReason = getIntent() != null ? getIntent().getStringExtra("relaunchReason") : null;
+        android.util.Log.i("DigipalRecovery", "MainActivity launched, reason="
+                + (_relaunchReason != null ? _relaunchReason : "cold_start"));
           // WorkManager crash recovery: start the periodic backup worker.
           // Crash-counter reset (onCleanStart) is deferred to armStablePlaybackTimer() —
           // it fires only after 3 minutes of consecutive clean playback, preventing the
@@ -4322,6 +4327,16 @@ public class MainActivity extends Activity {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
             hideSystemUI();
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        String _newReason = intent != null ? intent.getStringExtra("relaunchReason") : null;
+        if (_newReason != null) {
+            android.util.Log.i("DigipalRecovery", "MainActivity onNewIntent, reason=" + _newReason);
         }
     }
 
