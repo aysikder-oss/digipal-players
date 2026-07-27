@@ -60,8 +60,19 @@ import android.util.Log;
                     | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
                        ? PendingIntent.FLAG_IMMUTABLE : 0);
 
+            // Android 14 (API 34) Background Activity Launch (BAL) restrictions block
+            // AlarmManager-fired PendingIntents from starting activities unless the
+            // PendingIntent explicitly opts in via ActivityOptions.
+            // MODE_BACKGROUND_ACTIVITY_START_ALLOWED = 1 (added in API 34).
+            android.os.Bundle activityOpts = null;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                android.app.ActivityOptions ao = android.app.ActivityOptions.makeBasic();
+                ao.setPendingIntentBackgroundActivityStartMode(
+                        android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
+                activityOpts = ao.toBundle();
+            }
             PendingIntent pi = PendingIntent.getActivity(
-                    context, REQ_PACKAGE_UPDATE, launch, piFlags);
+                    context, REQ_PACKAGE_UPDATE, launch, piFlags, activityOpts);
             AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
             if (am == null) {
                 Log.w("DigipalRecovery", "BootLaunchService.schedulePlayerLaunch: AlarmManager null");
@@ -120,7 +131,15 @@ import android.util.Log;
                       | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
                          ? PendingIntent.FLAG_IMMUTABLE : 0);
 
-              PendingIntent pi = PendingIntent.getActivity(this, 1001, launch, piFlags);
+              // Android 14 BAL fix (same as schedulePlayerLaunch above).
+              android.os.Bundle bootActivityOpts = null;
+              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                  android.app.ActivityOptions ao = android.app.ActivityOptions.makeBasic();
+                  ao.setPendingIntentBackgroundActivityStartMode(
+                          android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
+                  bootActivityOpts = ao.toBundle();
+              }
+              PendingIntent pi = PendingIntent.getActivity(this, 1001, launch, piFlags, bootActivityOpts);
               AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
               if (am == null) return;
 
