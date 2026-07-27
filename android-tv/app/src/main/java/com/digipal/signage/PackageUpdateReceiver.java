@@ -51,6 +51,22 @@ public class PackageUpdateReceiver extends BroadcastReceiver {
 
         Log.i(TAG, "PackageUpdateReceiver: action=" + action);
 
+        // Debug-only: simulate a WebView provider replacement so testers can exercise the
+        // recovery flow via adb on Android 14+ without sending a protected system broadcast.
+        // Usage:
+        //   adb shell am broadcast \
+        //     -a com.digipal.signage.debug.SIMULATE_WEBVIEW_PACKAGE_REPLACED \
+        //     -p com.digipal.signage.debug
+        // The intent-filter for this action is declared in the manifest (exported=true).
+        // BuildConfig.DEBUG prevents this path from running in production release builds.
+        if (com.digipal.signage.BuildConfig.DEBUG
+                && "com.digipal.signage.debug.SIMULATE_WEBVIEW_PACKAGE_REPLACED".equals(action)) {
+            Log.i(TAG, "PackageUpdateReceiver: DEBUG simulate webview package replaced");
+            logCurrentWebViewProvider();
+            scheduleIfEnabled(context, "simulated_webview_package_replaced");
+            return;
+        }
+
         // MY_PACKAGE_REPLACED — Digipal APK itself was updated.
         if (Intent.ACTION_MY_PACKAGE_REPLACED.equals(action)) {
             Log.i(TAG, "PackageUpdateReceiver: own APK replaced, scheduling relaunch");
