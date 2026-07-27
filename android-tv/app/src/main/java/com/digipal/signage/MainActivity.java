@@ -1671,15 +1671,19 @@ public class MainActivity extends Activity {
                             // Instant swap â image already decoded into preloadImgView
                             preloadImgView.setScaleType(st);
                             preloadImgView.setLayoutParams(lp);
+                            preloadImgView.setAlpha(1f);          // Fix: reset alpha — prior slide cold-load left this view at alpha=0f
                             preloadImgView.setVisibility(View.VISIBLE);
+                            activeImgView.setAlpha(0f);           // Fix: fully hide outgoing
                             activeImgView.setVisibility(View.INVISIBLE);
                             // Trim Glide bitmap cache before cold load (Fire TV OOM fix).
                             try { com.bumptech.glide.Glide.get(MainActivity.this).trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE); } catch (Throwable ignored) {}
                             com.bumptech.glide.Glide.with(MainActivity.this).clear(activeImgView);
                             activeImageViewIsA = !activeImageViewIsA;
                             preloadedImageUrl = null; preloadImageReady = false;
-                            // Fix 1: content-scoped ready callback on preloaded image swap (APK v3.16.14+).
-                            webView.evaluateJavascript("try{var _f=window['__digipalNativeImageReady_'+" + safeContentId + "];if(typeof _f==='function')_f();else if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady();}catch(e){}", null);
+                            // Fix 1: content-scoped ready callback — deferred one frame via post() so Android
+                            // has drawn the promoted view before JS receives onReady (prevents race).
+                            final String _cbJs = "try{var _f=window['__digipalNativeImageReady_'+" + safeContentId + "];if(typeof _f==='function')_f();else if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady();}catch(e){}";
+                            preloadImgView.post(() -> webView.evaluateJavascript(_cbJs, null));
                         } else {
                               // Cold fallback: load into inactive (preload) view — old content stays visible until first draw confirmed
                               com.bumptech.glide.Glide.with(MainActivity.this).clear(preloadImgView);
@@ -1820,6 +1824,7 @@ public class MainActivity extends Activity {
                           final android.widget.ImageView preloadImgView = activeImageViewIsA ? nativeImageViewB : nativeImageView;
                           com.bumptech.glide.Glide.with(MainActivity.this).clear(preloadImgView);
                           preloadedImageUrl = null; preloadImageReady = false;
+                          preloadImgView.setAlpha(1f);           // Fix: reset alpha so instant-swap sees a fully opaque view
                           preloadImgView.setVisibility(View.INVISIBLE);
                           // Load into the inactive view with a full-screen layout so Glide decodes at display size
                           preloadImgView.setLayoutParams(new FrameLayout.LayoutParams(
