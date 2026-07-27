@@ -178,6 +178,10 @@ public class MainActivity extends Activity {
     // schedulerDeactivateWebView() respects this flag and does NOT hide the WebView
     // when a broadcast is showing, so the overlay remains visible over native content.
     private volatile boolean hasBroadcastActive = false;
+    // Native banner container: a FrameLayout added above all layers (WebView, ExoPlayer,
+    // Glide) for top_banner / bottom_banner broadcasts. Created once on first use.
+    // Sits at translationZ/elevation 20000 so it is always on top.
+    private android.widget.FrameLayout nativeBannerContainer = null;
     // True while the native PlaylistScheduler is the active display owner
     // (set in schedulerDeactivateWebView, cleared on IDLE state). Used by
     // setHasBroadcast() to decide whether to re-hide the WebView after a broadcast clears.
@@ -2053,6 +2057,102 @@ public class MainActivity extends Activity {
                         restoreWebViewAfterBroadcast("setHasBroadcast(false)");
                         try { if (playlistScheduler != null) playlistScheduler.resume(); } catch (Throwable ignored) {}
                     }
+                }
+
+                @JavascriptInterface
+                public void setNativeBroadcastBanners(String json) {
+                    // Renders top_banner / bottom_banner broadcasts as native Android
+                    // TextView overlays above all other layers (WebView, ExoPlayer, Glide).
+                    // Called by useScreenSurfaceController instead of setHasBroadcast(true)
+                    // for banner modes — avoids lifting the whole WebView (and its black
+                    // background) which would cover native image/video content.
+                    //
+                    // Pass an empty JSON array ("[]") to clear all banners.
+                    runOnUiThread(() -> {
+                        try {
+                            org.json.JSONArray arr = new org.json.JSONArray(json == null ? "[]" : json);
+
+                            // Create the banner container once and attach above all other views.
+                            if (nativeBannerContainer == null) {
+                                nativeBannerContainer = new android.widget.FrameLayout(MainActivity.this);
+                                android.widget.FrameLayout.LayoutParams lp =
+                                    new android.widget.FrameLayout.LayoutParams(
+                                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                        android.view.ViewGroup.LayoutParams.MATCH_PARENT);
+                                if (rootLayout != null) {
+                                    rootLayout.addView(nativeBannerContainer, lp);
+                                }
+                                // Higher elevation/translationZ than showWebViewAboveNativeLayers (10000)
+                                // so the native banner is always visible above the WebView too.
+                                nativeBannerContainer.setElevation(20000f);
+                                nativeBannerContainer.setTranslationZ(20000f);
+                                nativeBannerContainer.bringToFront();
+                            }
+
+                            // Rebuild all banners from scratch.
+                            nativeBannerContainer.removeAllViews();
+
+                            for (int i = 0; i < arr.length(); i++) {
+                                org.json.JSONObject b = arr.getJSONObject(i);
+                                String displayMode  = b.optString("displayMode",    "top_banner");
+                                String message      = b.optString("message",        "");
+                                String bgColor      = b.optString("backgroundColor","#CC0000");
+                                String textColor    = b.optString("textColor",      "#FFFFFF");
+                                String fontSize     = b.optString("fontSize",       "large");
+                                boolean scrolling   = b.optBoolean("scrolling",     false);
+
+                                android.widget.TextView tv = new android.widget.TextView(MainActivity.this);
+                                tv.setText(message);
+                                try {
+                                    tv.setBackgroundColor(android.graphics.Color.parseColor(bgColor));
+                                } catch (IllegalArgumentException ignored) {
+                                    tv.setBackgroundColor(android.graphics.Color.RED);
+                                }
+                                try {
+                                    tv.setTextColor(android.graphics.Color.parseColor(textColor));
+                                } catch (IllegalArgumentException ignored) {
+                                    tv.setTextColor(android.graphics.Color.WHITE);
+                                }
+                                tv.setGravity(android.view.Gravity.CENTER);
+                                tv.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+                                tv.setSingleLine(!scrolling);
+                                tv.setEllipsize(scrolling ? null : android.text.TextUtils.TruncateAt.MARQUEE);
+                                tv.setMarqueeRepeatLimit(scrolling ? -1 : 0);
+
+                                // Font size map (mirrors BroadcastOverlay.tsx sizeMap)
+                                float spSize;
+                                switch (fontSize) {
+                                    case "small":  spSize = 18f; break;
+                                    case "medium": spSize = 24f; break;
+                                    case "xlarge": spSize = 36f; break;
+                                    default:       spSize = 28f; break; // "large"
+                                }
+                                tv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, spSize);
+
+                                int padPx = Math.round(24 * getResources().getDisplayMetrics().density);
+                                tv.setPadding(padPx, padPx / 2, padPx, padPx / 2);
+
+                                boolean isTop = !"bottom_banner".equals(displayMode);
+                                android.widget.FrameLayout.LayoutParams bannerLp =
+                                    new android.widget.FrameLayout.LayoutParams(
+                                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                        android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+                                bannerLp.gravity = isTop
+                                    ? android.view.Gravity.TOP
+                                    : android.view.Gravity.BOTTOM;
+                                nativeBannerContainer.addView(tv, bannerLp);
+                            }
+
+                            nativeBannerContainer.setVisibility(
+                                arr.length() > 0 ? View.VISIBLE : View.GONE);
+
+                            android.util.Log.d("DigipalBroadcast",
+                                "[nativeBanner] setNativeBroadcastBanners: " + arr.length() + " banner(s)");
+                        } catch (Exception e) {
+                            android.util.Log.e("DigipalBroadcast",
+                                "[nativeBanner] error parsing banners: " + e.getMessage());
+                        }
+                    });
                 }
 
                 @JavascriptInterface
@@ -4256,6 +4356,12 @@ public class MainActivity extends Activity {
        * ExoPlayer SurfaceView leaks that cause OOM on long Fire TV sessions.
        */
       private void releaseAllRenderers() {
+            // Clean up native banner overlay
+            if (nativeBannerContainer != null) {
+                nativeBannerContainer.removeAllViews();
+                if (rootLayout != null) rootLayout.removeView(nativeBannerContainer);
+                nativeBannerContainer = null;
+            }
           try {
               stopStallWatchdog();
               stopBufferWatchdog();
