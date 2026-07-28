@@ -16,6 +16,18 @@
          Required for RelaunchReceiver to post the relaunch notification.
          On TV / Fire TV devices this is typically pre-granted or not enforced. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- SYSTEM_ALERT_WINDOW ("Display over other apps"): special permission that
+         grants an explicit Background Activity Launch (BAL) exemption in AOSP
+         ActivityStarter.  When granted, RelaunchReceiver can call startActivity()
+         directly without alarm/notification machinery — the most reliable path
+         on Android TV / Fire TV ROMs that suppress full-screen intent dispatch.
+         Grant once per device:
+           adb shell appops set <package> SYSTEM_ALERT_WINDOW allow
+         Or via Settings > Apps > Special app access > Display over other apps. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- REORDER_TASKS: allows AppTask.moveToFront() to bring a backgrounded
+         (not-killed) task to the foreground without any additional exemption. -->
+    <uses-permission android:name="android.permission.REORDER_TASKS" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
