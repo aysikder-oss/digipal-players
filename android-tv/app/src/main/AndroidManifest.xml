@@ -146,5 +146,14 @@
             android:name="leakcanary.internal.activity.LeakLauncherActivity"
             tools:node="remove" />
 
+
+        <!-- Short-lived trampoline foreground service used by RelaunchReceiver
+             to launch MainActivity under the Android 10+ foreground-service BAL
+             exemption.  android:foregroundServiceType is not required here because
+             the service stops itself immediately after calling startActivity(). -->
+        <service
+            android:name=".RelaunchForwardingService"
+            android:exported="false" />
+
       </application>
   </manifest>
