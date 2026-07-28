@@ -1,5 +1,6 @@
 package com.digipal.signage;
 
+import android.app.ActivityOptions;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -15,55 +16,50 @@ import android.util.Log;
 
 /**
  * Receives the relaunch alarm and starts MainActivity via a full-screen-intent
- * notification — the only BAL-safe path on Android 14 (API 34) / targetSdk 35
- * that requires no special permissions beyond USE_FULL_SCREEN_INTENT (normal,
- * auto-granted on install).
+ * notification.
  *
- * Key insight: Android's NotificationManagerService only sets mIsInterruptive=true
- * (and therefore fires the fullScreenIntent) when the notification's channel has a
- * non-null sound OR a vibration pattern.  A channel with sound=null + vibration=null
- * is treated as non-interruptive → headsUpContentView=null → fullScreenIntent never
- * fires even though it is set in the Notification object.
+ * MECHANISM
+ * ---------
+ * Full-screen intents are an Android-sanctioned background-activity-launch (BAL)
+ * path that works on Android TV / Fire TV and does not require SCHEDULE_EXACT_ALARM,
+ * SYSTEM_ALERT_WINDOW, or device-owner privileges.
  *
- * Channel ID is versioned (digipal_relaunch_v2) because channel settings are sticky:
- * once created, you cannot change sound/vibration on an existing channel — only
- * creating a new channel ID picks up the updated settings.
+ * CRITICAL — targetSdk=35 PendingIntent BAL opt-in
+ * -------------------------------------------------
+ * On API 34+ (Android 14+) with targetSdk=35 the system requires an explicit
+ * creator-side opt-in for any PendingIntent that will be used to start an
+ * activity from the background:
+ *
+ *   ActivityOptions.setPendingIntentCreatorBackgroundActivityStartMode(
+ *           ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+ *
+ * Without this, the system logs BAL_BLOCK internally and silently drops the
+ * launch — no exception is thrown, so the caller incorrectly thinks it succeeded.
+ *
+ * CHANNEL VERSIONING
+ * ------------------
+ * Channel settings are sticky once created; the old silent channel is abandoned.
+ * digipal_relaunch_v2 carries sound + vibration so mIsInterruptive=true, which is
+ * required for the system to actually dispatch the fullScreenIntent.
  */
 public class RelaunchReceiver extends BroadcastReceiver {
 
     /** Internal broadcast action — not exported to other apps. */
     static final String ACTION_RELAUNCH = "com.digipal.signage.internal.RELAUNCH";
 
-    // v2 channel: previous channel (digipal_relaunch) was created with sound=null,
-    // which caused mIsInterruptive=false and suppressed the fullScreenIntent.
-    // A new channel ID is the only way to pick up corrected sound/vibration settings.
     private static final String CHANNEL_ID = "digipal_relaunch_v2";
     private static final int    NOTIF_ID   = 1005;
 
     @Override
     public void onReceive(Context context, Intent intent) {
         String reason = intent != null ? intent.getStringExtra("relaunchReason") : null;
-        Log.i("DigipalRecovery", "RelaunchReceiver.onReceive: starting RelaunchForwardingService reason=" + reason);
-
-        // Start the trampoline foreground service.
-        // startForegroundService() from a BroadcastReceiver is always allowed.
-        // The service will call startActivity(MainActivity) under the foreground-service
-        // BAL exemption (Android 10+ docs: "the app has a running foreground service").
-        // This replaces the full-screen-intent notification path which was suppressed
-        // by the Android TV notification stack despite mIsInterruptive=true.
-        Intent svcIntent = new Intent(context, RelaunchForwardingService.class);
-        if (reason != null) svcIntent.putExtra("relaunchReason", reason);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(svcIntent);
-        } else {
-            context.startService(svcIntent);
-        }
+        Log.i("DigipalRecovery", "RelaunchReceiver.onReceive: posting full-screen notification reason=" + reason);
+        postRelaunchNotification(context, reason);
     }
 
     /**
-     * Posts a high-priority full-screen-intent notification that immediately
-     * launches MainActivity.  Safe to call from any context including a
-     * foreground service or a BroadcastReceiver.
+     * Posts a high-priority full-screen-intent notification that starts MainActivity.
+     * Safe to call from any context (BroadcastReceiver, foreground service, etc.).
      */
     static void postRelaunchNotification(Context context, String reason) {
         try {
@@ -85,12 +81,24 @@ public class RelaunchReceiver extends BroadcastReceiver {
             int piFlags = PendingIntent.FLAG_UPDATE_CURRENT
                     | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
                        ? PendingIntent.FLAG_IMMUTABLE : 0);
-            PendingIntent activityPi = PendingIntent.getActivity(
-                    context, NOTIF_ID, launch, piFlags);
 
-            // Cancel any previous relaunch notification first.
-            // Stale notifications in the same slot can be demoted to non-interruptive
-            // by the system if mIsInterruptive was already false on the old entry.
+            // On API 34+ / targetSdk=35 every PendingIntent used for a background
+            // activity start requires an explicit creator-side BAL opt-in.
+            // Without this the system silently logs BAL_BLOCK and drops the launch —
+            // no exception is thrown, so callers falsely believe the launch succeeded.
+            PendingIntent activityPi;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) { // API 34
+                ActivityOptions opts = ActivityOptions.makeBasic();
+                opts.setPendingIntentCreatorBackgroundActivityStartMode(
+                        ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
+                activityPi = PendingIntent.getActivity(
+                        context, NOTIF_ID, launch, piFlags, opts.toBundle());
+            } else {
+                activityPi = PendingIntent.getActivity(
+                        context, NOTIF_ID, launch, piFlags);
+            }
+
+            // Cancel any stale relaunch notification first to avoid slot-suppression.
             nm.cancel(NOTIF_ID);
 
             Notification notification;
@@ -99,19 +107,12 @@ public class RelaunchReceiver extends BroadcastReceiver {
                         .setSmallIcon(android.R.drawable.ic_dialog_alert)
                         .setContentTitle("Digipal Player")
                         .setContentText("Restarting…")
-                        // fullScreenIntent with highPriority=true is the BAL bypass.
                         .setFullScreenIntent(activityPi, true)
-                        // contentIntent fires if the user taps the notification shade
-                        // (fallback path on devices that suppress full-screen intents).
                         .setContentIntent(activityPi)
                         .setCategory(Notification.CATEGORY_ALARM)
-                        // PRIORITY_MAX on the Notification object is respected on some
-                        // older API levels and by certain OEM notification stacks.
                         .setPriority(Notification.PRIORITY_MAX)
                         .setAutoCancel(true)
                         .setOnlyAlertOnce(false)
-                        // No group — group-summary logic can suppress interruptiveness
-                        // for non-summary notifications that share a group key.
                         .build();
             } else {
                 notification = new Notification.Builder(context)
@@ -122,8 +123,6 @@ public class RelaunchReceiver extends BroadcastReceiver {
                         .setContentIntent(activityPi)
                         .setCategory(Notification.CATEGORY_ALARM)
                         .setPriority(Notification.PRIORITY_MAX)
-                        // DEFAULT_SOUND + DEFAULT_VIBRATE ensure mIsInterruptive=true
-                        // on pre-Oreo builds where channels don't exist.
                         .setDefaults(Notification.DEFAULT_SOUND | Notification.DEFAULT_VIBRATE)
                         .setAutoCancel(true)
                         .build();
@@ -132,7 +131,8 @@ public class RelaunchReceiver extends BroadcastReceiver {
             nm.notify(NOTIF_ID, notification);
             Log.i("DigipalRecovery",
                     "RelaunchReceiver.postRelaunchNotification: notification posted"
-                    + " channel=" + CHANNEL_ID + " notifId=" + NOTIF_ID);
+                    + " channel=" + CHANNEL_ID + " notifId=" + NOTIF_ID
+                    + " creatorBalOptIn=" + (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE));
         } catch (Exception e) {
             Log.w("DigipalRecovery", "RelaunchReceiver.postRelaunchNotification failed", e);
         }
@@ -142,11 +142,6 @@ public class RelaunchReceiver extends BroadcastReceiver {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             if (nm.getNotificationChannel(CHANNEL_ID) != null) return;
 
-            // Sound + vibration are REQUIRED for Android to mark this notification as
-            // interruptive (mIsInterruptive=true).  Without them:
-            //   headsUpContentView=null  →  fullScreenIntent is never dispatched.
-            // Use TYPE_ALARM (highest priority audio stream) so the sound fires even
-            // when the device is in Do-Not-Disturb — alarm-category notifications bypass DND.
             Uri alarmSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
             if (alarmSound == null) {
                 alarmSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
