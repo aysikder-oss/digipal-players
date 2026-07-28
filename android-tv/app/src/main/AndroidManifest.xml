@@ -137,5 +137,14 @@
             android:enabled="true"
             android:exported="false" />
 
+
+        <!-- Suppress LeakCanary's launcher activity from appearing as a
+             separate launcher entry on Android TV / Fire TV home screens.
+             LeakCanary is debugImplementation only; this stub is a no-op
+             in release builds where the activity does not exist. -->
+        <activity
+            android:name="leakcanary.internal.activity.LeakLauncherActivity"
+            tools:node="remove" />
+
       </application>
   </manifest>
