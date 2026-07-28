@@ -49,8 +49,8 @@ android {
         applicationId "com.digipal.signage"
         minSdk 21
         targetSdk 35
-        versionCode 103
-        versionName "3.16.100"
+        versionCode 104
+        versionName "3.16.101"
 
         buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
         buildConfigField "String", "SENTRY_DSN", "\"${System.getenv('SENTRY_DSN') ?: ''}\""
@@ -80,7 +80,7 @@ android {
             minifyEnabled false
             // Point debug builds at the Replit dev server — web changes
             // are visible immediately without a production publish.
-            buildConfigField "String", "SERVER_URL", "\"https://3922e89f-d02d-4a8b-add9-9f42fce9e5ea-00-sisthqoc0pvv.worf.replit.dev\""
+            buildConfigField "String", "SERVER_URL", "\"https://3922e89f-d02d-4a8b-add9-9f42fce9e5ea-00-sisthqoc0pvv.worf.replit.dev:5000\""
         }
     }
 
