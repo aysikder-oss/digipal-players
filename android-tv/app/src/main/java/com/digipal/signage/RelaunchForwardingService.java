@@ -7,6 +7,7 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
+import android.content.pm.ServiceInfo;
 import android.os.IBinder;
 import android.util.Log;
 
@@ -49,7 +50,15 @@ public class RelaunchForwardingService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         // Must call startForeground() within 5 seconds of service start.
-        startForeground(NOTIF_ID, buildNotification());
+        // targetSdk=35 requires a foregroundServiceType to be declared in the
+        // manifest AND passed here on API 34+.  shortService (API 34) is the
+        // correct type for a short-lived trampoline: up to 3 min, no extra permissions.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIF_ID, buildNotification(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE);
+        } else {
+            startForeground(NOTIF_ID, buildNotification());
+        }
 
         String reason = intent != null ? intent.getStringExtra("relaunchReason") : null;
         Log.i(TAG, "RelaunchForwardingService.onStartCommand: launching MainActivity"
