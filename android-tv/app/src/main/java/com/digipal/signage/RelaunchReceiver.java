@@ -43,8 +43,21 @@ public class RelaunchReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
         String reason = intent != null ? intent.getStringExtra("relaunchReason") : null;
-        Log.i("DigipalRecovery", "RelaunchReceiver.onReceive: posting full-screen notification reason=" + reason);
-        postRelaunchNotification(context, reason);
+        Log.i("DigipalRecovery", "RelaunchReceiver.onReceive: starting RelaunchForwardingService reason=" + reason);
+
+        // Start the trampoline foreground service.
+        // startForegroundService() from a BroadcastReceiver is always allowed.
+        // The service will call startActivity(MainActivity) under the foreground-service
+        // BAL exemption (Android 10+ docs: "the app has a running foreground service").
+        // This replaces the full-screen-intent notification path which was suppressed
+        // by the Android TV notification stack despite mIsInterruptive=true.
+        Intent svcIntent = new Intent(context, RelaunchForwardingService.class);
+        if (reason != null) svcIntent.putExtra("relaunchReason", reason);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(svcIntent);
+        } else {
+            context.startService(svcIntent);
+        }
     }
 
     /**
