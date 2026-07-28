@@ -3636,16 +3636,27 @@ public class MainActivity extends Activity {
                 flags |= PendingIntent.FLAG_IMMUTABLE;
             }
 
-            PendingIntent pendingIntent = PendingIntent.getActivity(this, 1002, intent, flags);
+            // Android 14+ (targetSdk 35) BAL: creator-side mode required (same as
+            // BootLaunchService).  setAlarmClock() is also required — setWindow() with
+            // ELAPSED_REALTIME_WAKEUP still fires balAllowedByPiSender=false because
+            // AlarmManager as sender never grants it; setAlarmClock sets alarmClock=true
+            // in ActivityOptions which AOSP ActivityStarter exempts unconditionally.
+            android.os.Bundle alarmActivityOpts = null;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                android.app.ActivityOptions ao = android.app.ActivityOptions.makeBasic();
+                ao.setPendingIntentCreatorBackgroundActivityStartMode(
+                        android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
+                alarmActivityOpts = ao.toBundle();
+            }
+            PendingIntent pendingIntent = PendingIntent.getActivity(this, 1002, intent, flags,
+                    alarmActivityOpts);
             AlarmManager alarmManager = (AlarmManager) getSystemService(ALARM_SERVICE);
             if (alarmManager == null) return;
 
-            long earliest = now + delayMs;
-            alarmManager.setWindow(
-                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                    earliest,
-                    5_000L,
-                    pendingIntent);
+            // triggerTime must be wall-clock (RTC) for setAlarmClock.
+            long triggerRtcMs = System.currentTimeMillis() + delayMs;
+            AlarmManager.AlarmClockInfo clockInfo = new AlarmManager.AlarmClockInfo(triggerRtcMs, null);
+            alarmManager.setAlarmClock(clockInfo, pendingIntent);
         } catch (Throwable t) {
             Log.e("Digipal", "scheduleAppRelaunch failed", t);
         }
