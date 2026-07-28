@@ -2344,6 +2344,41 @@ public class MainActivity extends Activity {
                         .apply();
                 }
 
+                /**
+                 * Returns true if the app has SYSTEM_ALERT_WINDOW ("Display over other apps")
+                 * permission.  When true, RelaunchReceiver can use startActivity() directly
+                 * as a BAL-exempt relaunch path — more reliable than FSI on Android TV ROMs.
+                 */
+                @android.webkit.JavascriptInterface
+                public boolean hasOverlayPermission() {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                        return android.provider.Settings.canDrawOverlays(MainActivity.this);
+                    }
+                    return true; // pre-M: always granted
+                }
+
+                /**
+                 * Opens the "Display over other apps" system settings page for this app
+                 * so the user (or a device admin) can grant SYSTEM_ALERT_WINDOW.
+                 * No-op if permission is already granted.
+                 */
+                @android.webkit.JavascriptInterface
+                public void openOverlayPermissionSettings() {
+                    try {
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M
+                                && !android.provider.Settings.canDrawOverlays(MainActivity.this)) {
+                            android.content.Intent intent = new android.content.Intent(
+                                    android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    android.net.Uri.parse("package:" + getPackageName()));
+                            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                            startActivity(intent);
+                        }
+                    } catch (Exception e) {
+                        android.util.Log.w("DigipalRecovery",
+                                "openOverlayPermissionSettings failed", e);
+                    }
+                }
+
       }
 
 
