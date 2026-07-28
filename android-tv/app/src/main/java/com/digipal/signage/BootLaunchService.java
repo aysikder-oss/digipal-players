@@ -50,47 +50,33 @@ import android.util.Log;
             Log.i("DigipalRecovery", "BootLaunchService.schedulePlayerLaunch:"
                     + " reason=" + reason + " delayMs=" + delayMs);
 
-            Intent launch = new Intent(context, MainActivity.class);
-            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                    | Intent.FLAG_ACTIVITY_CLEAR_TOP
-                    | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-            launch.putExtra("relaunchReason", reason);
+            // Route through RelaunchReceiver which posts a full-screen-intent notification.
+            // Full-screen intents are an Android-sanctioned BAL bypass (USE_FULL_SCREEN_INTENT,
+            // auto-granted on install) — no SCHEDULE_EXACT_ALARM or SYSTEM_ALERT_WINDOW needed.
+            // setAlarmClock() was removed: it requires SCHEDULE_EXACT_ALARM (not auto-granted
+            // on Android 12L+) and its BAL exemption does not fire reliably when the permission
+            // is granted via appops rather than Settings > Alarms & reminders.
+            Intent relaunchIntent = new Intent(context, RelaunchReceiver.class);
+            relaunchIntent.setAction(RelaunchReceiver.ACTION_RELAUNCH);
+            if (reason != null) relaunchIntent.putExtra("relaunchReason", reason);
 
             int piFlags = PendingIntent.FLAG_UPDATE_CURRENT
                     | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
                        ? PendingIntent.FLAG_IMMUTABLE : 0);
+            PendingIntent pi = PendingIntent.getBroadcast(context, REQ_PACKAGE_UPDATE,
+                    relaunchIntent, piFlags);
 
-            // Android 14 (API 34 / UPSIDE_DOWN_CAKE) Background Activity Launch (BAL):
-            // AlarmManager fires the PendingIntent as the SYSTEM, so the *creator-side*
-            // option must be set at PendingIntent creation time.
-            // setPendingIntentCreatorBackgroundActivityStartMode was added in API 34.
-            // The sender-side method (setPendingIntentBackgroundActivityStartMode, API 34)
-            // is intentionally NOT used — it has no effect when the system is the sender.
-            android.os.Bundle activityOpts = null;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                android.app.ActivityOptions ao = android.app.ActivityOptions.makeBasic();
-                ao.setPendingIntentCreatorBackgroundActivityStartMode(
-                        android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
-                activityOpts = ao.toBundle();
-            }
-            PendingIntent pi = PendingIntent.getActivity(
-                    context, REQ_PACKAGE_UPDATE, launch, piFlags, activityOpts);
             AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
             if (am == null) {
                 Log.w("DigipalRecovery", "BootLaunchService.schedulePlayerLaunch: AlarmManager null");
                 return;
             }
-            // setAlarmClock() is the only AlarmManager API that grants an explicit
-            // Background Activity Launch (BAL) exemption on Android 14+ (targetSdk 35).
-            // setWindow/setExact with creator-side MODE_BACKGROUND_ACTIVITY_START_ALLOWED
-            // is still blocked because AlarmManager as *sender* never sets balAllowedByPiSender;
-            // AOSP ActivityStarter checks options.getAlarmClock() to bypass that check entirely.
-            // triggerTime must be wall-clock (RTC), not elapsed.
-            long triggerRtcMs = System.currentTimeMillis() + delayMs;
-            AlarmManager.AlarmClockInfo clockInfo = new AlarmManager.AlarmClockInfo(triggerRtcMs, null);
-            am.setAlarmClock(clockInfo, pi);
+
+            // setWindow() — inexact (±5 s), no exact-alarm permission required.
+            long trigger = SystemClock.elapsedRealtime() + delayMs;
+            am.setWindow(AlarmManager.ELAPSED_REALTIME_WAKEUP, trigger, 5000L, pi);
             Log.i("DigipalRecovery", "BootLaunchService.schedulePlayerLaunch: alarm set"
-                    + " requestCode=" + REQ_PACKAGE_UPDATE + " at+" + delayMs + "ms (setAlarmClock)");
+                    + " requestCode=" + REQ_PACKAGE_UPDATE + " at+" + delayMs + "ms (setWindow→notification)");
         } catch (Exception e) {
             Log.w("DigipalRecovery", "schedulePlayerLaunch failed", e);
         }
@@ -129,41 +115,12 @@ import android.util.Log;
       }
 
       private void scheduleLaunch(String reason) {
-          try {
-              Intent launch = new Intent(this, MainActivity.class);
-              launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                      | Intent.FLAG_ACTIVITY_CLEAR_TOP
-                      | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-              if (reason != null) launch.putExtra("relaunchReason", reason);
-
-              int piFlags = PendingIntent.FLAG_UPDATE_CURRENT
-                      | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-                         ? PendingIntent.FLAG_IMMUTABLE : 0);
-
-              // Android 14 (API 34 / UPSIDE_DOWN_CAKE) BAL — same reasoning as schedulePlayerLaunch.
-              // Must use setPendingIntentCreatorBackgroundActivityStartMode (creator side)
-              // because AlarmManager fires the PendingIntent as the system, not the app.
-              android.os.Bundle bootActivityOpts = null;
-              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                  android.app.ActivityOptions ao = android.app.ActivityOptions.makeBasic();
-                  ao.setPendingIntentCreatorBackgroundActivityStartMode(
-                          android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
-                  bootActivityOpts = ao.toBundle();
-              }
-              PendingIntent pi = PendingIntent.getActivity(this, 1001, launch, piFlags, bootActivityOpts);
-              AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
-              if (am == null) return;
-
-              // setAlarmClock() grants the BAL exemption on Android 14+ (targetSdk 35)
-              // where setWindow(ELAPSED_REALTIME_WAKEUP) + creator-side BAL is still blocked.
-              // triggerTime must be wall-clock (RTC), not elapsed.
-              long triggerRtcMs = System.currentTimeMillis() + 500;
-              AlarmManager.AlarmClockInfo clockInfo = new AlarmManager.AlarmClockInfo(triggerRtcMs, null);
-              am.setAlarmClock(clockInfo, pi);
-          } catch (Exception ignored) {}
+          // We are already running as a foreground service — post the
+          // full-screen-intent notification directly (no intermediate alarm needed).
+          RelaunchReceiver.postRelaunchNotification(this, reason);
       }
 
-      @Override public IBinder onBind(Intent i) { return null; }
+            @Override public IBinder onBind(Intent i) { return null; }
 
       private void ensureChannel() {
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
