@@ -532,6 +532,19 @@ public class PlaylistScheduler {
                 Log.i(TAG, "[setPlaylist] signed URL changed for active video contentId=" + activeNew.contentId + " — reloading ExoPlayer (remote source)");
                 final Delegate _d = delegate; final SlidePlan _slide = activeNew;
                 handler.post(() -> _d.schedulerPlayVideo(_slide));
+            } else if (activeOld != null && activeNew != null
+                    && activeOld.type == SlideType.IMAGE
+                    && activeNew.url != null && !activeNew.url.isEmpty()
+                    && !activeOld.url.equals(activeNew.url)
+                    && !activeIsLocal
+                    && running && delegate != null) {
+                // Fix: Phase 2 delivers the real signed URL for an image whose Phase 1 URL was
+                // empty (cache miss on the first push). Re-dispatch schedulerShowImage() so
+                // Glide loads the actual image instead of keeping the old one on screen.
+                slides = newSlides;
+                Log.i(TAG, "[setPlaylist] signed URL changed for active image contentId=" + activeNew.contentId + " — reloading Glide (remote source)");
+                final Delegate _d2 = delegate; final SlidePlan _slide2 = activeNew;
+                handler.post(() -> _d2.schedulerShowImage(_slide2));
             } else {
                 Log.d(TAG, "[setPlaylist] URL refresh -- keeping local/current slides, index=" + currentIndex
                         + " activeIsLocal=" + activeIsLocal);
