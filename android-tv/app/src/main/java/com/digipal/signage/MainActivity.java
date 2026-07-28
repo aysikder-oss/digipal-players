@@ -2763,11 +2763,16 @@ public class MainActivity extends Activity {
             final String rev = revision.trim();
             if (rev.equals(lastAppliedContentRevision)) return;
 
-            lastAppliedContentRevision = rev;
+            // NOTE: do NOT set lastAppliedContentRevision = rev here.
+            // We only mark the revision applied inside the watchdog once we know JS has
+            // handled it (or will handle it imminently via a native-playlist update).
+            // For nativeSingleContentActive we intentionally leave it unset so the next
+            // heartbeat retries if the JS-side update doesn't complete.
             final long before = lastNativePlaylistSetAtMs;
+            // Declare safeRevision here (not inside the if-block) so the lambda can capture it.
+            final String safeRevision = rev.replace("\\", "\\\\").replace("'", "\\'");
 
             if (webView != null) {
-                String safeRevision = rev.replace("\\", "\\\\").replace("'", "\\'");
                 webView.evaluateJavascript(
                         "try{" +
                                 "if(window.__digipalApplyContentRevision){" +
@@ -2803,25 +2808,44 @@ public class MainActivity extends Activity {
                     // Previously this branch cleared all native state and forced a reload,
                     // which produced a black screen over live video content.
                     if (nativeSchedulerOwnsDisplay || hasActiveNativePlaylist) {
+                        lastAppliedContentRevision = rev;
                         android.util.Log.d("DigipalNative",
                             "[revision] native playlist active; keeping last-good playback for revision " + rev);
                         return;
                     }
 
-                    // Single-content native image/video (showNativeImage / playNativeVideo from JS)
-                    // is loading or already visible. The WebView is dormant while Glide/ExoPlayer
-                    // renders; forcing a reload would interrupt the load and show a black screen.
-                    // The image/video will call back via __digipalNativeImageReady once drawn.
+                    // Single-content native image/video: there is no playlist slide boundary
+                    // to flush this revision, and pauseTimers() keeps JS frozen so the 30 s
+                    // poll never fires on its own. Wake timers so __digipalApplyContentRevision
+                    // (defined in player.html) or fetchStatus() runs immediately and calls
+                    // showNativeImage/playNativeVideo with the new content URL.
+                    // Do NOT set lastAppliedContentRevision — the next heartbeat retries if
+                    // JS does not pick up the update within the next heartbeat interval.
                     if (nativeSingleContentActive) {
-                        android.util.Log.d("DigipalNative",
-                            "[revision] single native content active; deferring reload for revision " + rev);
+                        android.util.Log.i("DigipalNative",
+                            "[revision] single native content; waking WebView to apply revision " + rev);
+                        try {
+                            if (webView != null) {
+                                webView.resumeTimers();
+                                webView.evaluateJavascript(
+                                    "try{" +
+                                    "if(typeof window.__digipalApplyContentRevision==='function'){" +
+                                    "window.__digipalApplyContentRevision('" + safeRevision + "');" +
+                                    "}else if(typeof fetchStatus==='function'){fetchStatus();}" +
+                                    "}catch(e){}",
+                                    null);
+                            }
+                        } catch (Throwable ignored) {}
+                        // lastAppliedContentRevision intentionally NOT set — next heartbeat retries
                         return;
                     }
 
                     if (!isWebViewCurrentlyDormant) {
+                        lastAppliedContentRevision = rev;
                         android.util.Log.d("DigipalNative", "[revision] skipping reload - WebView is awake, rev=" + rev);
                         return;
                     }
+                    lastAppliedContentRevision = rev;
                     android.util.Log.w("DigipalNative",
                             "[revision] JS did not apply revision " + rev + " - forcing shell reload");
                     try {
@@ -2834,6 +2858,10 @@ public class MainActivity extends Activity {
                     try {
                         forcePlayerReload();
                     } catch (Throwable ignored) {}
+                } else {
+                    // setNativePlaylist() was called after this heartbeat fired — JS already
+                    // delivered updated content via the playlist path, so mark as applied.
+                    lastAppliedContentRevision = rev;
                 }
             }, 10_000L);
         }
