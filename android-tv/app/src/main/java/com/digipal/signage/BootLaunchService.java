@@ -80,10 +80,17 @@ import android.util.Log;
                 Log.w("DigipalRecovery", "BootLaunchService.schedulePlayerLaunch: AlarmManager null");
                 return;
             }
-            long earliest = SystemClock.elapsedRealtime() + delayMs;
-            am.setWindow(AlarmManager.ELAPSED_REALTIME_WAKEUP, earliest, 5_000L, pi);
+            // setAlarmClock() is the only AlarmManager API that grants an explicit
+            // Background Activity Launch (BAL) exemption on Android 14+ (targetSdk 35).
+            // setWindow/setExact with creator-side MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+            // is still blocked because AlarmManager as *sender* never sets balAllowedByPiSender;
+            // AOSP ActivityStarter checks options.getAlarmClock() to bypass that check entirely.
+            // triggerTime must be wall-clock (RTC), not elapsed.
+            long triggerRtcMs = System.currentTimeMillis() + delayMs;
+            AlarmManager.AlarmClockInfo clockInfo = new AlarmManager.AlarmClockInfo(triggerRtcMs, null);
+            am.setAlarmClock(clockInfo, pi);
             Log.i("DigipalRecovery", "BootLaunchService.schedulePlayerLaunch: alarm set"
-                    + " requestCode=" + REQ_PACKAGE_UPDATE + " at+" + delayMs + "ms");
+                    + " requestCode=" + REQ_PACKAGE_UPDATE + " at+" + delayMs + "ms (setAlarmClock)");
         } catch (Exception e) {
             Log.w("DigipalRecovery", "schedulePlayerLaunch failed", e);
         }
@@ -147,10 +154,12 @@ import android.util.Log;
               AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
               if (am == null) return;
 
-              // setWindow() fires within [500 ms, 5 s] - no special permission needed.
-              // Gives the window manager time to finish initialising after boot.
-              long earliest = SystemClock.elapsedRealtime() + 500;
-              am.setWindow(AlarmManager.ELAPSED_REALTIME_WAKEUP, earliest, 5_000L, pi);
+              // setAlarmClock() grants the BAL exemption on Android 14+ (targetSdk 35)
+              // where setWindow(ELAPSED_REALTIME_WAKEUP) + creator-side BAL is still blocked.
+              // triggerTime must be wall-clock (RTC), not elapsed.
+              long triggerRtcMs = System.currentTimeMillis() + 500;
+              AlarmManager.AlarmClockInfo clockInfo = new AlarmManager.AlarmClockInfo(triggerRtcMs, null);
+              am.setAlarmClock(clockInfo, pi);
           } catch (Exception ignored) {}
       }
 
