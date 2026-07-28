@@ -8,11 +8,14 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
-    <!-- Required for AlarmManager.setAlarmClock() used in BootLaunchService.schedulePlayerLaunch()
-         and MainActivity.scheduleAppRelaunch() on Android 12+ (API 31+).
-         On Android 12L / API 32+ the user must also grant this via
-         Settings > Special app access > Alarms & reminders for non-clock apps. -->
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- USE_FULL_SCREEN_INTENT: normal permission (auto-granted on install, API 29+).
+         Required for full-screen-intent notifications used by RelaunchReceiver to
+         start MainActivity from the background (BAL-safe on Android 14 / targetSdk 35). -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- POST_NOTIFICATIONS: runtime permission on Android 13+ (API 33+).
+         Required for RelaunchReceiver to post the relaunch notification.
+         On TV / Fire TV devices this is typically pre-granted or not enforced. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
@@ -124,5 +127,15 @@
             android:name="io.sentry.android.core.SentryPerformanceProvider"
             android:authorities="${applicationId}.SentryPerformanceProvider"
             tools:node="remove" />
+
+        <!-- Receives relaunch alarms and posts a full-screen-intent notification
+             to start MainActivity — the only BAL-safe path on Android 14 / targetSdk 35
+             without SCHEDULE_EXACT_ALARM.  android:exported="false" so only the app
+             itself can trigger it (via PendingIntent.getBroadcast). -->
+        <receiver
+            android:name=".RelaunchReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
       </application>
   </manifest>
