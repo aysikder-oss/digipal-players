@@ -8,7 +8,11 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
-    <!-- SYSTEM_ALERT_WINDOW, SCHEDULE_EXACT_ALARM, USE_EXACT_ALARM removed — not used by any code path -->
+    <!-- Required for AlarmManager.setAlarmClock() used in BootLaunchService.schedulePlayerLaunch()
+         and MainActivity.scheduleAppRelaunch() on Android 12+ (API 31+).
+         On Android 12L / API 32+ the user must also grant this via
+         Settings > Special app access > Alarms & reminders for non-clock apps. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
