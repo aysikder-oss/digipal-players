@@ -4389,17 +4389,20 @@ public class MainActivity extends Activity {
                   || keyCode == KeyEvent.KEYCODE_ENTER
                   || keyCode == KeyEvent.KEYCODE_BUTTON_A
                   || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) {
+              // Always forward to WebView first so the JS kiosk-unlock gesture (7 presses)
+              // is never blocked by native debug-gesture counting.
+              if (webView != null) webView.dispatchKeyEvent(event);
               long now = System.currentTimeMillis();
               if (now - dpadFirstPressMs > 5_000L) { dpadPressCount = 0; dpadFirstPressMs = now; }
               dpadPressCount++;
-              if (dpadPressCount == 5) {
-                  // 5 DPAD presses: toggle video renderer (TextureView ↔ SurfaceView) + restart pipeline
+              if (dpadPressCount == 12) {
+                  // 12 DPAD presses (debug): toggle video renderer (TextureView ↔ SurfaceView) + restart pipeline
                   dpadPressCount = 0;
                   android.content.SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
                   String cur = prefs.getString(PREF_VIDEO_RENDERER, "texture" /* TextureView for all Android TV — avoids SurfaceView z-order issues on Android box */);
                   String next = "texture".equals(cur) ? "surface" : "texture";
                   prefs.edit().putString(PREF_VIDEO_RENDERER, next).apply();
-                  android.util.Log.i("DigipalVideo", "[DPAD5] renderer toggled: " + cur + " -> " + next);
+                  android.util.Log.i("DigipalVideo", "[DPAD12] renderer toggled: " + cur + " -> " + next);
                   runOnUiThread(() -> {
                       resetVideoRenderer();
                       // Brief toast-style feedback via diagnostics overlay
@@ -4408,12 +4411,13 @@ public class MainActivity extends Activity {
                   });
                   return true;
               }
-              if (dpadPressCount >= 7) {
+              if (dpadPressCount >= 15) {
                   dpadPressCount = 0;
                   if (diagnosticsOverlay != null) hideDiagnosticsOverlay();
                   else showDiagnosticsOverlay();
                   return true;
               }
+              return true;
           }
           if (webView != null) webView.dispatchKeyEvent(event);
           return true;
@@ -4601,7 +4605,7 @@ public class MainActivity extends Activity {
                     + "\nIP:       " + ip
                     + "\nUptime:   " + uptime
                     + "\nDevice:   " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL
-                    + "\n\nPress SELECT x7 to dismiss");
+                    + "\n\nPress SELECT x15 to dismiss");
                 container.addView(infoTv);
 
                 // --- VIDEO RENDERER SETTINGS ROW ---
