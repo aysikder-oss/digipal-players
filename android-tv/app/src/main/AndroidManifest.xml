@@ -29,6 +29,12 @@
          (not-killed) task to the foreground without any additional exemption. -->
     <uses-permission android:name="android.permission.REORDER_TASKS" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- ACCESS_FINE_LOCATION (and COARSE as prerequisite) required on Android 10+
+         to read the connected WiFi SSID via WifiManager.getConnectionInfo().
+         We request it once at startup; if denied, SSID is silently omitted from
+         diagnostics — playback is never blocked. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
     <!-- Android TV feature declarations -->
