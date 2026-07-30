@@ -778,6 +778,60 @@ import android.os.Looper;
           }
 
 
+
+        @JavascriptInterface
+        public void wakeDisplay() {
+            // Attempt HDMI-CEC "One Touch Play" to wake the connected TV and
+            // switch it to this HDMI input. Requires the HDMI_CEC system
+            // permission; caught silently when the app lacks it (most user-
+            // space APKs) or when HdmiControlManager is absent (old OS, no HDMI).
+            try {
+                Object mgr = getSystemService("hdmi_control");
+                if (mgr != null) {
+                    java.lang.reflect.Method getClient =
+                        mgr.getClass().getMethod("getPlaybackClient");
+                    Object client = getClient.invoke(mgr);
+                    if (client != null) {
+                        Class<?> cbClass = Class.forName(
+                            "android.hardware.hdmi.HdmiPlaybackClient$OneTouchPlayCallback");
+                        Object proxy = java.lang.reflect.Proxy.newProxyInstance(
+                            getClass().getClassLoader(),
+                            new Class[]{ cbClass },
+                            (p, method, args) -> null);
+                        java.lang.reflect.Method otp =
+                            client.getClass().getMethod("oneTouchPlay", cbClass);
+                        otp.invoke(client, proxy);
+                    }
+                }
+            } catch (Exception | Error e) {
+                // SecurityException, ClassNotFoundException, etc. — all graceful
+            }
+        }
+
+        @JavascriptInterface
+        public void sendWakeOnLan(final String macAddress) {
+            // Broadcasts a standard 102-byte WoL magic packet to the LAN
+            // broadcast address (UDP port 9). No special permissions required.
+            if (macAddress == null || macAddress.isEmpty()) return;
+            new Thread(() -> {
+                try {
+                    String[] parts = macAddress.split("[:\\-]");
+                    if (parts.length != 6) return;
+                    byte[] mac = new byte[6];
+                    for (int i = 0; i < 6; i++) mac[i] = (byte) Integer.parseInt(parts[i], 16);
+                    byte[] packet = new byte[102];
+                    for (int i = 0; i < 6; i++) packet[i] = (byte) 0xFF;
+                    for (int i = 1; i <= 16; i++) System.arraycopy(mac, 0, packet, i * 6, 6);
+                    java.net.DatagramSocket s = new java.net.DatagramSocket();
+                    s.setBroadcast(true);
+                    s.send(new java.net.DatagramPacket(
+                        packet, packet.length,
+                        java.net.InetAddress.getByName("255.255.255.255"), 9));
+                    s.close();
+                } catch (Exception e) { /* silently ignore */ }
+            }).start();
+        }
+
           /**
            * Called by the React player after each successful server fetch.
            * Upserts the JSON into Room so it's available on the next boot.
