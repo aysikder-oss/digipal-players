@@ -971,13 +971,28 @@ public class MainActivity extends Activity {
                         }
                     }
                 } catch (Exception ignored) {}
-                // HDMI / external presentation display connected
+                // HDMI output connected — detected via AudioManager output devices.
+                // DisplayManager.DISPLAY_CATEGORY_PRESENTATION only lists secondary/cast
+                // displays; on Android TV boxes the HDMI output IS the primary display and
+                // is never returned by that filter. AudioDeviceInfo is reliable on API 23+.
                 try {
-                    android.hardware.display.DisplayManager dm = (android.hardware.display.DisplayManager) getSystemService(DISPLAY_SERVICE);
-                    if (dm != null) {
-                        android.view.Display[] ext = dm.getDisplays(android.hardware.display.DisplayManager.DISPLAY_CATEGORY_PRESENTATION);
-                        obj.put("hdmiConnected", ext != null && ext.length > 0);
+                    boolean hdmi = false;
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                        android.media.AudioManager am = (android.media.AudioManager) getSystemService(AUDIO_SERVICE);
+                        if (am != null) {
+                            android.media.AudioDeviceInfo[] outputs = am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS);
+                            for (android.media.AudioDeviceInfo dev : outputs) {
+                                int t = dev.getType();
+                                // TYPE_HDMI = 9, TYPE_HDMI_ARC = 10
+                                if (t == android.media.AudioDeviceInfo.TYPE_HDMI ||
+                                    t == android.media.AudioDeviceInfo.TYPE_HDMI_ARC) {
+                                    hdmi = true;
+                                    break;
+                                }
+                            }
+                        }
                     }
+                    obj.put("hdmiConnected", hdmi);
                 } catch (Exception ignored) {}
                 // CPU temperature from thermal zone sysfs (device-specific; many devices expose it)
                 try {
