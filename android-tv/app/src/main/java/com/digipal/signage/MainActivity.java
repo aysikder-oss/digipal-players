@@ -925,6 +925,90 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public String getDeviceDiagnostics() {
+            // Returns a JSON string with device-level diagnostics.
+            // All fields are best-effort; missing/unsupported values are omitted silently.
+            try {
+                org.json.JSONObject obj = new org.json.JSONObject();
+                obj.put("deviceModel", android.os.Build.MODEL);
+                obj.put("osVersion", android.os.Build.VERSION.RELEASE);
+                // Hardware serial (READ_PHONE_STATE required on API 26+; silently omit on denial)
+                try {
+                    String serial = (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O)
+                        ? android.os.Build.getSerial() : android.os.Build.SERIAL;
+                    if (serial != null && !serial.equals("unknown")) obj.put("hardwareSerial", serial);
+                } catch (SecurityException ignored) {}
+                // WiFi SSID and signal strength
+                try {
+                    WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+                    if (wm != null) {
+                        android.net.wifi.WifiInfo wi = wm.getConnectionInfo();
+                        if (wi != null) {
+                            String ssid = wi.getSSID();
+                            if (ssid != null && !ssid.equals("<unknown ssid>") && !ssid.isEmpty()) {
+                                if (ssid.startsWith("\"") && ssid.endsWith("\"")) ssid = ssid.substring(1, ssid.length() - 1);
+                                obj.put("wifiSsid", ssid);
+                            }
+                            int rssi = wi.getRssi();
+                            if (rssi > -127) obj.put("wifiSignalDbm", rssi);
+                        }
+                    }
+                } catch (Exception ignored) {}
+                // Active IPv4 address
+                try {
+                    android.net.ConnectivityManager cm = (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+                    if (cm != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                        android.net.Network net = cm.getActiveNetwork();
+                        android.net.LinkProperties lp = (net != null) ? cm.getLinkProperties(net) : null;
+                        if (lp != null) {
+                            for (android.net.LinkAddress la : lp.getLinkAddresses()) {
+                                java.net.InetAddress addr = la.getAddress();
+                                if (!addr.isLoopbackAddress() && addr instanceof java.net.Inet4Address) {
+                                    obj.put("ipAddress", addr.getHostAddress());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {}
+                // HDMI / external presentation display connected
+                try {
+                    android.hardware.display.DisplayManager dm = (android.hardware.display.DisplayManager) getSystemService(DISPLAY_SERVICE);
+                    if (dm != null) {
+                        android.view.Display[] ext = dm.getDisplays(android.hardware.display.DisplayManager.DISPLAY_CATEGORY_PRESENTATION);
+                        obj.put("hdmiConnected", ext != null && ext.length > 0);
+                    }
+                } catch (Exception ignored) {}
+                // CPU temperature from thermal zone sysfs (device-specific; many devices expose it)
+                try {
+                    java.io.File thermalDir = new java.io.File("/sys/class/thermal");
+                    if (thermalDir.isDirectory()) {
+                        float maxTemp = Float.MIN_VALUE;
+                        java.io.File[] zones = thermalDir.listFiles();
+                        if (zones != null) {
+                            for (java.io.File zone : zones) {
+                                try {
+                                    java.io.File typeFile = new java.io.File(zone, "type");
+                                    java.io.File tempFile = new java.io.File(zone, "temp");
+                                    if (!typeFile.canRead() || !tempFile.canRead()) continue;
+                                    String zType = new java.util.Scanner(typeFile).next().toLowerCase();
+                                    if (zType.contains("cpu") || zType.contains("soc") || zType.contains("tsens")) {
+                                        float c = Integer.parseInt(new java.util.Scanner(tempFile).next().trim()) / 1000.0f;
+                                        if (c > maxTemp && c < 150.0f) maxTemp = c;
+                                    }
+                                } catch (Exception ignored2) {}
+                            }
+                        }
+                        if (maxTemp > Float.MIN_VALUE) obj.put("cpuTemperatureCelsius", Math.round(maxTemp * 10.0) / 10.0);
+                    }
+                } catch (Exception ignored) {}
+                return obj.toString();
+            } catch (Exception e) {
+                return "{}";
+            }
+        }
+
+        @JavascriptInterface
         public void setRelaunchCheckSec(int seconds) {
             int clamped = Math.max(5, Math.min(120, seconds));
             SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
