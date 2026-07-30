@@ -971,6 +971,23 @@ public class MainActivity extends Activity {
                         }
                     }
                 } catch (Exception ignored) {}
+                // Physical display resolution from the active display mode.
+                // Display.Mode.getPhysicalWidth/Height() (API 23+) returns the true HDMI
+                // output resolution regardless of WebView density scaling, making it more
+                // reliable than multiplying JS window.screen dimensions by devicePixelRatio.
+                try {
+                    android.view.Display disp = getWindowManager().getDefaultDisplay();
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                        android.view.Display.Mode mode = disp.getMode();
+                        obj.put("displayWidth", mode.getPhysicalWidth());
+                        obj.put("displayHeight", mode.getPhysicalHeight());
+                    } else {
+                        android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
+                        disp.getRealMetrics(dm);
+                        obj.put("displayWidth", dm.widthPixels);
+                        obj.put("displayHeight", dm.heightPixels);
+                    }
+                } catch (Exception ignored) {}
                 // HDMI output connected — detected via AudioManager output devices.
                 // DisplayManager.DISPLAY_CATEGORY_PRESENTATION only lists secondary/cast
                 // displays; on Android TV boxes the HDMI output IS the primary display and
