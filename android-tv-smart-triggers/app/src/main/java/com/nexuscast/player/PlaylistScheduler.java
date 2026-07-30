@@ -361,7 +361,7 @@ public class PlaylistScheduler {
                     Log.w(TAG, "[webview_ready_timeout] no JS webViewSlideReady for slide="
                             + mySlideId + " after " + WEBVIEW_READY_TIMEOUT_MS + "ms — advancing anyway");
                     if (telemetry != null) telemetry.logEvent("webview_ready_timeout", mySlideId,
-                            "{"timeoutMs":" + WEBVIEW_READY_TIMEOUT_MS + "}");
+                            "{\"timeoutMs\":" + WEBVIEW_READY_TIMEOUT_MS + "}");
                     webViewReadyTimeout = null;
                     if (state == State.WAITING_FOR_WEBVIEW_READY) {
                         toState(State.PLAYING, mySlideId);
