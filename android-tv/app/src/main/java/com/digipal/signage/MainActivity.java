@@ -1011,6 +1011,16 @@ public class MainActivity extends Activity {
                     }
                     obj.put("hdmiConnected", hdmi);
                 } catch (Exception ignored) {}
+                // Display power state — works without HDMI-CEC; Display.getState() reflects
+                // whether Android is actively outputting video to HDMI. No special permission
+                // required. Omit key entirely when state is unknown so the UI hides the row.
+                try {
+                    android.view.Display disp = getWindowManager().getDefaultDisplay();
+                    int dState = disp.getState();
+                    if (dState == android.view.Display.STATE_ON) obj.put("displayState", "on");
+                    else if (dState == android.view.Display.STATE_OFF) obj.put("displayState", "off");
+                    // STATE_UNKNOWN / STATE_DOZE etc → key absent; UI hides the row gracefully
+                } catch (Exception ignored) {}
                 // CPU temperature from thermal zone sysfs (device-specific; many devices expose it)
                 try {
                     java.io.File thermalDir = new java.io.File("/sys/class/thermal");
