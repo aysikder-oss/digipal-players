@@ -448,6 +448,19 @@ public class MainActivity extends Activity {
         mediaDownloadManager.setWebView(webView);
         mediaDownloadManager.cleanupOrphans();
 
+        // Request ACCESS_FINE_LOCATION once so the diagnostics bridge can read the
+        // WiFi SSID (WifiManager.getConnectionInfo() requires this on Android 10+).
+        // Non-blocking: playback is never gated on this. If the user denies, the SSID
+        // field is simply omitted from getDeviceDiagnostics() output.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M &&
+            checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) !=
+                android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{
+                android.Manifest.permission.ACCESS_COARSE_LOCATION,
+                android.Manifest.permission.ACCESS_FINE_LOCATION
+            }, 0 /* REQUEST_LOCATION_FOR_WIFI_SSID */);
+        }
+
         
           // Start crash watchdog â relaunches app within 10s if it crashes or is killed.
           if (isAutoRelaunchEnabled()) {
