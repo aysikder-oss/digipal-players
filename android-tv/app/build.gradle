@@ -49,8 +49,8 @@ android {
         applicationId "com.digipal.signage"
         minSdk 21
         targetSdk 35
-        versionCode 117
-        versionName "3.16.114"
+        versionCode 124
+        versionName "3.16.121"
 
         buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
         buildConfigField "String", "SENTRY_DSN", "\"${System.getenv('SENTRY_DSN') ?: ''}\""
