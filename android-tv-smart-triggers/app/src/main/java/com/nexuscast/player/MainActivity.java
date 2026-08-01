@@ -833,6 +833,41 @@ import android.os.Looper;
         }
 
         @JavascriptInterface
+        public String reboot() {
+            // android.permission.REBOOT is a privileged permission — only
+            // granted to system/signed APKs on privileged installs. On standard
+            // user-space installs PowerManager.reboot() throws SecurityException;
+            // we return "unsupported" so the dashboard can show a clear error
+            // instead of silently doing nothing.
+            try {
+                PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                if (pm == null) return "unsupported";
+                pm.reboot(null);
+                return "acknowledged";
+            } catch (Throwable t) {
+                return "unsupported";
+            }
+        }
+
+        @JavascriptInterface
+        public String shutdown() {
+            // PowerManager.shutdown() (API 24+) requires android.permission.REBOOT.
+            // Returns "unsupported" on standard user-space installs that cannot
+            // hold the permission, so the dashboard shows an explicit error.
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                    PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                    if (pm == null) return "unsupported";
+                    pm.shutdown(false, null, false);
+                    return "acknowledged";
+                }
+                return "unsupported";
+            } catch (Throwable t) {
+                return "unsupported";
+            }
+        }
+
+        @JavascriptInterface
         public String getDeviceDiagnostics() {
             try {
                 org.json.JSONObject obj = new org.json.JSONObject();
