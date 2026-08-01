@@ -2380,9 +2380,16 @@ public class MainActivity extends Activity {
                                 }
                                 tv.setGravity(android.view.Gravity.CENTER);
                                 tv.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-                                tv.setSingleLine(!scrolling);
-                                tv.setEllipsize(scrolling ? null : android.text.TextUtils.TruncateAt.MARQUEE);
-                                tv.setMarqueeRepeatLimit(scrolling ? -1 : 0);
+                                tv.setSingleLine(true);
+                                if (scrolling) {
+                                    // Ticker: scrolls continuously, matching CSS animate-broadcast-scroll.
+                                    tv.setEllipsize(android.text.TextUtils.TruncateAt.MARQUEE);
+                                    tv.setMarqueeRepeatLimit(-1);
+                                    tv.setSelected(true); // required to start marquee without focus
+                                    tv.setHorizontallyScrolling(true);
+                                } else {
+                                    tv.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                                }
 
                                 // Font size map (mirrors BroadcastOverlay.tsx sizeMap)
                                 float spSize;
@@ -2430,10 +2437,16 @@ public class MainActivity extends Activity {
                                           android.view.ViewGroup.LayoutParams.MATCH_PARENT);
                                   nativeBannerContainer.setLayoutParams(clp);
                               }
-                              // Pivot on the physical screen centre so the container stays
-                              // centred on-screen after the rotation transform is applied.
-                              nativeBannerContainer.setPivotX(screenW / 2f);
-                              nativeBannerContainer.setPivotY(screenH / 2f);
+                              // Pivot at the CONTAINER's centre so rotation keeps it centred on-screen.
+                              // For 90/270 the container is (screenH x screenW) -- swapped -- so its
+                              // centre is (screenH/2, screenW/2), NOT (screenW/2, screenH/2).
+                              if (screenRotation == 90 || screenRotation == 270) {
+                                  nativeBannerContainer.setPivotX(screenH / 2f);
+                                  nativeBannerContainer.setPivotY(screenW / 2f);
+                              } else {
+                                  nativeBannerContainer.setPivotX(screenW / 2f);
+                                  nativeBannerContainer.setPivotY(screenH / 2f);
+                              }
                               nativeBannerContainer.setRotation(screenRotation);
 
                                                           nativeBannerContainer.setVisibility(
