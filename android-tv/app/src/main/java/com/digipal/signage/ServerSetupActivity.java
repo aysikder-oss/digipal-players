@@ -93,16 +93,16 @@ public class ServerSetupActivity extends Activity {
             launchPlayer();
             return;
         }
-
-        requestWindowFeature(Window.FEATURE_NO_TITLE);
-        getWindow().setFlags(
-            WindowManager.LayoutParams.FLAG_FULLSCREEN,
-            WindowManager.LayoutParams.FLAG_FULLSCREEN
-        );
-
-        nsdManager = (NsdManager) getSystemService(Context.NSD_SERVICE);
-
-        setContentView(buildUI());
+        // Cloud was previously chosen (cloud mode stores no KEY_SERVER_MODE).
+        if (prefs.getBoolean("cloud_pairing_pending", false)) {
+            launchPlayer();
+            return;
+        }
+        // First-ever launch — auto-connect to cloud instead of showing the
+        // 3-card picker.  Same effect as the user tapping "Connect to Cloud Server".
+        // The picker is still reachable via Settings -> Reconfigure Server Connection.
+        prefs.edit().putBoolean("cloud_pairing_pending", true).apply();
+        launchPlayer();
     }
 
     @Override
@@ -906,7 +906,7 @@ public class ServerSetupActivity extends Activity {
           LinearLayout.LayoutParams recP = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
           recP.bottomMargin = dp(10);
           btnReconfig.setLayoutParams(recP);
-          btnReconfig.setOnClickListener(v -> { prefs.edit().remove(KEY_SERVER_MODE).remove(KEY_SERVER_URL).apply(); setContentView(buildUI()); });
+          btnReconfig.setOnClickListener(v -> { prefs.edit().remove(KEY_SERVER_MODE).remove(KEY_SERVER_URL).remove("cloud_pairing_pending").apply(); setContentView(buildUI()); });
           root.addView(btnReconfig);
           // Back to Player
           Button btnBack = createButton("Back to Player", "#64748b");
