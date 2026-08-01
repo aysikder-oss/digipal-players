@@ -17,6 +17,10 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- REBOOT: privileged permission for OS-level reboot/shutdown via PowerManager.
+         Only grantable to system/signed APKs; standard user-space installs will
+         receive "unsupported" from the bridge — never silently ignored. -->
+    <uses-permission android:name="android.permission.REBOOT" />
 
     <!-- Camera permission for camera-based triggers and content -->
     <uses-permission android:name="android.permission.CAMERA" />
