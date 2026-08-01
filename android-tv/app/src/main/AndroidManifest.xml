@@ -36,6 +36,10 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- REBOOT: privileged permission for OS-level reboot/shutdown via PowerManager.
+         Only grantable to system/signed APKs; standard user-space installs will
+         receive "unsupported" from the bridge — never silently ignored. -->
+    <uses-permission android:name="android.permission.REBOOT" />
 
     <!-- Android TV feature declarations -->
     <uses-feature
