@@ -958,14 +958,17 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public String shutdown() {
-            // PowerManager.shutdown() (API 24+) requires android.permission.REBOOT.
-            // Returns "unsupported" on standard user-space installs that cannot
-            // hold the permission, so the dashboard shows an explicit error.
+            // PowerManager.shutdown() is @SystemApi (@hide) — not in the public SDK.
+            // Call via reflection so javac does not reject it at compile time.
+            // Requires android.permission.REBOOT (privileged); user-space APKs always
+            // land in the catch block and return "unsupported".
             try {
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
                     PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
                     if (pm == null) return "unsupported";
-                    pm.shutdown(false, null, false);
+                    java.lang.reflect.Method m = pm.getClass().getMethod(
+                        "shutdown", boolean.class, String.class, boolean.class);
+                    m.invoke(pm, false, null, false);
                     return "acknowledged";
                 }
                 return "unsupported";
