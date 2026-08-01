@@ -26,7 +26,9 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import android.content.Context;
 import android.net.wifi.WifiManager;
+import android.os.PowerManager;
 import android.graphics.Bitmap;
 import android.graphics.Rect;
 import android.util.Base64;
