@@ -2351,6 +2351,12 @@ public class MainActivity extends Activity {
                             // Rebuild all banners from scratch.
                             nativeBannerContainer.removeAllViews();
 
+                              // Read screen rotation from the first banner object (all banners on a
+                              // screen share the same rotation angle). Old JS clients that omit this
+                              // field will default to 0 (no change in behaviour for those devices).
+                              int screenRotation = arr.length() > 0
+                                  ? arr.getJSONObject(0).optInt("rotation", 0) : 0;
+
                             for (int i = 0; i < arr.length(); i++) {
                                 org.json.JSONObject b = arr.getJSONObject(i);
                                 String displayMode  = b.optString("displayMode",    "top_banner");
@@ -2402,7 +2408,35 @@ public class MainActivity extends Activity {
                                 nativeBannerContainer.addView(tv, bannerLp);
                             }
 
-                            nativeBannerContainer.setVisibility(
+                            // Rotate the container to match the WebView CSS transform.
+                              // Native TextViews live in raw screen coordinates and do NOT
+                              // inherit the WebView's CSS rotation — we compensate here so the
+                              // banner appears along the correct edge on rotated screens.
+                              int screenW = getResources().getDisplayMetrics().widthPixels;
+                              int screenH = getResources().getDisplayMetrics().heightPixels;
+                              if (screenRotation == 90 || screenRotation == 270) {
+                                  // Swap the container dimensions so it spans the full rotated
+                                  // width after the transform (landscape 1920×1080 → rotated
+                                  // 1080px wide × 1920px tall in screen coordinates).
+                                  android.widget.FrameLayout.LayoutParams clp =
+                                      new android.widget.FrameLayout.LayoutParams(screenH, screenW);
+                                  clp.gravity = android.view.Gravity.CENTER;
+                                  nativeBannerContainer.setLayoutParams(clp);
+                              } else {
+                                  // Restore full-screen layout for 0° and 180° (no dimension swap).
+                                  android.widget.FrameLayout.LayoutParams clp =
+                                      new android.widget.FrameLayout.LayoutParams(
+                                          android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                          android.view.ViewGroup.LayoutParams.MATCH_PARENT);
+                                  nativeBannerContainer.setLayoutParams(clp);
+                              }
+                              // Pivot on the physical screen centre so the container stays
+                              // centred on-screen after the rotation transform is applied.
+                              nativeBannerContainer.setPivotX(screenW / 2f);
+                              nativeBannerContainer.setPivotY(screenH / 2f);
+                              nativeBannerContainer.setRotation(screenRotation);
+
+                                                          nativeBannerContainer.setVisibility(
                                 arr.length() > 0 ? View.VISIBLE : View.GONE);
 
                             android.util.Log.d("DigipalBroadcast",
