@@ -793,8 +793,32 @@ public class MainActivity extends Activity {
             @android.annotation.TargetApi(Build.VERSION_CODES.O)
             @Override
             public boolean onRenderProcessGone(WebView view, android.webkit.RenderProcessGoneDetail detail) {
-                android.util.Log.w("Digipal", "WebView render process gone; didCrash="
-                    + (detail != null && detail.didCrash()));
+                boolean didCrash = detail != null && detail.didCrash();
+                int rendererPri = -1;
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O && detail != null) {
+                    try { rendererPri = detail.rendererPriorityAtExit(); } catch (Throwable ignored) {}
+                }
+                android.util.Log.w("Digipal", "WebView render process gone; didCrash=" + didCrash
+                    + " rendererPriority=" + rendererPri + " isPrimary=" + (view == webView));
+                // Native-only diagnostics (#2238): do NOT call evaluateJavascript here — the
+                // renderer is gone and JS bridge calls will silently fail or never arrive.
+                // Route through TelemetryManager (persists to Room, syncs on next heartbeat).
+                if (telemetryManager != null) {
+                    try {
+                        String rendKind  = playlistScheduler != null ? playlistScheduler.getCurrentRendererKind() : "";
+                        String slideId   = playlistScheduler != null ? playlistScheduler.getCurrentSlideId()      : "";
+                        int    contentId = playlistScheduler != null ? playlistScheduler.getCurrentContentId()    : 0;
+                        boolean nativeVideoPlaying = exoPlayer != null && exoPlayer.isPlaying();
+                        telemetryManager.logEvent("renderer_process_gone",
+                            slideId.isEmpty() ? "unknown" : slideId,
+                            "{\"didCrash\":" + didCrash
+                            + ",\"rendererPriorityAtExit\":" + rendererPri
+                            + ",\"rendererKind\":\"" + rendKind + "\""
+                            + ",\"contentId\":" + contentId
+                            + ",\"nativeVideoActive\":" + nativeVideoPlaying
+                            + ",\"isPrimary\":" + (view == webView) + "}");
+                    } catch (Throwable ignored) {}
+                }
                 if (view != webView) {
                     try { view.destroy(); } catch (Throwable ignored) {}
                     return true;
@@ -2509,6 +2533,31 @@ public class MainActivity extends Activity {
                     if (playlistScheduler != null) {
                         playlistScheduler.setPlaylist(json);
                         android.util.Log.i("DigipalNative", "[nativeLoop] setNativePlaylist → PlaylistScheduler");
+                        // Lifecycle bridge log (#2238): emit native_playlist_received so
+                        // JS-side playerLogger can distinguish "playlist received" from a
+                        // WebView renderer recreation boot screen. Must run on UI thread.
+                        try {
+                            int _sc = 0; int _fCid = 0; String _fType = "";
+                            try {
+                                org.json.JSONArray _arr = new org.json.JSONArray(json);
+                                _sc = _arr.length();
+                                if (_sc > 0) {
+                                    org.json.JSONObject _f = _arr.getJSONObject(0);
+                                    _fCid  = _f.optInt("contentId", 0);
+                                    _fType = _f.optString("type", "").replaceAll("[^A-Za-z_0-9]", "");
+                                }
+                            } catch (Throwable _pe) {}
+                            if (_sc > 0) {
+                                final String _logJs = "try{if(window.__playerLogFromNative)"
+                                    + "window.__playerLogFromNative('INFO','[native] native_playlist_received"
+                                    + " slides=" + _sc + " firstCid=" + _fCid + " firstType=" + _fType + "')"
+                                    + "}catch(e){}";
+                                runOnUiThread(() -> {
+                                    try { if (webView != null) webView.evaluateJavascript(_logJs, null); }
+                                    catch (Throwable ignored) {}
+                                });
+                            }
+                        } catch (Throwable ignored) {}
                         // Task 1952: an empty playlist means the native loop is
                         // releasing the screen back to the WebView. Nothing else
                         // re-shows it, so undo the dormant state here or the
@@ -3622,6 +3671,20 @@ public class MainActivity extends Activity {
                                       // "owner=native webView hidden timers=paused" above.
                                       android.util.Log.d("RendererOwner", "owner=isolated webView timers=resumed");
                                   }
+                                  // Lifecycle bridge log (#2238): JS is alive here (timers just
+                                  // resumed); evaluateJavascript is safe and the event flows
+                                  // through __playerLogFromNative -> logPlayerEvent pipeline.
+                                  try {
+                                      if (webView != null) {
+                                          webView.evaluateJavascript(
+                                              "try{if(window.__playerLogFromNative)"
+                                              + "window.__playerLogFromNative('INFO',"
+                                              + "'[native] isolated_renderer_activated"
+                                              + " cid=" + s.contentId + " type=" + s.type.name() + "')"
+                                              + "}catch(e){}",
+                                              null);
+                                      }
+                                  } catch (Throwable logIgnored) {}
                                   if (healthMonitor != null) healthMonitor.setRendererTypeWeb();
                                   hideNativeVideoSurfaces();
                                   hideNativeImagesForVideo();
@@ -3698,6 +3761,20 @@ public class MainActivity extends Activity {
                       @Override public void schedulerDeactivateIsolatedRenderer() {
                           runOnUiThread(() -> {
                               try {
+                                  // Lifecycle bridge log (#2238): JS is still alive during
+                                  // normal deactivation (timers may be paused but
+                                  // evaluateJavascript still executes; the event is queued
+                                  // in playerLogger._queue and flushed on next heartbeat).
+                                  if (webView != null) {
+                                      try {
+                                          webView.evaluateJavascript(
+                                              "try{if(window.__playerLogFromNative)"
+                                              + "window.__playerLogFromNative('INFO',"
+                                              + "'[native] isolated_renderer_deactivated')"
+                                              + "}catch(e){}",
+                                              null);
+                                      } catch (Throwable logIgnored) {}
+                                  }
                                   if (isolatedWebRenderer != null) {
                                       isolatedWebRenderer.hide();
                                       // Low-memory WebView policy: on CRITICAL tier, reuse of a hidden
