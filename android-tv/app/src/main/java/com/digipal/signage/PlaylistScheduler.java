@@ -1213,13 +1213,48 @@ public class PlaylistScheduler {
           //                    — never instantiated — and have been deleted.)
           switch (eff) {
               case VIDEO:
+                  final String prevRendererKindForBarrier = currentRendererKind;
                   currentRendererKind = "native_video";
                   delegate.schedulerDeactivateWebView();
                   // Release any isolated per-slide WebView left active from a prior
                   // WEBVIEW_DESIGN/KIOSK/URL slide -- without this it stays alive
                   // (and visible on some z-order paths) behind the native video.
                   delegate.schedulerDeactivateIsolatedRenderer();
-                  delegate.schedulerPlayVideo(dispatch);
+                  // Fire TV / low-RAM decoder-release barrier (#2238): if the outgoing
+                  // slide was an isolated WebView (design/PDF/URL), its embedded <video>
+                  // decoder may still hold a hardware slot. On constrained devices
+                  // (LOW/CRITICAL memory tier) two simultaneous codec clients exhaust
+                  // the media.resource_manager budget and cause Fire OS to kill the
+                  // WebView renderer process (logcat: signal 9 on the chromium sandbox
+                  // right after "registerClient ... 2 ... video=1"). A 150ms delay gives
+                  // the WebView renderer time to release the slot before ExoPlayer
+                  // claims it. The generation token cancels the delayed dispatch if the
+                  // playlist has already advanced while the delay was running.
+                  if ("isolated_webview".equals(prevRendererKindForBarrier)
+                          && !"NORMAL".equals(currentMemoryTier())) {
+                      final int barrierGen = generation;
+                      if (telemetry != null) telemetry.logEvent("decoder_release_wait_applied",
+                              slide.slideId,
+                              "{\"prevRendererKind\":\"" + prevRendererKindForBarrier + "\""
+                              + ",\"memoryTier\":\"" + currentMemoryTier() + "\""
+                              + ",\"index\":" + currentIndex
+                              + ",\"contentId\":" + slide.contentId + ",\"delayMs\":150}");
+                      Log.i(TAG, "[decoder_release_wait] 150ms barrier before video dispatch"
+                              + " prevKind=" + prevRendererKindForBarrier
+                              + " tier=" + currentMemoryTier() + " slide=" + slide.slideId);
+                      final Delegate _delegate = delegate;
+                      final SlidePlan _dispatch = dispatch;
+                      handler.postDelayed(() -> {
+                          if (generation == barrierGen && running) {
+                              _delegate.schedulerPlayVideo(_dispatch);
+                          } else {
+                              Log.i(TAG, "[decoder_release_wait] cancelled gen=" + generation
+                                      + " barrierGen=" + barrierGen + " running=" + running);
+                          }
+                      }, 150);
+                  } else {
+                      delegate.schedulerPlayVideo(dispatch);
+                  }
                   break;
               case IMAGE:
                   currentRendererKind = "native_image";
