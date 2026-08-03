@@ -3423,6 +3423,13 @@ public class MainActivity extends Activity {
                               if (supRef[0] != null) supRef[0].reportSchedulerAdvance();
                               return;
                           }
+                          // #2252 guard: block IMAGE-type slides whose URL is unsafe for Glide
+                          // (e.g. extensionless external URLs like placehold.co that return SVG/unknown MIME).
+                          if (isUnsafeForGlide(_url)) {
+                              android.util.Log.w("DigipalNative", "[native-image-skip] caller=schedulerShowImage unsafeForGlide contentId=" + s.contentId + " urlPath=" + sanitizedUrlPath(_url));
+                              if (supRef[0] != null) supRef[0].reportSchedulerAdvance();
+                              return;
+                          }
                           android.util.Log.d("DigipalNative", "[native-image-attempt] caller=schedulerShowImage type=" + s.type + " contentId=" + s.contentId + " urlPath=" + sanitizedUrlPath(_url));
                           android.util.Log.w("DigipalNative", "[video-pressure] phase=scheduler-show-image type=" + s.type + " contentId=" + s.contentId);
                           if (healthMonitor != null) healthMonitor.setRendererTypeNative();
@@ -3552,6 +3559,11 @@ public class MainActivity extends Activity {
                           // #2243 guard: only allow Glide for positively-known IMAGE slides.
                           if (s.type != PlaylistScheduler.SlideType.IMAGE) {
                               android.util.Log.w("DigipalNative", "[native-image-skip] caller=schedulerPreloadImage type=" + s.type + " contentId=" + s.contentId + " urlPath=" + sanitizedUrlPath(_url));
+                              return;
+                          }
+                          // #2252 guard: block IMAGE-type slides whose URL is unsafe for Glide.
+                          if (isUnsafeForGlide(_url)) {
+                              android.util.Log.w("DigipalNative", "[native-image-skip] caller=schedulerPreloadImage unsafeForGlide contentId=" + s.contentId + " urlPath=" + sanitizedUrlPath(_url));
                               return;
                           }
                           android.util.Log.d("DigipalNative", "[native-image-attempt] caller=schedulerPreloadImage type=" + s.type + " contentId=" + s.contentId + " urlPath=" + sanitizedUrlPath(_url));
