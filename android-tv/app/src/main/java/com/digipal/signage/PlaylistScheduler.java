@@ -131,7 +131,7 @@ public class PlaylistScheduler {
     private State state = State.IDLE;
     private List<SlidePlan> slides = new ArrayList<>();
     private int currentIndex = 0;
-    private boolean running = false;
+    private volatile boolean running = false;
     private int consecutiveFailures = 0;
     private long activeRevisionId = -1;
     private long slideStartMs;
@@ -188,6 +188,7 @@ public class PlaylistScheduler {
     public String getLastWebViewPolicyName() { return lastWebViewPolicy; }
     public String getShellSourceName() { return shellSource; }
     public boolean isLastFallbackUsed() { return lastFallbackUsed; }
+    public boolean isRunning() { return running; }
     public String getMemoryTierName() { return currentMemoryTier(); }
     public String getCurrentSlideId() { return currentSlideId; }
     public int getCurrentContentId() { return currentContentId; }
