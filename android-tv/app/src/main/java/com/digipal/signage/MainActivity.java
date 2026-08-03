@@ -749,6 +749,25 @@ public class MainActivity extends Activity {
                       final android.webkit.WebView _wv2 = webView;
                       runOnUiThread(() -> { if (_wv2 != null) _wv2.evaluateJavascript(_finalJs, null); });
                   } catch (Throwable ignored) {}
+                  // Inject pending native reinit source so JS diagnostics can attribute it.
+                  // Writes to sessionStorage so React mount-time read of digipal_last_reinit
+                  // always picks it up regardless of timing relative to onPageFinished.
+                  try {
+                      android.content.SharedPreferences _p =
+                              getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+                      String _reinit = _p.getString("digipal_pending_native_reinit", null);
+                      if (_reinit != null) {
+                          _p.edit().remove("digipal_pending_native_reinit").apply();
+                          String _rsafe = org.json.JSONObject.quote(_reinit);
+                          final android.webkit.WebView _wv3 = webView;
+                          runOnUiThread(() -> { if (_wv3 != null) _wv3.evaluateJavascript(
+                              "window.__digipalNativeReinit=" + _rsafe + ";"
+                              + "try{sessionStorage.setItem('digipal_last_reinit'," + _rsafe + ");}catch(e){}"
+                              + "try{window.dispatchEvent(new CustomEvent('digipal:native-reinit',"
+                              + "{detail:{source:" + _rsafe + "}}));}catch(e){}",
+                              null); });
+                      }
+                  } catch (Throwable ignored) {}
                 }
             }
 
@@ -4384,6 +4403,10 @@ public class MainActivity extends Activity {
     private int renderGoneIdx = 0;
     private volatile boolean webViewRecoveryInProgress = false;
     private long lastMemoryReloadMs = 0L;
+    // Accessed exclusively on the main thread (onTrimMemory/onLowMemory are Activity
+    // callbacks guaranteed on the main thread; handleMemoryPressure has no off-thread
+    // call path). No need for volatile — main-thread-only access is sufficient.
+    private boolean memoryFallbackCheckPending = false; // deduplicates concurrent 4-s checks
     // --- Self-heal watchdog (heartbeat-based WebView reload) ----------------
     // The web player calls Android.heartbeat() from its JS event loop every few
     // seconds. This main-thread Handler keeps ticking even when the WebView JS
@@ -4523,16 +4546,64 @@ public class MainActivity extends Activity {
                     "window.dispatchEvent(new CustomEvent('android-memory-pressure',{detail:{level:'critical'}}));",
                     null);
                 try { webView.clearCache(false); } catch (Throwable ignored) {}
-                long now = System.currentTimeMillis();
-                if (now - lastMemoryReloadMs > 120_000L) {
-                    lastMemoryReloadMs = now;
-                    // Give the player a few seconds to recover gracefully, then
-                    // reload natively as a safety net if we are still alive.
+                // Only schedule a fallback check if one is not already pending.
+                // memoryFallbackCheckPending is cleared in the finally block of the callback,
+                // so the next trim signal after a suppression can immediately re-arm.
+                // Safe without volatile — this method runs exclusively on the main thread.
+                if (!memoryFallbackCheckPending) {
+                    memoryFallbackCheckPending = true;
+                    final int capturedLevel = level;
                     webView.postDelayed(() -> {
-                        try { webView.evaluateJavascript(
-                            "window.__digipalRecoveryReason='memory_critical_reload';", null);
-                        } catch (Throwable ignored) {}
-                        try { loadPlayerUrl(getServerUrl()); } catch (Throwable ignored) {}
+                        try {
+                            // Re-evaluate here — state can change during the 4-second delay.
+                            boolean schedulerRunning = playlistScheduler != null
+                                    && playlistScheduler.isRunning();
+                            boolean recentHeartbeat  = lastHeartbeatMs > 0
+                                    && System.currentTimeMillis() - lastHeartbeatMs < 60_000L;
+                            boolean activePlayback   = schedulerRunning
+                                    || nativeSingleContentActive
+                                    || (appMountConfirmed && !hasHttpError && recentHeartbeat);
+
+                            if (activePlayback) {
+                                android.util.Log.w("DigipalNative",
+                                    "[DigipalNativeReinit] suppressed source=onTrimMemory-critical"
+                                    + " level=" + capturedLevel
+                                    + " appMounted=" + appMountConfirmed
+                                    + " schedulerRunning=" + schedulerRunning
+                                    + " nativeSingle=" + nativeSingleContentActive
+                                    + " recentHeartbeat=" + recentHeartbeat);
+                                return;
+                            }
+
+                            // Playback is blank/stalled/error — reload is warranted.
+                            // Consume the reload cooldown only here; suppressed paths never touch it.
+                            if (System.currentTimeMillis() - lastMemoryReloadMs <= 120_000L) return;
+                            lastMemoryReloadMs = System.currentTimeMillis();
+
+                            android.util.Log.w("DigipalNative",
+                                "[DigipalNativeReinit] executed source=onTrimMemory-critical"
+                                + " level=" + capturedLevel
+                                + " appMounted=" + appMountConfirmed
+                                + " schedulerRunning=" + schedulerRunning
+                                + " nativeSingle=" + nativeSingleContentActive
+                                + " recentHeartbeat=" + recentHeartbeat);
+
+                            // Persist source before reload so the next page load can report it.
+                            // Uses PREFS_NAME ("DigipalPrefs") — same file as crash pipeline.
+                            try {
+                                getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                                    .putString("digipal_pending_native_reinit",
+                                        "memory_pressure_critical:" + capturedLevel)
+                                    .apply();
+                            } catch (Throwable ignored) {}
+
+                            try { loadPlayerUrl(getServerUrl()); } catch (Throwable ignored) {}
+
+                        } finally {
+                            // Always clear pending so the next trim signal can re-arm
+                            // immediately, even after a suppression.
+                            memoryFallbackCheckPending = false;
+                        }
                     }, 4000);
                 }
             } else if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
