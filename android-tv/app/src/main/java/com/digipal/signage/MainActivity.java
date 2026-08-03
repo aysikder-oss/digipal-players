@@ -1943,6 +1943,12 @@ public class MainActivity extends Activity {
           @android.webkit.JavascriptInterface
             public void showNativeImage(String url, float x, float y, float w, float h, String scaleType, String contentIdStr) {
                 if (BuildConfig.DEBUG) DebugTools.logBridgeCall("showNativeImage", "contentId=" + contentIdStr + " scale=" + scaleType + " url=" + (url != null && url.length() > 60 ? url.substring(0, 60) : url));
+                // #2243 guard: skip Glide if URL looks like a video file.
+                if (isVideoUrl(url)) {
+                    android.util.Log.w("DigipalNative", "[native-image-skip] caller=showNativeImage urlPath=" + sanitizedUrlPath(url) + " contentId=" + contentIdStr);
+                    return;
+                }
+                android.util.Log.d("DigipalNative", "[native-image-attempt] caller=showNativeImage urlPath=" + sanitizedUrlPath(url) + " contentId=" + contentIdStr);
                 // Mark single-content native image as active so the revision watchdog
                 // does not fire forcePlayerReload() while Glide is still loading.
                 nativeSingleContentActive = true;
@@ -2137,6 +2143,12 @@ public class MainActivity extends Activity {
 
             @android.webkit.JavascriptInterface
               public void preloadNativeImage(String url) {
+                  // #2243 guard: skip Glide if URL looks like a video file.
+                  if (isVideoUrl(url)) {
+                      android.util.Log.w("DigipalNative", "[native-image-skip] caller=preloadNativeImage urlPath=" + sanitizedUrlPath(url));
+                      return;
+                  }
+                  android.util.Log.d("DigipalNative", "[native-image-attempt] caller=preloadNativeImage urlPath=" + sanitizedUrlPath(url));
                   runOnUiThread(() -> {
                       try {
                           if (url.equals(preloadedImageUrl) && preloadImageReady) return;
@@ -3404,6 +3416,13 @@ public class MainActivity extends Activity {
                           final String _url = (s.url != null && s.url.startsWith("/")) ? getServerUrl() + s.url : s.url; final String _sc = s.scaleType;
                           final String _sid = s.slideId;
                           final long _dur = s.durationMs;
+                          // #2243 guard: only allow Glide for positively-known IMAGE slides.
+                          if (s.type != PlaylistScheduler.SlideType.IMAGE) {
+                              android.util.Log.w("DigipalNative", "[native-image-skip] caller=schedulerShowImage type=" + s.type + " contentId=" + s.contentId + " urlPath=" + sanitizedUrlPath(_url));
+                              if (supRef[0] != null) supRef[0].reportSchedulerAdvance();
+                              return;
+                          }
+                          android.util.Log.d("DigipalNative", "[native-image-attempt] caller=schedulerShowImage type=" + s.type + " contentId=" + s.contentId + " urlPath=" + sanitizedUrlPath(_url));
                           if (healthMonitor != null) healthMonitor.setRendererTypeNative();
                           try { io.sentry.Breadcrumb _iBc = new io.sentry.Breadcrumb("Slide start: IMAGE"); _iBc.setCategory("playback"); _iBc.setType("info"); _iBc.setLevel(io.sentry.SentryLevel.DEBUG); _iBc.setData("slide_id", _sid); _iBc.setData("duration_ms", _dur); io.sentry.Sentry.addBreadcrumb(_iBc); } catch (Throwable _sbc) {}
                           runOnUiThread(() -> {
@@ -3527,6 +3546,12 @@ public class MainActivity extends Activity {
                       }
                       @Override public void schedulerPreloadImage(PlaylistScheduler.SlidePlan s) {
                           final String _url = (s.url != null && s.url.startsWith("/")) ? getServerUrl() + s.url : s.url;
+                          // #2243 guard: only allow Glide for positively-known IMAGE slides.
+                          if (s.type != PlaylistScheduler.SlideType.IMAGE) {
+                              android.util.Log.w("DigipalNative", "[native-image-skip] caller=schedulerPreloadImage type=" + s.type + " contentId=" + s.contentId + " urlPath=" + sanitizedUrlPath(_url));
+                              return;
+                          }
+                          android.util.Log.d("DigipalNative", "[native-image-attempt] caller=schedulerPreloadImage type=" + s.type + " contentId=" + s.contentId + " urlPath=" + sanitizedUrlPath(_url));
                           runOnUiThread(() -> {
                               try {
                                   // Preload image directly in Java — no WebView hop
@@ -5026,6 +5051,27 @@ public class MainActivity extends Activity {
           }
       }
   
+    /** Returns the last path segment of a URL with query string stripped.
+     *  Used for safe logging — never log full signed URLs. */
+    private static String sanitizedUrlPath(String url) {
+        if (url == null) return "null";
+        int q = url.indexOf('?'); if (q >= 0) url = url.substring(0, q);
+        int s = url.lastIndexOf('/'); return s >= 0 ? url.substring(s) : url;
+    }
+
+    /** Heuristic: returns true when the URL path ends with a known video extension.
+     *  Used as a secondary defensive guard in JS-bridge image methods where SlideType
+     *  is not available. */
+    private static boolean isVideoUrl(String url) {
+        if (url == null) return false;
+        String path = url.indexOf('?') >= 0 ? url.substring(0, url.indexOf('?')) : url;
+        String lower = path.toLowerCase(java.util.Locale.ROOT);
+        return lower.endsWith(".mp4") || lower.endsWith(".mov") || lower.endsWith(".webm")
+            || lower.endsWith(".avi") || lower.endsWith(".m4v") || lower.endsWith(".mkv")
+            || lower.endsWith(".ts");
+    }
+
+
 }
 
 
