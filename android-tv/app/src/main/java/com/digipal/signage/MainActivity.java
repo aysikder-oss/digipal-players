@@ -3396,6 +3396,7 @@ public class MainActivity extends Activity {
                           final boolean _loop = s.loop; final float _vol = s.volume;
                           final String _sid = s.slideId; final int _contentId = s.contentId;
                           final long _dur = s.durationMs;
+                          android.util.Log.d("DigipalNative", "[video-pressure] phase=scheduler-play-video type=" + s.type + " contentId=" + _contentId);
                           if (healthMonitor != null) healthMonitor.setRendererTypeNative();
                           runOnUiThread(() -> {
                               try {
@@ -3423,6 +3424,7 @@ public class MainActivity extends Activity {
                               return;
                           }
                           android.util.Log.d("DigipalNative", "[native-image-attempt] caller=schedulerShowImage type=" + s.type + " contentId=" + s.contentId + " urlPath=" + sanitizedUrlPath(_url));
+                          android.util.Log.d("DigipalNative", "[video-pressure] phase=scheduler-show-image type=" + s.type + " contentId=" + s.contentId);
                           if (healthMonitor != null) healthMonitor.setRendererTypeNative();
                           try { io.sentry.Breadcrumb _iBc = new io.sentry.Breadcrumb("Slide start: IMAGE"); _iBc.setCategory("playback"); _iBc.setType("info"); _iBc.setLevel(io.sentry.SentryLevel.DEBUG); _iBc.setData("slide_id", _sid); _iBc.setData("duration_ms", _dur); io.sentry.Sentry.addBreadcrumb(_iBc); } catch (Throwable _sbc) {}
                           runOnUiThread(() -> {
@@ -3511,6 +3513,7 @@ public class MainActivity extends Activity {
                       }
                       @Override public void schedulerPreloadVideo(PlaylistScheduler.SlidePlan s) {
                           final String _url = (s.url != null && s.url.startsWith("/")) ? getServerUrl() + s.url : s.url;
+                          android.util.Log.d("DigipalNative", "[video-pressure] phase=scheduler-preload-video type=" + s.type + " contentId=" + s.contentId);
                           runOnUiThread(() -> {
                               try {
                                   // Preload video directly in Java — no WebView hop
@@ -3552,6 +3555,7 @@ public class MainActivity extends Activity {
                               return;
                           }
                           android.util.Log.d("DigipalNative", "[native-image-attempt] caller=schedulerPreloadImage type=" + s.type + " contentId=" + s.contentId + " urlPath=" + sanitizedUrlPath(_url));
+                          android.util.Log.d("DigipalNative", "[video-pressure] phase=scheduler-preload-image type=" + s.type + " contentId=" + s.contentId);
                           runOnUiThread(() -> {
                               try {
                                   // Preload image directly in Java — no WebView hop
