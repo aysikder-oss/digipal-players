@@ -3396,7 +3396,7 @@ public class MainActivity extends Activity {
                           final boolean _loop = s.loop; final float _vol = s.volume;
                           final String _sid = s.slideId; final int _contentId = s.contentId;
                           final long _dur = s.durationMs;
-                          android.util.Log.d("DigipalNative", "[video-pressure] phase=scheduler-play-video type=" + s.type + " contentId=" + _contentId);
+                          android.util.Log.w("DigipalNative", "[video-pressure] phase=scheduler-play-video type=" + s.type + " contentId=" + _contentId);
                           if (healthMonitor != null) healthMonitor.setRendererTypeNative();
                           runOnUiThread(() -> {
                               try {
@@ -3424,7 +3424,7 @@ public class MainActivity extends Activity {
                               return;
                           }
                           android.util.Log.d("DigipalNative", "[native-image-attempt] caller=schedulerShowImage type=" + s.type + " contentId=" + s.contentId + " urlPath=" + sanitizedUrlPath(_url));
-                          android.util.Log.d("DigipalNative", "[video-pressure] phase=scheduler-show-image type=" + s.type + " contentId=" + s.contentId);
+                          android.util.Log.w("DigipalNative", "[video-pressure] phase=scheduler-show-image type=" + s.type + " contentId=" + s.contentId);
                           if (healthMonitor != null) healthMonitor.setRendererTypeNative();
                           try { io.sentry.Breadcrumb _iBc = new io.sentry.Breadcrumb("Slide start: IMAGE"); _iBc.setCategory("playback"); _iBc.setType("info"); _iBc.setLevel(io.sentry.SentryLevel.DEBUG); _iBc.setData("slide_id", _sid); _iBc.setData("duration_ms", _dur); io.sentry.Sentry.addBreadcrumb(_iBc); } catch (Throwable _sbc) {}
                           runOnUiThread(() -> {
@@ -3513,7 +3513,7 @@ public class MainActivity extends Activity {
                       }
                       @Override public void schedulerPreloadVideo(PlaylistScheduler.SlidePlan s) {
                           final String _url = (s.url != null && s.url.startsWith("/")) ? getServerUrl() + s.url : s.url;
-                          android.util.Log.d("DigipalNative", "[video-pressure] phase=scheduler-preload-video type=" + s.type + " contentId=" + s.contentId);
+                          android.util.Log.w("DigipalNative", "[video-pressure] phase=scheduler-preload-video type=" + s.type + " contentId=" + s.contentId);
                           runOnUiThread(() -> {
                               try {
                                   // Preload video directly in Java — no WebView hop
@@ -3555,7 +3555,7 @@ public class MainActivity extends Activity {
                               return;
                           }
                           android.util.Log.d("DigipalNative", "[native-image-attempt] caller=schedulerPreloadImage type=" + s.type + " contentId=" + s.contentId + " urlPath=" + sanitizedUrlPath(_url));
-                          android.util.Log.d("DigipalNative", "[video-pressure] phase=scheduler-preload-image type=" + s.type + " contentId=" + s.contentId);
+                          android.util.Log.w("DigipalNative", "[video-pressure] phase=scheduler-preload-image type=" + s.type + " contentId=" + s.contentId);
                           runOnUiThread(() -> {
                               try {
                                   // Preload image directly in Java — no WebView hop
@@ -5066,17 +5066,51 @@ public class MainActivity extends Activity {
     /** Heuristic: returns true when the URL path ends with a known video extension.
      *  Used as a secondary defensive guard in JS-bridge image methods where SlideType
      *  is not available. */
-    /** Returns true when the URL path ends with a known video or SVG extension.
-     *  SVG is blocked because Glide has no built-in SVG decoder and falls through
-     *  to MediaMetadataRetriever/Stagefright, causing a CPU burst (#2245). */
+    /** Returns true when the URL should NOT be fed to Glide.
+     *
+     *  Blocks:
+     *   - Known video extensions (.mp4, .mov, .webm, etc.)
+     *   - .svg extension
+     *   - External HTTP(S) URLs whose path has no file extension, or whose
+     *     extension is not a known safe raster format.  Covers URLs like
+     *     https://placehold.co/1920x1080/ec4899/fff?text=Spring+Sale which
+     *     return image/svg+xml but carry no .svg extension.
+     *     Internal /objects/ paths are exempt because they always have
+     *     proper raster extensions baked into the object key.
+     */
     private static boolean isUnsafeForGlide(String url) {
         if (url == null) return false;
         String path = url.indexOf('?') >= 0 ? url.substring(0, url.indexOf('?')) : url;
         String lower = path.toLowerCase(java.util.Locale.ROOT);
-        return lower.endsWith(".mp4") || lower.endsWith(".mov") || lower.endsWith(".webm")
+        // Always block video and SVG extensions
+        if (lower.endsWith(".mp4") || lower.endsWith(".mov") || lower.endsWith(".webm")
             || lower.endsWith(".avi") || lower.endsWith(".m4v") || lower.endsWith(".mkv")
-            || lower.endsWith(".ts") || lower.endsWith(".svg");
+            || lower.endsWith(".ts") || lower.endsWith(".svg")) {
+            return true;
+        }
+        // For external HTTP(S) URLs apply a raster-extension allowlist.
+        // Extensionless external URLs (e.g. placehold.co/…) often serve SVG or
+        // other non-raster MIME types that Glide cannot decode and falls through
+        // to Stagefright/MediaMetadataRetriever, causing a CPU burst.
+        // Internal /objects/ paths are excluded — they always have a raster extension.
+        if ((lower.startsWith("http://") || lower.startsWith("https://"))
+                && !lower.contains("/objects/")) {
+            int lastSlash = lower.lastIndexOf('/');
+            String lastSegment = lastSlash >= 0 ? lower.substring(lastSlash + 1) : lower;
+            int dot = lastSegment.lastIndexOf('.');
+            if (dot < 0) {
+                // No extension — external URL with unknown content type; block it
+                return true;
+            }
+            String ext = lastSegment.substring(dot);
+            boolean safeRaster = ext.equals(".jpg") || ext.equals(".jpeg")
+                || ext.equals(".png") || ext.equals(".webp") || ext.equals(".gif")
+                || ext.equals(".bmp") || ext.equals(".avif");
+            return !safeRaster;
+        }
+        return false;
     }
+
 
 
 }
