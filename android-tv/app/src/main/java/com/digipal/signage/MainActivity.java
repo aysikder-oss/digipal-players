@@ -1943,9 +1943,9 @@ public class MainActivity extends Activity {
           @android.webkit.JavascriptInterface
             public void showNativeImage(String url, float x, float y, float w, float h, String scaleType, String contentIdStr) {
                 if (BuildConfig.DEBUG) DebugTools.logBridgeCall("showNativeImage", "contentId=" + contentIdStr + " scale=" + scaleType + " url=" + (url != null && url.length() > 60 ? url.substring(0, 60) : url));
-                // #2243 guard: skip Glide if URL looks like a video file.
-                if (isVideoUrl(url)) {
-                    android.util.Log.w("DigipalNative", "[native-image-skip] caller=showNativeImage urlPath=" + sanitizedUrlPath(url) + " contentId=" + contentIdStr);
+                // #2243/#2245 guard: skip Glide for video or SVG URLs.
+                if (isUnsafeForGlide(url)) {
+                    android.util.Log.w("DigipalNative", "[native-image-skip] caller=showNativeImage unsafeForGlide urlPath=" + sanitizedUrlPath(url) + " contentId=" + contentIdStr);
                     return;
                 }
                 android.util.Log.d("DigipalNative", "[native-image-attempt] caller=showNativeImage urlPath=" + sanitizedUrlPath(url) + " contentId=" + contentIdStr);
@@ -2143,9 +2143,9 @@ public class MainActivity extends Activity {
 
             @android.webkit.JavascriptInterface
               public void preloadNativeImage(String url) {
-                  // #2243 guard: skip Glide if URL looks like a video file.
-                  if (isVideoUrl(url)) {
-                      android.util.Log.w("DigipalNative", "[native-image-skip] caller=preloadNativeImage urlPath=" + sanitizedUrlPath(url));
+                  // #2243/#2245 guard: skip Glide for video or SVG URLs.
+                  if (isUnsafeForGlide(url)) {
+                      android.util.Log.w("DigipalNative", "[native-image-skip] caller=preloadNativeImage unsafeForGlide urlPath=" + sanitizedUrlPath(url));
                       return;
                   }
                   android.util.Log.d("DigipalNative", "[native-image-attempt] caller=preloadNativeImage urlPath=" + sanitizedUrlPath(url));
@@ -5062,13 +5062,16 @@ public class MainActivity extends Activity {
     /** Heuristic: returns true when the URL path ends with a known video extension.
      *  Used as a secondary defensive guard in JS-bridge image methods where SlideType
      *  is not available. */
-    private static boolean isVideoUrl(String url) {
+    /** Returns true when the URL path ends with a known video or SVG extension.
+     *  SVG is blocked because Glide has no built-in SVG decoder and falls through
+     *  to MediaMetadataRetriever/Stagefright, causing a CPU burst (#2245). */
+    private static boolean isUnsafeForGlide(String url) {
         if (url == null) return false;
         String path = url.indexOf('?') >= 0 ? url.substring(0, url.indexOf('?')) : url;
         String lower = path.toLowerCase(java.util.Locale.ROOT);
         return lower.endsWith(".mp4") || lower.endsWith(".mov") || lower.endsWith(".webm")
             || lower.endsWith(".avi") || lower.endsWith(".m4v") || lower.endsWith(".mkv")
-            || lower.endsWith(".ts");
+            || lower.endsWith(".ts") || lower.endsWith(".svg");
     }
 
 
