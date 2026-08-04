@@ -1,9 +1,11 @@
-package com.nexuscast.player;
+package com.digipal.signage;
 
+import android.app.ActivityManager;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
@@ -21,9 +23,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * parallel means the *real* player WebView created shortly after (in
  * ServerSetupActivity/MainActivity) already has a warm renderer to attach
  * to, instead of paying that cold-start cost on the critical path.
+ *
+ * On low-RAM devices (< 512 MB free or isLowRamDevice flag set) the warm-up
+ * is skipped entirely: the OS would OOM-kill the throwaway renderer process
+ * immediately, wasting both RAM and startup time and producing a spurious
+ * "Renderer process crash" logcat entry with no user-visible effect.
  */
 public final class WebViewWarmer {
     private static final String TAG = "WebViewWarmer";
+    private static final long MIN_FREE_MB = 512L;
     private static volatile boolean warmed = false;
 
     private WebViewWarmer() {}
@@ -33,6 +41,10 @@ public final class WebViewWarmer {
         warmed = true;
         try {
             final Context appContext = context.getApplicationContext();
+            if (isLowMemoryDevice(appContext)) {
+                Log.i(TAG, "Skipping WebView pre-warm on low-RAM device");
+                return;
+            }
             new Handler(Looper.getMainLooper()).post(() -> {
                 try {
                     final WebView warmWebView = new WebView(appContext);
@@ -51,9 +63,19 @@ public final class WebViewWarmer {
                         public void onPageFinished(WebView view, String url) {
                             destroyOnce.run();
                         }
+
+                        @Override
+                        public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                            // Renderer was OOM-killed before warm-up completed — clean up and
+                            // return true so Android does NOT finish any Activity.
+                            Log.i(TAG, "Pre-warm renderer gone (non-fatal), cleaning up");
+                            destroyed.set(true);
+                            try { view.destroy(); } catch (Throwable ignored) {}
+                            return true;
+                        }
                     });
                     warmWebView.loadUrl("about:blank");
-                    // Safety net in case onPageFinished never fires on some OEM WebViews.
+                    // Safety net: onPageFinished may never fire on some OEM WebViews.
                     new Handler(Looper.getMainLooper()).postDelayed(destroyOnce, 3000);
                 } catch (Throwable t) {
                     Log.w(TAG, "WebView pre-warm failed (non-fatal): " + t.getMessage());
@@ -62,5 +84,14 @@ public final class WebViewWarmer {
         } catch (Throwable t) {
             Log.w(TAG, "WebView pre-warm scheduling failed: " + t.getMessage());
         }
+    }
+
+    private static boolean isLowMemoryDevice(Context context) {
+        ActivityManager am = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
+        if (am == null) return false;
+        if (am.isLowRamDevice()) return true;
+        ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
+        am.getMemoryInfo(mi);
+        return (mi.availMem / (1024L * 1024L)) < MIN_FREE_MB;
     }
 }
