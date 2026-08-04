@@ -1,4 +1,4 @@
-package com.nexuscast.player;
+package com.digipal.signage;
 
   import android.content.Context;
   import android.os.Handler;
@@ -223,9 +223,16 @@ package com.nexuscast.player;
           }
 
           if (!verifyErrors.isEmpty()) {
-              String reason = "verify: " + verifyErrors.get(0)
+              // Log every failed slide individually so operators can pinpoint the broken asset.
+              for (String err : verifyErrors) {
+                  Log.e("DigipalPipeline", "[verify] revId=" + revId + " SLIDE_FAILED " + err);
+              }
+              String reason = "verify:" + verifyErrors.get(0)
                       + (verifyErrors.size() > 1 ? " (+" + (verifyErrors.size()-1) + " more)" : "");
-              Log.e(TAG, "[pipeline] revId=" + revId + " FAILED " + reason);
+              Log.e("DigipalPipeline", "[pipeline] revId=" + revId
+                      + " status=FAILED reason=" + reason
+                      + " assets_total=" + paths.size()
+                      + " assets_failed=" + verifyErrors.size());
               markRevisionFailed(revId, reason);
               cb.onFailed(revId, reason);
               return;
@@ -236,6 +243,10 @@ package com.nexuscast.player;
           db.revisionDao().setLocalManifest(revId, localManifest);
           db.revisionDao().setStatus(revId, "READY");
           Log.i(TAG, "[pipeline] revId=" + revId + " READY failCount=" + failCount);
+          Log.i("DigipalPipeline", "[pipeline] revId=" + revId
+                  + " status=READY assets_total=" + paths.size()
+                  + " assets_verified=" + (paths.size() - failCount)
+                  + " assets_downloaded_failed=" + failCount);
 
           // 7. Fire callback
           cb.onReady(revId, localManifest);
@@ -258,6 +269,8 @@ package com.nexuscast.player;
           // Prune legacy SUPERSEDED rows older than 7 days
           db.revisionDao().pruneOld(System.currentTimeMillis() - 7L * 86400 * 1000);
           Log.i(TAG, "[pipeline] promoted revisionDbId=" + revisionDbId + " → ACTIVE");
+          Log.i("DigipalPipeline", "[pipeline] revId=" + revisionDbId
+                  + " status=ACTIVE promoted=true");
 
           // Schedule ROLLED_BACK cleanup after grace period. Dispatch onto
           // dbExec (not directly onto the main-thread Handler) since the
