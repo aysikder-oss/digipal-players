@@ -6,5 +6,5 @@ pluginManagement {
     }
 }
 
-rootProject.name = "NexusCast"
+rootProject.name = "DigipalPlayer"
 include ':app'
