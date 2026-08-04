@@ -1,4 +1,4 @@
-package com.nexuscast.player;
+package com.digipal.signage;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
@@ -26,7 +26,9 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import android.content.Context;
 import android.net.wifi.WifiManager;
+import android.os.PowerManager;
 import android.graphics.Bitmap;
 import android.graphics.Rect;
 import android.util.Base64;
@@ -131,6 +133,7 @@ public class MainActivity extends Activity {
     private boolean preloadVideoReady = false;
     private String preloadedImageUrl;
     private boolean preloadImageReady = false;
+    private android.widget.ImageView preloadedImageView = null; // which view holds the current preload
     // Dual-buffer B views â preloaded content renders here silently while A is visible
     private androidx.media3.ui.PlayerView nativeVideoViewB;
     private android.widget.ImageView nativeImageViewB;
@@ -173,6 +176,37 @@ public class MainActivity extends Activity {
     private boolean nativeFirstRendering = false;
     // Fix 3: generation token to cancel stale WebView recreations.
     private volatile int dormantGeneration = 0;
+    // Broadcast overlay bridge: true while a React BroadcastOverlay is active.
+    // schedulerDeactivateWebView() respects this flag and does NOT hide the WebView
+    // when a broadcast is showing, so the overlay remains visible over native content.
+    private volatile boolean hasBroadcastActive = false;
+    // Native banner container: a FrameLayout added above all layers (WebView, ExoPlayer,
+    // Glide) for top_banner / bottom_banner broadcasts. Created once on first use.
+    // Sits at translationZ/elevation 20000 so it is always on top.
+    private android.widget.FrameLayout nativeBannerContainer = null;
+    // True while the native PlaylistScheduler is the active display owner
+    // (set in schedulerDeactivateWebView, cleared on IDLE state). Used by
+    // setHasBroadcast() to decide whether to re-hide the WebView after a broadcast clears.
+    private volatile boolean nativeSchedulerOwnsDisplay = false;
+    // True when the WebView is currently dormant (setWebViewDormant(true) was
+    // called and not yet reversed). Used by the revision watchdog to distinguish
+    // a genuinely frozen WebView (needs reload) from an active one (JS will handle
+    // the revision via its normal 30 s poll — no reload needed).
+    private volatile boolean isWebViewCurrentlyDormant = false;
+    // True while the PlaylistScheduler holds a non-empty playlist.  Set in
+    // setNativePlaylist() so the revision watchdog can skip a reload during
+    // PREPARING state (before schedulerDeactivateWebView fires and sets
+    // nativeSchedulerOwnsDisplay=true).  Cleared when an empty playlist arrives.
+    private volatile boolean hasActiveNativePlaylist = false;
+    /**
+     * True while a JS-driven (single-content) showNativeImage() or playNativeVideo()
+     * call is in-flight or actively displaying. This is distinct from
+     * nativeSchedulerOwnsDisplay (PlaylistScheduler) and hasActiveNativePlaylist.
+     * Used by the revision watchdog to skip forcePlayerReload() when Glide or ExoPlayer
+     * is loading for a standalone native image/video (e.g. schedule-end default content).
+     */
+    private volatile boolean nativeSingleContentActive = false;
+    private DebugHudManager debugHudManager;
     /** Duration (ms) of the currently active native slide. Used by setWebViewDormant
      *  to skip WebView recreation for short slides (Fix 8). */
     private volatile long currentNativeSlideDurationMs = 0L;
@@ -192,13 +226,14 @@ public class MainActivity extends Activity {
     private static final long   BUF_WATCHDOG_INTERVAL_MS = 5_000L;   // check every 5s
     private static final int    BUF_WATCHDOG_STALL_TICKS = 3;        // 3 × 5s = 15s threshold
     // Native content loop — drives video/image slides via NativePlaylistManager without WebView
+    /** Test-only hook: set before launching Activity to record bridge calls with timestamps.
+     *  Production code never reads this; it is always null in releases. */
+    static volatile com.digipal.signage.BridgeCallRecorder __testBridgeRecorder = null;
+
+    private static final String BRIDGE_TAG = "DigipalBridge";
     private volatile String pendingNativePlaylistJson; // Codex fix 7: buffered playlist JSON until PlaylistScheduler is constructed
     private volatile String lastAppliedContentRevision = "";
     private volatile long lastNativePlaylistSetAtMs = 0L;
-    private volatile boolean hasBroadcastActive = false;
-    private volatile boolean nativeSchedulerOwnsDisplay = false;
-    private volatile boolean hasActiveNativePlaylist = false;
-    private volatile boolean isWebViewCurrentlyDormant = false;
     private final android.os.Handler contentRevisionHandler =
             new android.os.Handler(android.os.Looper.getMainLooper());
       // Native heartbeat for Fire TV: when WebView is paused (timers frozen), a Java
@@ -231,6 +266,11 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         activityAlive = true;
+        // Log the relaunch reason so logcat clearly shows why the app was relaunched
+        // (boot, watchdog_deadman, webview_package_replaced, my_package_replaced, etc.)
+        String _relaunchReason = getIntent() != null ? getIntent().getStringExtra("relaunchReason") : null;
+        android.util.Log.i("DigipalRecovery", "MainActivity launched, reason="
+                + (_relaunchReason != null ? _relaunchReason : "cold_start"));
           // WorkManager crash recovery: start the periodic backup worker.
           // Crash-counter reset (onCleanStart) is deferred to armStablePlaybackTimer() —
           // it fires only after 3 minutes of consecutive clean playback, preventing the
@@ -240,6 +280,7 @@ public class MainActivity extends Activity {
           final Thread.UncaughtExceptionHandler _prevCrashHandler = Thread.getDefaultUncaughtExceptionHandler();
           Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
               try { AppRecoverManager.scheduleRecovery(getApplicationContext()); } catch (Throwable ignored) {}
+              if (BuildConfig.DEBUG) { try { DebugTools.writeCrashReport(getApplicationContext(), thread, throwable); } catch (Throwable ignored2) {} }
               if (_prevCrashHandler != null) _prevCrashHandler.uncaughtException(thread, throwable);
               else android.os.Process.killProcess(android.os.Process.myPid());
           });
@@ -261,12 +302,10 @@ public class MainActivity extends Activity {
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setFlags(
             WindowManager.LayoutParams.FLAG_FULLSCREEN |
-            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
             WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD |
             WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
             WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON,
             WindowManager.LayoutParams.FLAG_FULLSCREEN |
-            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
             WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD |
             WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
             WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
@@ -382,12 +421,47 @@ public class MainActivity extends Activity {
         debugOverlayParams.leftMargin = 24;
         root.addView(nativeDebugOverlay, debugOverlayParams);
 
+        // Debug HUD (debug builds only) — toggle with remote Info key
+        if (BuildConfig.DEBUG) {
+            debugHudManager = new DebugHudManager(root, this);
+            debugHudManager.setDataProvider(() -> {
+                StringBuilder sb = new StringBuilder();
+                sb.append("=== Digipal Debug HUD ===\n");
+                sb.append("app  : ").append(BuildConfig.VERSION_NAME).append(" (").append(BuildConfig.GIT_SHA).append(")\n");
+                sb.append("webV : vis=").append(webView != null ? webView.getVisibility() : -1)
+                  .append(" dormant=").append(isWebViewCurrentlyDormant)
+                  .append(" nativePl=").append(hasActiveNativePlaylist).append("\n");
+                sb.append("exo  : state=").append(exoPlayer != null ? exoPlayer.getPlaybackState() : -1)
+                  .append(" pos=").append(exoPlayer != null ? exoPlayer.getCurrentPosition() : -1).append("ms\n");
+                sb.append("broadcast=").append(hasBroadcastActive)
+                  .append("  schOwns=").append(nativeSchedulerOwnsDisplay).append("\n");
+                sb.append(DebugTools.getMemoryStats(getApplicationContext())).append("\n");
+                long hbAgo = System.currentTimeMillis() - lastHeartbeatMs;
+                sb.append("hb   : ").append(hbAgo < 60_000 ? hbAgo + "ms ago" : "STALE").append("\n");
+                sb.append("Info key = toggle HUD");
+                return sb.toString();
+            });
+        }
+
         setContentView(root);
 
 
         mediaDownloadManager = new MediaDownloadManager(this);
         mediaDownloadManager.setWebView(webView);
         mediaDownloadManager.cleanupOrphans();
+
+        // Request ACCESS_FINE_LOCATION once so the diagnostics bridge can read the
+        // WiFi SSID (WifiManager.getConnectionInfo() requires this on Android 10+).
+        // Non-blocking: playback is never gated on this. If the user denies, the SSID
+        // field is simply omitted from getDeviceDiagnostics() output.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M &&
+            checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) !=
+                android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{
+                android.Manifest.permission.ACCESS_COARSE_LOCATION,
+                android.Manifest.permission.ACCESS_FINE_LOCATION
+            }, 0 /* REQUEST_LOCATION_FOR_WIFI_SSID */);
+        }
 
         
           // Start crash watchdog â relaunches app within 10s if it crashes or is killed.
@@ -675,6 +749,25 @@ public class MainActivity extends Activity {
                       final android.webkit.WebView _wv2 = webView;
                       runOnUiThread(() -> { if (_wv2 != null) _wv2.evaluateJavascript(_finalJs, null); });
                   } catch (Throwable ignored) {}
+                  // Inject pending native reinit source so JS diagnostics can attribute it.
+                  // Writes to sessionStorage so React mount-time read of digipal_last_reinit
+                  // always picks it up regardless of timing relative to onPageFinished.
+                  try {
+                      android.content.SharedPreferences _p =
+                              getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+                      String _reinit = _p.getString("digipal_pending_native_reinit", null);
+                      if (_reinit != null) {
+                          _p.edit().remove("digipal_pending_native_reinit").apply();
+                          String _rsafe = org.json.JSONObject.quote(_reinit);
+                          final android.webkit.WebView _wv3 = webView;
+                          runOnUiThread(() -> { if (_wv3 != null) _wv3.evaluateJavascript(
+                              "window.__digipalNativeReinit=" + _rsafe + ";"
+                              + "try{sessionStorage.setItem('digipal_last_reinit'," + _rsafe + ");}catch(e){}"
+                              + "try{window.dispatchEvent(new CustomEvent('digipal:native-reinit',"
+                              + "{detail:{source:" + _rsafe + "}}));}catch(e){}",
+                              null); });
+                      }
+                  } catch (Throwable ignored) {}
                 }
             }
 
@@ -719,8 +812,32 @@ public class MainActivity extends Activity {
             @android.annotation.TargetApi(Build.VERSION_CODES.O)
             @Override
             public boolean onRenderProcessGone(WebView view, android.webkit.RenderProcessGoneDetail detail) {
-                android.util.Log.w("Digipal", "WebView render process gone; didCrash="
-                    + (detail != null && detail.didCrash()));
+                boolean didCrash = detail != null && detail.didCrash();
+                int rendererPri = -1;
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O && detail != null) {
+                    try { rendererPri = detail.rendererPriorityAtExit(); } catch (Throwable ignored) {}
+                }
+                android.util.Log.w("Digipal", "WebView render process gone; didCrash=" + didCrash
+                    + " rendererPriority=" + rendererPri + " isPrimary=" + (view == webView));
+                // Native-only diagnostics (#2238): do NOT call evaluateJavascript here — the
+                // renderer is gone and JS bridge calls will silently fail or never arrive.
+                // Route through TelemetryManager (persists to Room, syncs on next heartbeat).
+                if (telemetryManager != null) {
+                    try {
+                        String rendKind  = playlistScheduler != null ? playlistScheduler.getCurrentRendererKind() : "";
+                        String slideId   = playlistScheduler != null ? playlistScheduler.getCurrentSlideId()      : "";
+                        int    contentId = playlistScheduler != null ? playlistScheduler.getCurrentContentId()    : 0;
+                        boolean nativeVideoPlaying = exoPlayer != null && exoPlayer.isPlaying();
+                        telemetryManager.logEvent("renderer_process_gone",
+                            slideId.isEmpty() ? "unknown" : slideId,
+                            "{\"didCrash\":" + didCrash
+                            + ",\"rendererPriorityAtExit\":" + rendererPri
+                            + ",\"rendererKind\":\"" + rendKind + "\""
+                            + ",\"contentId\":" + contentId
+                            + ",\"nativeVideoActive\":" + nativeVideoPlaying
+                            + ",\"isPrimary\":" + (view == webView) + "}");
+                    } catch (Throwable ignored) {}
+                }
                 if (view != webView) {
                     try { view.destroy(); } catch (Throwable ignored) {}
                     return true;
@@ -797,6 +914,237 @@ public class MainActivity extends Activity {
             }
         }
 
+
+        @JavascriptInterface
+        public void setScreenWakeLock(final boolean enabled) {
+            // Must run on the UI thread to modify window flags.
+            runOnUiThread(() -> {
+                try {
+                    if (enabled) {
+                        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                    } else {
+                        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                    }
+                } catch (Throwable ignored) {}
+            });
+        }
+
+        @JavascriptInterface
+        public void wakeDisplay() {
+            // Attempt HDMI-CEC "One Touch Play" to wake the connected TV and
+            // switch it to this HDMI input. Requires the HDMI_CEC system
+            // permission; caught silently when the app lacks it (most user-
+            // space APKs) or when HdmiControlManager is absent (old OS, no HDMI).
+            try {
+                Object mgr = getSystemService("hdmi_control");
+                if (mgr != null) {
+                    java.lang.reflect.Method getClient =
+                        mgr.getClass().getMethod("getPlaybackClient");
+                    Object client = getClient.invoke(mgr);
+                    if (client != null) {
+                        Class<?> cbClass = Class.forName(
+                            "android.hardware.hdmi.HdmiPlaybackClient$OneTouchPlayCallback");
+                        Object proxy = java.lang.reflect.Proxy.newProxyInstance(
+                            getClass().getClassLoader(),
+                            new Class[]{ cbClass },
+                            (p, method, args) -> null);
+                        java.lang.reflect.Method otp =
+                            client.getClass().getMethod("oneTouchPlay", cbClass);
+                        otp.invoke(client, proxy);
+                    }
+                }
+            } catch (Exception | Error e) {
+                // SecurityException, ClassNotFoundException, etc. — all graceful
+            }
+        }
+
+        @JavascriptInterface
+        public void sendWakeOnLan(final String macAddress) {
+            // Broadcasts a standard 102-byte WoL magic packet to the LAN
+            // broadcast address (UDP port 9). No special permissions required.
+            if (macAddress == null || macAddress.isEmpty()) return;
+            new Thread(() -> {
+                try {
+                    String[] parts = macAddress.split("[:\\-]");
+                    if (parts.length != 6) return;
+                    byte[] mac = new byte[6];
+                    for (int i = 0; i < 6; i++) mac[i] = (byte) Integer.parseInt(parts[i], 16);
+                    byte[] packet = new byte[102];
+                    for (int i = 0; i < 6; i++) packet[i] = (byte) 0xFF;
+                    for (int i = 1; i <= 16; i++) System.arraycopy(mac, 0, packet, i * 6, 6);
+                    java.net.DatagramSocket s = new java.net.DatagramSocket();
+                    s.setBroadcast(true);
+                    s.send(new java.net.DatagramPacket(
+                        packet, packet.length,
+                        java.net.InetAddress.getByName("255.255.255.255"), 9));
+                    s.close();
+                } catch (Exception e) { /* silently ignore */ }
+            }).start();
+        }
+
+        @JavascriptInterface
+        public String reboot() {
+            // android.permission.REBOOT is a privileged permission — only
+            // granted to system/signed APKs on privileged installs. On standard
+            // user-space installs PowerManager.reboot() throws SecurityException;
+            // we return "unsupported" so the dashboard can show a clear error
+            // instead of silently doing nothing.
+            try {
+                PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                if (pm == null) return "unsupported";
+                pm.reboot(null);
+                return "acknowledged";
+            } catch (Throwable t) {
+                return "unsupported";
+            }
+        }
+
+        @JavascriptInterface
+        public String shutdown() {
+            // PowerManager.shutdown() is @SystemApi (@hide) — not in the public SDK.
+            // Call via reflection so javac does not reject it at compile time.
+            // Requires android.permission.REBOOT (privileged); user-space APKs always
+            // land in the catch block and return "unsupported".
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                    PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                    if (pm == null) return "unsupported";
+                    java.lang.reflect.Method m = pm.getClass().getMethod(
+                        "shutdown", boolean.class, String.class, boolean.class);
+                    m.invoke(pm, false, null, false);
+                    return "acknowledged";
+                }
+                return "unsupported";
+            } catch (Throwable t) {
+                return "unsupported";
+            }
+        }
+
+        @JavascriptInterface
+        public String getDeviceDiagnostics() {
+            // Returns a JSON string with device-level diagnostics.
+            // All fields are best-effort; missing/unsupported values are omitted silently.
+            try {
+                org.json.JSONObject obj = new org.json.JSONObject();
+                obj.put("deviceModel", android.os.Build.MODEL);
+                obj.put("osVersion", android.os.Build.VERSION.RELEASE);
+                // Hardware serial (READ_PHONE_STATE required on API 26+; silently omit on denial)
+                try {
+                    String serial = (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O)
+                        ? android.os.Build.getSerial() : android.os.Build.SERIAL;
+                    if (serial != null && !serial.equals("unknown")) obj.put("hardwareSerial", serial);
+                } catch (SecurityException ignored) {}
+                // WiFi SSID and signal strength
+                try {
+                    WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+                    if (wm != null) {
+                        android.net.wifi.WifiInfo wi = wm.getConnectionInfo();
+                        if (wi != null) {
+                            String ssid = wi.getSSID();
+                            if (ssid != null && !ssid.equals("<unknown ssid>") && !ssid.isEmpty()) {
+                                if (ssid.startsWith("\"") && ssid.endsWith("\"")) ssid = ssid.substring(1, ssid.length() - 1);
+                                obj.put("wifiSsid", ssid);
+                            }
+                            int rssi = wi.getRssi();
+                            if (rssi > -127) obj.put("wifiSignalDbm", rssi);
+                        }
+                    }
+                } catch (Exception ignored) {}
+                // Active IPv4 address
+                try {
+                    android.net.ConnectivityManager cm = (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+                    if (cm != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                        android.net.Network net = cm.getActiveNetwork();
+                        android.net.LinkProperties lp = (net != null) ? cm.getLinkProperties(net) : null;
+                        if (lp != null) {
+                            for (android.net.LinkAddress la : lp.getLinkAddresses()) {
+                                java.net.InetAddress addr = la.getAddress();
+                                if (!addr.isLoopbackAddress() && addr instanceof java.net.Inet4Address) {
+                                    obj.put("ipAddress", addr.getHostAddress());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {}
+                // Physical display resolution from the active display mode.
+                // Display.Mode.getPhysicalWidth/Height() (API 23+) returns the true HDMI
+                // output resolution regardless of WebView density scaling, making it more
+                // reliable than multiplying JS window.screen dimensions by devicePixelRatio.
+                try {
+                    android.view.Display disp = getWindowManager().getDefaultDisplay();
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                        android.view.Display.Mode mode = disp.getMode();
+                        obj.put("displayWidth", mode.getPhysicalWidth());
+                        obj.put("displayHeight", mode.getPhysicalHeight());
+                    } else {
+                        android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
+                        disp.getRealMetrics(dm);
+                        obj.put("displayWidth", dm.widthPixels);
+                        obj.put("displayHeight", dm.heightPixels);
+                    }
+                } catch (Exception ignored) {}
+                // HDMI output connected — detected via AudioManager output devices.
+                // DisplayManager.DISPLAY_CATEGORY_PRESENTATION only lists secondary/cast
+                // displays; on Android TV boxes the HDMI output IS the primary display and
+                // is never returned by that filter. AudioDeviceInfo is reliable on API 23+.
+                try {
+                    boolean hdmi = false;
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                        android.media.AudioManager am = (android.media.AudioManager) getSystemService(AUDIO_SERVICE);
+                        if (am != null) {
+                            android.media.AudioDeviceInfo[] outputs = am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS);
+                            for (android.media.AudioDeviceInfo dev : outputs) {
+                                int t = dev.getType();
+                                // TYPE_HDMI = 9, TYPE_HDMI_ARC = 10
+                                if (t == android.media.AudioDeviceInfo.TYPE_HDMI ||
+                                    t == android.media.AudioDeviceInfo.TYPE_HDMI_ARC) {
+                                    hdmi = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    obj.put("hdmiConnected", hdmi);
+                } catch (Exception ignored) {}
+                // Display power state — works without HDMI-CEC; Display.getState() reflects
+                // whether Android is actively outputting video to HDMI. No special permission
+                // required. Omit key entirely when state is unknown so the UI hides the row.
+                try {
+                    android.view.Display disp = getWindowManager().getDefaultDisplay();
+                    int dState = disp.getState();
+                    if (dState == android.view.Display.STATE_ON) obj.put("displayState", "on");
+                    else if (dState == android.view.Display.STATE_OFF) obj.put("displayState", "off");
+                    // STATE_UNKNOWN / STATE_DOZE etc → key absent; UI hides the row gracefully
+                } catch (Exception ignored) {}
+                // CPU temperature from thermal zone sysfs (device-specific; many devices expose it)
+                try {
+                    java.io.File thermalDir = new java.io.File("/sys/class/thermal");
+                    if (thermalDir.isDirectory()) {
+                        float maxTemp = Float.MIN_VALUE;
+                        java.io.File[] zones = thermalDir.listFiles();
+                        if (zones != null) {
+                            for (java.io.File zone : zones) {
+                                try {
+                                    java.io.File typeFile = new java.io.File(zone, "type");
+                                    java.io.File tempFile = new java.io.File(zone, "temp");
+                                    if (!typeFile.canRead() || !tempFile.canRead()) continue;
+                                    String zType = new java.util.Scanner(typeFile).next().toLowerCase();
+                                    if (zType.contains("cpu") || zType.contains("soc") || zType.contains("tsens")) {
+                                        float c = Integer.parseInt(new java.util.Scanner(tempFile).next().trim()) / 1000.0f;
+                                        if (c > maxTemp && c < 150.0f) maxTemp = c;
+                                    }
+                                } catch (Exception ignored2) {}
+                            }
+                        }
+                        if (maxTemp > Float.MIN_VALUE) obj.put("cpuTemperatureCelsius", Math.round(maxTemp * 10.0) / 10.0);
+                    }
+                } catch (Exception ignored) {}
+                return obj.toString();
+            } catch (Exception e) {
+                return "{}";
+            }
+        }
 
         @JavascriptInterface
         public void setRelaunchCheckSec(int seconds) {
@@ -1297,6 +1645,9 @@ public class MainActivity extends Activity {
 
               @android.webkit.JavascriptInterface
               public void playNativeVideo(String url, float x, float y, float w, float h, String objectFit, boolean loop, float volume, String contentId) {
+                if (BuildConfig.DEBUG) DebugTools.logBridgeCall("playNativeVideo", "contentId=" + contentId + " loop=" + loop + " vol=" + volume + " url=" + (url.length() > 60 ? url.substring(0, 60) : url));
+                // Mark single-content native video active so revision watchdog skips reload while ExoPlayer loads.
+                nativeSingleContentActive = true;
                 runOnUiThread(() -> {
                     try {
                         boolean fromPreload = url.equals(preloadedVideoUrl) && preloadPlayer != null;
@@ -1557,6 +1908,7 @@ public class MainActivity extends Activity {
 
           @android.webkit.JavascriptInterface
             public void stopNativeVideo() {
+                nativeSingleContentActive = false;
                 runOnUiThread(() -> {
                     try {
                         if (videoReadyHandler != null && videoReadyRunnable != null) {
@@ -1609,6 +1961,16 @@ public class MainActivity extends Activity {
 
           @android.webkit.JavascriptInterface
             public void showNativeImage(String url, float x, float y, float w, float h, String scaleType, String contentIdStr) {
+                if (BuildConfig.DEBUG) DebugTools.logBridgeCall("showNativeImage", "contentId=" + contentIdStr + " scale=" + scaleType + " url=" + (url != null && url.length() > 60 ? url.substring(0, 60) : url));
+                // #2243/#2245 guard: skip Glide for video or SVG URLs.
+                if (isUnsafeForGlide(url)) {
+                    android.util.Log.w("DigipalNative", "[native-image-skip] caller=showNativeImage unsafeForGlide urlPath=" + sanitizedUrlPath(url) + " contentId=" + contentIdStr);
+                    return;
+                }
+                android.util.Log.d("DigipalNative", "[native-image-attempt] caller=showNativeImage urlPath=" + sanitizedUrlPath(url) + " contentId=" + contentIdStr);
+                // Mark single-content native image as active so the revision watchdog
+                // does not fire forcePlayerReload() while Glide is still loading.
+                nativeSingleContentActive = true;
                 runOnUiThread(() -> {
                     try {
                         // Fix 2: safe-quote contentIdStr so JS key lookup is always valid.
@@ -1622,23 +1984,56 @@ public class MainActivity extends Activity {
                             android.widget.ImageView.ScaleType.FIT_CENTER;
                         final android.widget.ImageView activeImgView  = activeImageViewIsA ? nativeImageView : nativeImageViewB;
                         final android.widget.ImageView preloadImgView = activeImageViewIsA ? nativeImageViewB : nativeImageView;
-                        if (url.equals(preloadedImageUrl) && preloadImageReady) {
+                        // Guard: verify the stored preload view is the correct instance and still
+                        // has a drawable. hideNativeImagesForVideo() clears Glide from both views
+                        // but historically left preloadedImageUrl/preloadImageReady set, causing the
+                        // instant-swap to promote an empty view → black screen.
+                        boolean _pDrawableOk = preloadImgView == preloadedImageView
+                                && preloadImgView.getDrawable() != null;
+                        if (BuildConfig.DEBUG) android.util.Log.d("DigipalNative",
+                            "[showNativeImage] urlMatch=" + url.equals(preloadedImageUrl)
+                            + " imgReady=" + preloadImageReady
+                            + " viewMatch=" + (preloadImgView == preloadedImageView)
+                            + " hasDrawable=" + (preloadImgView.getDrawable() != null)
+                            + " incomingAlpha=" + preloadImgView.getAlpha()
+                            + " incomingVis=" + preloadImgView.getVisibility()
+                            + " url=" + (url != null ? url.substring(0, Math.min(60, url.length())) : "null"));
+                        if (url.equals(preloadedImageUrl) && preloadImageReady && _pDrawableOk) {
                             // Instant swap â image already decoded into preloadImgView
                             preloadImgView.setScaleType(st);
                             preloadImgView.setLayoutParams(lp);
+                            preloadImgView.setAlpha(1f);          // Fix: reset alpha — prior slide cold-load left this view at alpha=0f
                             preloadImgView.setVisibility(View.VISIBLE);
+                            activeImgView.setAlpha(0f);           // Fix: fully hide outgoing
                             activeImgView.setVisibility(View.INVISIBLE);
                             // Trim Glide bitmap cache before cold load (Fire TV OOM fix).
                             try { com.bumptech.glide.Glide.get(MainActivity.this).trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE); } catch (Throwable ignored) {}
                             com.bumptech.glide.Glide.with(MainActivity.this).clear(activeImgView);
                             activeImageViewIsA = !activeImageViewIsA;
-                            preloadedImageUrl = null; preloadImageReady = false;
-                            // Fix 1: content-scoped ready callback on preloaded image swap (APK v3.16.14+).
-                            webView.evaluateJavascript("try{var _f=window['__digipalNativeImageReady_'+" + safeContentId + "];if(typeof _f==='function')_f();else if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady();}catch(e){}", null);
+                            preloadedImageUrl = null; preloadImageReady = false; preloadedImageView = null;
+                            // Fix 1: content-scoped ready callback — deferred one frame via post() so Android
+                            // has drawn the promoted view before JS receives onReady (prevents race).
+                            // Additionally verify the view is actually visible before signaling ready:
+                            // if something (e.g. cancelNativePreload or hideNativeImage) cleared the view
+                            // between the swap and the post() dispatch, onReady would fire on a black frame.
+                            final String _cbJs = "try{var _f=window['__digipalNativeImageReady_'+" + safeContentId + "];if(typeof _f==='function')_f();else if(typeof window.__digipalNativeImageReady==='function')window.__digipalNativeImageReady();}catch(e){}";
+                            final android.widget.ImageView _verifyView = preloadImgView;
+                            _verifyView.post(() -> {
+                                boolean _vOk = _verifyView.getVisibility() == View.VISIBLE;
+                                boolean _aOk = _verifyView.getAlpha() > 0.99f;
+                                boolean _dOk = _verifyView.getDrawable() != null;
+                                boolean _sOk = _verifyView.isShown();
+                                android.util.Log.d("DigipalNative", "[showNativeImage] pre-ready vis=" + _vOk + " alpha=" + _aOk + " drawable=" + _dOk + " isShown=" + _sOk);
+                                if (_vOk && _aOk && _dOk && _sOk) {
+                                    webView.evaluateJavascript(_cbJs, null);
+                                } else {
+                                    android.util.Log.w("DigipalNative", "[showNativeImage] ABORT ready callback — view not visible after swap; will fall back via grace timer");
+                                }
+                            });
                         } else {
                               // Cold fallback: load into inactive (preload) view — old content stays visible until first draw confirmed
                               com.bumptech.glide.Glide.with(MainActivity.this).clear(preloadImgView);
-                              preloadedImageUrl = null; preloadImageReady = false;
+                              preloadedImageUrl = null; preloadImageReady = false; preloadedImageView = null;
                               final android.widget.ImageView incoming = preloadImgView;
                               final android.widget.ImageView outgoing = activeImgView;
                               incoming.setLayoutParams(lp);
@@ -1692,13 +2087,15 @@ public class MainActivity extends Activity {
 
 
             public void hideNativeImage() {
+                if (BuildConfig.DEBUG) DebugTools.logBridgeCall("hideNativeImage", "caller=" + new Throwable().getStackTrace()[1]);
+                nativeSingleContentActive = false;
                 runOnUiThread(() -> {
                     try {
                         com.bumptech.glide.Glide.with(MainActivity.this).clear(nativeImageView);
                         com.bumptech.glide.Glide.with(MainActivity.this).clear(nativeImageViewB);
                         nativeImageView.setVisibility(View.INVISIBLE);
                         nativeImageViewB.setVisibility(View.INVISIBLE);
-                        preloadedImageUrl = null; preloadImageReady = false;
+                        preloadedImageUrl = null; preloadImageReady = false; preloadedImageView = null;
                     } catch (Exception e) {}
                 });
             }
@@ -1765,6 +2162,12 @@ public class MainActivity extends Activity {
 
             @android.webkit.JavascriptInterface
               public void preloadNativeImage(String url) {
+                  // #2243/#2245 guard: skip Glide for video or SVG URLs.
+                  if (isUnsafeForGlide(url)) {
+                      android.util.Log.w("DigipalNative", "[native-image-skip] caller=preloadNativeImage unsafeForGlide urlPath=" + sanitizedUrlPath(url));
+                      return;
+                  }
+                  android.util.Log.d("DigipalNative", "[native-image-attempt] caller=preloadNativeImage urlPath=" + sanitizedUrlPath(url));
                   runOnUiThread(() -> {
                       try {
                           if (url.equals(preloadedImageUrl) && preloadImageReady) return;
@@ -1775,11 +2178,17 @@ public class MainActivity extends Activity {
                           final android.widget.ImageView preloadImgView = activeImageViewIsA ? nativeImageViewB : nativeImageView;
                           com.bumptech.glide.Glide.with(MainActivity.this).clear(preloadImgView);
                           preloadedImageUrl = null; preloadImageReady = false;
+                          preloadImgView.setAlpha(1f);           // Fix: reset alpha so instant-swap sees a fully opaque view
                           preloadImgView.setVisibility(View.INVISIBLE);
                           // Load into the inactive view with a full-screen layout so Glide decodes at display size
                           preloadImgView.setLayoutParams(new FrameLayout.LayoutParams(
                               FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
                           preloadedImageUrl = url;
+                          preloadedImageView = preloadImgView; // track which view owns this preload
+                          if (BuildConfig.DEBUG) android.util.Log.d("DigipalNative",
+                              "[preloadNativeImage] view=" + (preloadImgView == nativeImageView ? "A" : "B")
+                              + " alpha=" + preloadImgView.getAlpha()
+                              + " url=" + (url != null ? url.substring(0, Math.min(60, url.length())) : "null"));
                           com.bumptech.glide.Glide.with(MainActivity.this)
                               .load(url)
                               .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
@@ -1787,7 +2196,7 @@ public class MainActivity extends Activity {
                                   public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e,
                                           Object model, com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> target,
                                           boolean isFirstResource) {
-                                      if (url.equals(preloadedImageUrl)) { preloadImageReady = false; }
+                                      if (url.equals(preloadedImageUrl)) { preloadImageReady = false; preloadedImageView = null; }
                                       return false;
                                   }
                                   @Override
@@ -1805,6 +2214,7 @@ public class MainActivity extends Activity {
 
             @android.webkit.JavascriptInterface
               public void cancelNativePreload() {
+                  if (BuildConfig.DEBUG) DebugTools.logBridgeCall("cancelNativePreload", "");
                   runOnUiThread(() -> {
                       try {
                           if (preloadPlayer != null) { try { preloadPlayer.release(); } catch (Throwable ignored) {} preloadPlayer = null; }
@@ -1815,7 +2225,7 @@ public class MainActivity extends Activity {
                           // Clear both image views
                           try { com.bumptech.glide.Glide.with(MainActivity.this).clear(nativeImageView); } catch (Throwable ignored) {}
                           try { com.bumptech.glide.Glide.with(MainActivity.this).clear(nativeImageViewB); } catch (Throwable ignored) {}
-                          preloadedImageUrl = null; preloadImageReady = false;
+                          preloadedImageUrl = null; preloadImageReady = false; preloadedImageView = null;
                       } catch (Exception e) {}
                   });
               }
@@ -1860,6 +2270,7 @@ public class MainActivity extends Activity {
 
               @android.webkit.JavascriptInterface
               public void setWebViewDormant(boolean dormant) {
+                if (BuildConfig.DEBUG) DebugTools.logBridgeCall("setWebViewDormant", "dormant=" + dormant);
                   runOnUiThread(() -> {
                       try {
                           if (dormant && hasBroadcastActive) {
@@ -1870,7 +2281,6 @@ public class MainActivity extends Activity {
                               showWebViewAboveNativeLayers("broadcast active; ignore dormant=true");
                               return;
                           }
-                          isWebViewCurrentlyDormant = dormant;
                           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                               if (dormant) {
                                   webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_BOUND, false);
@@ -1879,6 +2289,30 @@ public class MainActivity extends Activity {
                     dormantGeneration++; // Fix 3: cancel any pending delayed WebView recreation
                               }
                           }
+                          isWebViewCurrentlyDormant = dormant;
+                          // Fix: also manage WebView visibility so Glide/ExoPlayer frames are
+                          // visible in JS-controlled mixed playlists where PlaylistScheduler is
+                          // stopped (setNativePlaylist("[]")) and schedulerDeactivateWebView()
+                          // is never called.  Without this the WebView always sits on top of
+                          // native image/video views and the user sees the React background (black).
+                          //
+                          // Guard: before hiding the WebView for dormant=true, verify that at least
+                          // one native visual layer is actually visible. If not (e.g. hideNativeImage
+                          // was called right before this), skipping dormancy prevents a black frame
+                          // where both the WebView and the native layers are invisible simultaneously.
+                          if (dormant) {
+                              boolean _imgVisible = (nativeImageView != null && nativeImageView.getVisibility() == View.VISIBLE && nativeImageView.getAlpha() > 0.01f)
+                                      || (nativeImageViewB != null && nativeImageViewB.getVisibility() == View.VISIBLE && nativeImageViewB.getAlpha() > 0.01f);
+                              boolean _vidVisible = (nativeVideoView != null && nativeVideoView.getVisibility() == View.VISIBLE && nativeVideoView.getAlpha() > 0.01f)
+                                      || (nativeVideoViewB != null && nativeVideoViewB.getVisibility() == View.VISIBLE && nativeVideoViewB.getAlpha() > 0.01f);
+                              if (!_imgVisible && !_vidVisible) {
+                                  android.util.Log.w("DigipalNative", "[nativeFirst] skip dormant=true: no visible native layer — keeping WebView awake to avoid all-black frame");
+                                  isWebViewCurrentlyDormant = false;
+                                  return;
+                              }
+                          }
+                          webView.setAlpha(dormant ? 0f : 1f);
+                          webView.setVisibility(dormant ? View.INVISIBLE : View.VISIBLE);
                           android.util.Log.d("DigipalNative", "[nativeFirst] setWebViewDormant=" + dormant);
                           if (nativeFirstRendering && dormant && currentPlayerUrl != null) {
                               // Per-slide WebView recreation: destroy V8 heap + GPU compositor while native
@@ -1945,6 +2379,149 @@ public class MainActivity extends Activity {
                 }
 
                 @JavascriptInterface
+                public void setNativeBroadcastBanners(String json) {
+                    // Renders top_banner / bottom_banner broadcasts as native Android
+                    // TextView overlays above all other layers (WebView, ExoPlayer, Glide).
+                    // Called by useScreenSurfaceController instead of setHasBroadcast(true)
+                    // for banner modes — avoids lifting the whole WebView (and its black
+                    // background) which would cover native image/video content.
+                    //
+                    // Pass an empty JSON array ("[]") to clear all banners.
+                    runOnUiThread(() -> {
+                        try {
+                            org.json.JSONArray arr = new org.json.JSONArray(json == null ? "[]" : json);
+
+                            // Create the banner container once and attach above all other views.
+                            if (nativeBannerContainer == null) {
+                                nativeBannerContainer = new android.widget.FrameLayout(MainActivity.this);
+                                android.widget.FrameLayout.LayoutParams lp =
+                                    new android.widget.FrameLayout.LayoutParams(
+                                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                        android.view.ViewGroup.LayoutParams.MATCH_PARENT);
+                                if (rootLayout != null) {
+                                    rootLayout.addView(nativeBannerContainer, lp);
+                                }
+                                // Higher elevation/translationZ than showWebViewAboveNativeLayers (10000)
+                                // so the native banner is always visible above the WebView too.
+                                nativeBannerContainer.setElevation(20000f);
+                                nativeBannerContainer.setTranslationZ(20000f);
+                                nativeBannerContainer.bringToFront();
+                            }
+
+                            // Rebuild all banners from scratch.
+                            nativeBannerContainer.removeAllViews();
+
+                              // Read screen rotation from the first banner object (all banners on a
+                              // screen share the same rotation angle). Old JS clients that omit this
+                              // field will default to 0 (no change in behaviour for those devices).
+                              int screenRotation = arr.length() > 0
+                                  ? arr.getJSONObject(0).optInt("rotation", 0) : 0;
+
+                            for (int i = 0; i < arr.length(); i++) {
+                                org.json.JSONObject b = arr.getJSONObject(i);
+                                String displayMode  = b.optString("displayMode",    "top_banner");
+                                String message      = b.optString("message",        "");
+                                String bgColor      = b.optString("backgroundColor","#CC0000");
+                                String textColor    = b.optString("textColor",      "#FFFFFF");
+                                String fontSize     = b.optString("fontSize",       "large");
+                                boolean scrolling   = b.optBoolean("scrolling",     false);
+
+                                android.widget.TextView tv = new android.widget.TextView(MainActivity.this);
+                                tv.setText(message);
+                                try {
+                                    tv.setBackgroundColor(android.graphics.Color.parseColor(bgColor));
+                                } catch (IllegalArgumentException ignored) {
+                                    tv.setBackgroundColor(android.graphics.Color.RED);
+                                }
+                                try {
+                                    tv.setTextColor(android.graphics.Color.parseColor(textColor));
+                                } catch (IllegalArgumentException ignored) {
+                                    tv.setTextColor(android.graphics.Color.WHITE);
+                                }
+                                tv.setGravity(android.view.Gravity.CENTER);
+                                tv.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+                                tv.setSingleLine(true);
+                                if (scrolling) {
+                                    // Ticker: scrolls continuously, matching CSS animate-broadcast-scroll.
+                                    tv.setEllipsize(android.text.TextUtils.TruncateAt.MARQUEE);
+                                    tv.setMarqueeRepeatLimit(-1);
+                                    tv.setSelected(true); // required to start marquee without focus
+                                    tv.setHorizontallyScrolling(true);
+                                } else {
+                                    tv.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                                }
+
+                                // Font size map (mirrors BroadcastOverlay.tsx sizeMap)
+                                float spSize;
+                                switch (fontSize) {
+                                    case "small":  spSize = 18f; break;
+                                    case "medium": spSize = 24f; break;
+                                    case "xlarge": spSize = 36f; break;
+                                    default:       spSize = 28f; break; // "large"
+                                }
+                                tv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, spSize);
+
+                                int padPx = Math.round(24 * getResources().getDisplayMetrics().density);
+                                tv.setPadding(padPx, padPx / 2, padPx, padPx / 2);
+
+                                boolean isTop = !"bottom_banner".equals(displayMode);
+                                android.widget.FrameLayout.LayoutParams bannerLp =
+                                    new android.widget.FrameLayout.LayoutParams(
+                                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                        android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+                                bannerLp.gravity = isTop
+                                    ? android.view.Gravity.TOP
+                                    : android.view.Gravity.BOTTOM;
+                                nativeBannerContainer.addView(tv, bannerLp);
+                            }
+
+                            // Rotate the container to match the WebView CSS transform.
+                              // Native TextViews live in raw screen coordinates and do NOT
+                              // inherit the WebView's CSS rotation — we compensate here so the
+                              // banner appears along the correct edge on rotated screens.
+                              int screenW = getResources().getDisplayMetrics().widthPixels;
+                              int screenH = getResources().getDisplayMetrics().heightPixels;
+                              if (screenRotation == 90 || screenRotation == 270) {
+                                  // Swap the container dimensions so it spans the full rotated
+                                  // width after the transform (landscape 1920×1080 → rotated
+                                  // 1080px wide × 1920px tall in screen coordinates).
+                                  android.widget.FrameLayout.LayoutParams clp =
+                                      new android.widget.FrameLayout.LayoutParams(screenH, screenW);
+                                  clp.gravity = android.view.Gravity.CENTER;
+                                  nativeBannerContainer.setLayoutParams(clp);
+                              } else {
+                                  // Restore full-screen layout for 0° and 180° (no dimension swap).
+                                  android.widget.FrameLayout.LayoutParams clp =
+                                      new android.widget.FrameLayout.LayoutParams(
+                                          android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                          android.view.ViewGroup.LayoutParams.MATCH_PARENT);
+                                  nativeBannerContainer.setLayoutParams(clp);
+                              }
+                              // Pivot at the CONTAINER's centre so rotation keeps it centred on-screen.
+                              // For 90/270 the container is (screenH x screenW) -- swapped -- so its
+                              // centre is (screenH/2, screenW/2), NOT (screenW/2, screenH/2).
+                              if (screenRotation == 90 || screenRotation == 270) {
+                                  nativeBannerContainer.setPivotX(screenH / 2f);
+                                  nativeBannerContainer.setPivotY(screenW / 2f);
+                              } else {
+                                  nativeBannerContainer.setPivotX(screenW / 2f);
+                                  nativeBannerContainer.setPivotY(screenH / 2f);
+                              }
+                              nativeBannerContainer.setRotation(screenRotation);
+
+                                                          nativeBannerContainer.setVisibility(
+                                arr.length() > 0 ? View.VISIBLE : View.GONE);
+
+                            android.util.Log.d("DigipalBroadcast",
+                                "[nativeBanner] setNativeBroadcastBanners: " + arr.length() + " banner(s)");
+                        } catch (Exception e) {
+                            android.util.Log.e("DigipalBroadcast",
+                                "[nativeBanner] error parsing banners: " + e.getMessage());
+                        }
+                    });
+                }
+
+                @JavascriptInterface
                 public void requestNativeGC() {
                     try {
                         long now = System.currentTimeMillis();
@@ -1982,18 +2559,48 @@ public class MainActivity extends Activity {
                     if (!isValidBridgeToken(token)) return;
                     if (json == null || json.isEmpty()) return;
                     lastNativePlaylistSetAtMs = System.currentTimeMillis();
+                    android.util.Log.d(BRIDGE_TAG, "[" + android.os.SystemClock.elapsedRealtime() + "ms] setNativePlaylist len=" + json.length());
+                    if (__testBridgeRecorder != null) __testBridgeRecorder.record("setNativePlaylist", json);
                     if (playlistScheduler != null) {
                         playlistScheduler.setPlaylist(json);
                         android.util.Log.i("DigipalNative", "[nativeLoop] setNativePlaylist → PlaylistScheduler");
+                        // Lifecycle bridge log (#2238): emit native_playlist_received so
+                        // JS-side playerLogger can distinguish "playlist received" from a
+                        // WebView renderer recreation boot screen. Must run on UI thread.
+                        try {
+                            int _sc = 0; int _fCid = 0; String _fType = "";
+                            try {
+                                org.json.JSONArray _arr = new org.json.JSONArray(json);
+                                _sc = _arr.length();
+                                if (_sc > 0) {
+                                    org.json.JSONObject _f = _arr.getJSONObject(0);
+                                    _fCid  = _f.optInt("contentId", 0);
+                                    _fType = _f.optString("type", "").replaceAll("[^A-Za-z_0-9]", "");
+                                }
+                            } catch (Throwable _pe) {}
+                            if (_sc > 0) {
+                                final String _logJs = "try{if(window.__playerLogFromNative)"
+                                    + "window.__playerLogFromNative('INFO','[native] native_playlist_received"
+                                    + " slides=" + _sc + " firstCid=" + _fCid + " firstType=" + _fType + "')"
+                                    + "}catch(e){}";
+                                runOnUiThread(() -> {
+                                    try { if (webView != null) webView.evaluateJavascript(_logJs, null); }
+                                    catch (Throwable ignored) {}
+                                });
+                            }
+                        } catch (Throwable ignored) {}
                         // Task 1952: an empty playlist means the native loop is
                         // releasing the screen back to the WebView. Nothing else
                         // re-shows it, so undo the dormant state here or the
                         // device is left on a permanent black screen.
                         boolean nativeLoopReleased = false;
                         try { nativeLoopReleased = new org.json.JSONArray(json).length() == 0; } catch (Throwable ignored) {}
+                        // Track whether the scheduler holds live content so the
+                        // revision watchdog can skip a reload during PREPARING state.
                         hasActiveNativePlaylist = !nativeLoopReleased;
                         if (nativeLoopReleased) {
                             nativeSchedulerOwnsDisplay = false;
+                            currentNativeSlideDurationMs = 0L;
                             // Jank fix (v3.16.62): the old code stacked resumeTimers() (JS timer
                             // backlog burst), setVisibility(VISIBLE) (full WebView relayout +
                             // re-raster after long invisibility) and setRendererPriorityPolicy
@@ -2051,6 +2658,17 @@ public class MainActivity extends Activity {
                     armStablePlaybackTimer();
                 }
 
+                /**
+                 * Task #2118: called by React's notifyContentVisible() via bridge.webViewSlideReady()
+                 * when a WEBVIEW_* slide's content is fully visible (widget data fetched, design
+                 * rendered). Signals PlaylistScheduler to start the advance timer only then —
+                 * not at isolated-renderer first-paint — so the full duration is visible content.
+                 */
+                @android.webkit.JavascriptInterface
+                public void webViewSlideReady() {
+                    if (playlistScheduler != null) playlistScheduler.onWebViewSlideReady();
+                }
+
                 @android.webkit.JavascriptInterface
                 public void onNativeRendererError(String slideId, String error) {
                     if (playlistScheduler != null) playlistScheduler.onRendererError(slideId, error);
@@ -2066,6 +2684,8 @@ public class MainActivity extends Activity {
                 public void reloadNativePlaylist() {
                     // JS will call setNativePlaylist again with refreshed slide data
                     android.util.Log.i("DigipalNative", "[nativeLoop] reloadNativePlaylist signal received");
+                    android.util.Log.d(BRIDGE_TAG, "[" + android.os.SystemClock.elapsedRealtime() + "ms] reloadNativePlaylist");
+                    if (__testBridgeRecorder != null) __testBridgeRecorder.record("reloadNativePlaylist", "{}");
                       if (playlistScheduler != null) {
                           playlistScheduler.reloadActiveRevisionFromRoom();
                       }
@@ -2081,6 +2701,41 @@ public class MainActivity extends Activity {
                         .remove("pending_crash_total_mb")
                         .remove("pending_crash_ready")
                         .apply();
+                }
+
+                /**
+                 * Returns true if the app has SYSTEM_ALERT_WINDOW ("Display over other apps")
+                 * permission.  When true, RelaunchReceiver can use startActivity() directly
+                 * as a BAL-exempt relaunch path — more reliable than FSI on Android TV ROMs.
+                 */
+                @android.webkit.JavascriptInterface
+                public boolean hasOverlayPermission() {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                        return android.provider.Settings.canDrawOverlays(MainActivity.this);
+                    }
+                    return true; // pre-M: always granted
+                }
+
+                /**
+                 * Opens the "Display over other apps" system settings page for this app
+                 * so the user (or a device admin) can grant SYSTEM_ALERT_WINDOW.
+                 * No-op if permission is already granted.
+                 */
+                @android.webkit.JavascriptInterface
+                public void openOverlayPermissionSettings() {
+                    try {
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M
+                                && !android.provider.Settings.canDrawOverlays(MainActivity.this)) {
+                            android.content.Intent intent = new android.content.Intent(
+                                    android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    android.net.Uri.parse("package:" + getPackageName()));
+                            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                            startActivity(intent);
+                        }
+                    } catch (Exception e) {
+                        android.util.Log.w("DigipalRecovery",
+                                "openOverlayPermissionSettings failed", e);
+                    }
                 }
 
       }
@@ -2194,7 +2849,10 @@ public class MainActivity extends Activity {
                   }
               } else {
                   // Cold load
-                  if (preloadPlayer != null) { try { preloadPlayer.release(); } catch (Throwable ignored) {} preloadPlayer = null; preloadedVideoUrl = null; preloadVideoReady = false; preloadView.setPlayer(null); }
+                  // Fix: call clearVideoOutput first so setVideoTextureView(null) queues before release —
+                  // otherwise the async ExoPlayer release leaves the SurfaceTexture connected and the
+                  // new coldPlayer.setVideoTextureView() hits err -22 (SurfaceTexture already connected).
+                  if (preloadPlayer != null) { clearVideoOutput(preloadPlayer); try { preloadPlayer.release(); } catch (Throwable ignored) {} preloadPlayer = null; preloadedVideoUrl = null; preloadVideoReady = false; preloadView.setPlayer(null); }
                   final androidx.media3.exoplayer.ExoPlayer coldPlayer = buildCachedExoPlayer();
                   if (useTexture) {
                       preloadView.setPlayer(null);
@@ -2224,6 +2882,12 @@ public class MainActivity extends Activity {
                       }
                       @Override public void onRenderedFirstFrame(androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime t, Object output, long renderMs) {
                           android.util.Log.i("DigipalVideo", "[cold diag] onRenderedFirstFrame renderMs=" + renderMs + " pvAlpha=" + (preloadView != null ? preloadView.getAlpha() : -1f) + " texAlpha=" + (incomingTexView != null ? incomingTexView.getAlpha() : -1f));
+                      }
+                      @Override public void onPlayerError(androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime t, androidx.media3.common.PlaybackException error) {
+                          android.util.Log.e("ExoDebug", "[cold] playerError code=" + error.errorCode + " msg=" + error.getMessage() + " slideId=" + slideId);
+                      }
+                      @Override public void onIsLoadingChanged(androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime t, boolean isLoading) {
+                          if (BuildConfig.DEBUG) android.util.Log.v("ExoDebug", "[cold] isLoading=" + isLoading + " pos=" + t.currentPlaybackPositionMs + "ms slideId=" + slideId);
                       }
                   });
                   final androidx.media3.exoplayer.ExoPlayer oldPlayer = exoPlayer;
@@ -2303,6 +2967,14 @@ public class MainActivity extends Activity {
                           if (webView != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                               try { webView.setRendererPriorityPolicy(android.webkit.WebView.RENDERER_PRIORITY_IMPORTANT, false); } catch (Throwable ignored) {}
                           }
+                          // Restore WebView visibility — schedulerDeactivateWebView() hid it when
+                          // schedulerPlayVideo fired. Without this the screen stays black during retry/
+                          // degraded recovery because WebView only re-shows on IDLE state, but retries
+                          // never reach IDLE. schedulerDeactivateWebView() will re-hide it on the next
+                          // retry attempt (500 ms later), so the WebView is only briefly visible.
+                          if (webView != null) { webView.setAlpha(1f); webView.setVisibility(View.VISIBLE); webView.resumeTimers(); }
+                          nativeSchedulerOwnsDisplay = false;
+                          hasActiveNativePlaylist = false;
                           // Failed native video must report failure to the scheduler, not
                             // pretend to be ready via the retired legacy __digipalGotoSlide WebView
                             // hop. onRendererError() lets the scheduler retry/skip/advance and
@@ -2397,6 +3069,49 @@ public class MainActivity extends Activity {
             try { p.stop(); p.release(); } catch (Throwable ignored) {}
         }
 
+        /**
+         * Task #2119: Amlogic codec drain-before-release.
+         *
+         * On Amlogic (c2.amlogic.avc.decoder), calling player.release() while the
+         * codec's background dequeue thread still has pending buffer tasks causes:
+         *   C2VdecDequeueThreadUtil: onAllocBufferTask failed. thread stopped
+         *   MessageQueue: Handler sending message to a Handler on a dead thread
+         *
+         * Fix: call stop() to signal codec flush, then release() 150ms later (or
+         * immediately when STATE_IDLE fires, whichever is first).  clearVideoOutput()
+         * detaches the surface first so the SurfaceTexture is not held by the draining
+         * player — prevents -22 (EINVAL) on the next video slide's surface attach.
+         */
+        private void drainAndRelease(androidx.media3.exoplayer.ExoPlayer p) {
+            if (p == null) return;
+            clearVideoOutput(p);
+            // Already idle — codec has no pending buffers; release immediately.
+            if (p.getPlaybackState() == androidx.media3.common.Player.STATE_IDLE) {
+                try { p.release(); } catch (Throwable ignored) {}
+                return;
+            }
+            final boolean[] released = {false};
+            final android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
+            final Runnable timeoutRelease = () -> {
+                if (released[0]) return;
+                released[0] = true;
+                try { p.release(); } catch (Throwable ignored) {}
+            };
+            p.addListener(new androidx.media3.common.Player.Listener() {
+                @Override public void onPlaybackStateChanged(int state) {
+                    if (state == androidx.media3.common.Player.STATE_IDLE) {
+                        if (released[0]) return;
+                        released[0] = true;
+                        h.removeCallbacks(timeoutRelease);
+                        try { p.removeListener(this); } catch (Throwable ignored) {}
+                        try { p.release(); } catch (Throwable ignored) {}
+                    }
+                }
+            });
+            try { p.stop(); } catch (Throwable ignored) {}
+            h.postDelayed(timeoutRelease, 150);
+        }
+
         /** Hide both native image views when video becomes the active renderer.
          *  nativeImageView/nativeImageViewB sit above TextureView/PlayerView in the
          *  FrameLayout, so they must be explicitly hidden or they cover the video.
@@ -2442,45 +3157,89 @@ public class MainActivity extends Activity {
             final String rev = revision.trim();
             if (rev.equals(lastAppliedContentRevision)) return;
 
-            lastAppliedContentRevision = rev;
+            // NOTE: do NOT set lastAppliedContentRevision = rev here.
+            // We only mark the revision applied inside the watchdog once we know JS has
+            // handled it (or will handle it imminently via a native-playlist update).
+            // For nativeSingleContentActive we intentionally leave it unset so the next
+            // heartbeat retries if the JS-side update doesn't complete.
             final long before = lastNativePlaylistSetAtMs;
+            // Declare safeRevision here (not inside the if-block) so the lambda can capture it.
+            final String safeRevision = rev.replace("\\", "\\\\").replace("'", "\\'");
 
             if (webView != null) {
-                String safeRevision = rev.replace("\\", "\\\\").replace("'", "\\'");
                 webView.evaluateJavascript(
                         "try{" +
                                 "if(window.__digipalApplyContentRevision){" +
                                 "window.__digipalApplyContentRevision('" + safeRevision + "');" +
                                 "}else{" +
-                                "window.location.reload();" +
+                                // Not defined yet — page still loading. Next heartbeat retries.
+                                // Reloading here creates a cascade: every reload fires another
+                                // heartbeat tick before the function is defined => infinite reloads.
+                                "console.warn('[DigipalNative] revision fn not ready, retrying next tick');" +
                                 "}" +
-                                "}catch(e){window.location.reload();}",
+                                "}catch(e){" +
+                                "console.warn('[DigipalNative] revision fn error: '+e);" +
+                                "}",
                         null);
             }
 
             contentRevisionHandler.postDelayed(() -> {
                 if (lastNativePlaylistSetAtMs <= before) {
+                    // Skip the forced reload in two cases:
+                    // (a) Native scheduler owns display: WebView is intentionally dormant
+                    //     under pauseTimers(); setNativePlaylist() will carry new content.
+                    // (b) WebView is currently AWAKE (!isWebViewCurrentlyDormant): JS is
+                    //     running normally and will pick up the new revision on its next
+                    //     30 s tvStatus poll — no reload needed. This is the case for
+                    //     playlists that contain Kiosk/widget items (native scheduler
+                    //     never activates, setNativePlaylist([]) is sent, WebView stays
+                    //     active). Forcing a reload here just disconnects the WebSocket
+                    //     and causes continuous ~60 s reload cycles.
+                    // Case (a): native scheduler owns the display (ExoPlayer/Glide playing).
+                    // The comment block above correctly says we should SKIP the reload here —
+                    // the WebView is intentionally dormant under pauseTimers() and the next
+                    // setNativePlaylist() from JS will carry the new revision when it arrives.
+                    // Previously this branch cleared all native state and forced a reload,
+                    // which produced a black screen over live video content.
                     if (nativeSchedulerOwnsDisplay || hasActiveNativePlaylist) {
-                        android.util.Log.w("DigipalNative",
-                            "[revision] releasing stale native playlist for content revision " + rev);
-                        hasActiveNativePlaylist = false;
-                        nativeSchedulerOwnsDisplay = false;
-                        try { if (playlistScheduler != null) playlistScheduler.setPlaylist("[]"); } catch (Throwable ignored) {}
+                        lastAppliedContentRevision = rev;
+                        android.util.Log.d("DigipalNative",
+                            "[revision] native playlist active; keeping last-good playback for revision " + rev);
+                        return;
+                    }
+
+                    // Single-content native image/video: there is no playlist slide boundary
+                    // to flush this revision, and pauseTimers() keeps JS frozen so the 30 s
+                    // poll never fires on its own. Wake timers so __digipalApplyContentRevision
+                    // (defined in player.html) or fetchStatus() runs immediately and calls
+                    // showNativeImage/playNativeVideo with the new content URL.
+                    // Do NOT set lastAppliedContentRevision — the next heartbeat retries if
+                    // JS does not pick up the update within the next heartbeat interval.
+                    if (nativeSingleContentActive) {
+                        android.util.Log.i("DigipalNative",
+                            "[revision] single native content; waking WebView to apply revision " + rev);
                         try {
                             if (webView != null) {
                                 webView.resumeTimers();
-                                webView.setAlpha(1f);
-                                webView.setVisibility(View.VISIBLE);
-                                webView.evaluateJavascript("try{window.location.reload();}catch(e){}", null);
+                                webView.evaluateJavascript(
+                                    "try{" +
+                                    "if(typeof window.__digipalApplyContentRevision==='function'){" +
+                                    "window.__digipalApplyContentRevision('" + safeRevision + "');" +
+                                    "}else if(typeof fetchStatus==='function'){fetchStatus();}" +
+                                    "}catch(e){}",
+                                    null);
                             }
                         } catch (Throwable ignored) {}
-                        try { forcePlayerReload(); } catch (Throwable ignored) {}
+                        // lastAppliedContentRevision intentionally NOT set — next heartbeat retries
                         return;
                     }
+
                     if (!isWebViewCurrentlyDormant) {
+                        lastAppliedContentRevision = rev;
                         android.util.Log.d("DigipalNative", "[revision] skipping reload - WebView is awake, rev=" + rev);
                         return;
                     }
+                    lastAppliedContentRevision = rev;
                     android.util.Log.w("DigipalNative",
                             "[revision] JS did not apply revision " + rev + " - forcing shell reload");
                     try {
@@ -2493,15 +3252,46 @@ public class MainActivity extends Activity {
                     try {
                         forcePlayerReload();
                     } catch (Throwable ignored) {}
+                } else {
+                    // setNativePlaylist() was called after this heartbeat fired — JS already
+                    // delivered updated content via the playlist path, so mark as applied.
+                    lastAppliedContentRevision = rev;
                 }
             }, 10_000L);
         }
 
+        /**
+         * Package-private for unit testing: pure decision function for the 10s revision
+         * watchdog. Returns true only when a WebView reload is warranted — that is, the
+         * WebView is dormant AND native playback is NOT active.
+         *
+         * <ul>
+         *   <li>If native owns the display, JS will carry the new revision via the next
+         *       {@code setNativePlaylist()} call — no reload needed.</li>
+         *   <li>If the WebView is awake, JS picks up the revision on its next tvStatus
+         *       poll (30 s cadence) — no reload needed.</li>
+         *   <li>Only if the WebView is truly dormant AND native is idle is a forced
+         *       reload the right recovery action.</li>
+         * </ul>
+         */
+        static boolean revisionWatchdogShouldReload(
+                boolean nativeOwnsDisplay,
+                boolean hasNativePlaylist,
+                boolean isWebViewDormant) {
+            if (nativeOwnsDisplay || hasNativePlaylist) return false;
+            if (!isWebViewDormant) return false;
+            return true;
+        }
+
         private void hideNativeImagesForVideo() {
+            nativeSingleContentActive = false;
             try { com.bumptech.glide.Glide.with(this).clear(nativeImageView);  } catch (Throwable ignored) {}
             try { com.bumptech.glide.Glide.with(this).clear(nativeImageViewB); } catch (Throwable ignored) {}
             if (nativeImageView  != null) { nativeImageView.setAlpha(1f);  nativeImageView.setVisibility(View.INVISIBLE);  }
             if (nativeImageViewB != null) { nativeImageViewB.setAlpha(1f); nativeImageViewB.setVisibility(View.INVISIBLE); }
+            // Clear preload state — Glide drawables are now gone; any pending preload
+            // is invalid and showNativeImage must not take the instant-swap path.
+            preloadedImageUrl = null; preloadImageReady = false; preloadedImageView = null;
         }
 
         private void initNativeComponents() {
@@ -2619,10 +3409,13 @@ public class MainActivity extends Activity {
               playlistScheduler = new PlaylistScheduler(
                   new PlaylistScheduler.Delegate() {
                       @Override public void schedulerPlayVideo(PlaylistScheduler.SlidePlan s) {
-                          final String _url = s.url; final String _fit = s.objectFit;
+                          // Resolve relative /objects/ paths → absolute HTTPS URL so ExoPlayer does not
+                          // treat them as filesystem paths (FileNotFoundException ENOENT).
+                          final String _url = (s.url != null && s.url.startsWith("/")) ? getServerUrl() + s.url : s.url; final String _fit = s.objectFit;
                           final boolean _loop = s.loop; final float _vol = s.volume;
                           final String _sid = s.slideId; final int _contentId = s.contentId;
                           final long _dur = s.durationMs;
+                          android.util.Log.w("DigipalNative", "[video-pressure] phase=scheduler-play-video type=" + s.type + " contentId=" + _contentId);
                           if (healthMonitor != null) healthMonitor.setRendererTypeNative();
                           runOnUiThread(() -> {
                               try {
@@ -2639,9 +3432,25 @@ public class MainActivity extends Activity {
                           });
                       }
                       @Override public void schedulerShowImage(PlaylistScheduler.SlidePlan s) {
-                          final String _url = s.url; final String _sc = s.scaleType;
+                          // Resolve relative /objects/ paths → absolute HTTPS URL (Glide FileNotFoundException fix).
+                          final String _url = (s.url != null && s.url.startsWith("/")) ? getServerUrl() + s.url : s.url; final String _sc = s.scaleType;
                           final String _sid = s.slideId;
                           final long _dur = s.durationMs;
+                          // #2243 guard: only allow Glide for positively-known IMAGE slides.
+                          if (s.type != PlaylistScheduler.SlideType.IMAGE) {
+                              android.util.Log.w("DigipalNative", "[native-image-skip] caller=schedulerShowImage type=" + s.type + " contentId=" + s.contentId + " urlPath=" + sanitizedUrlPath(_url));
+                              if (supRef[0] != null) supRef[0].reportSchedulerAdvance();
+                              return;
+                          }
+                          // #2252 guard: block IMAGE-type slides whose URL is unsafe for Glide
+                          // (e.g. extensionless external URLs like placehold.co that return SVG/unknown MIME).
+                          if (isUnsafeForGlide(_url)) {
+                              android.util.Log.w("DigipalNative", "[native-image-skip] caller=schedulerShowImage unsafeForGlide contentId=" + s.contentId + " urlPath=" + sanitizedUrlPath(_url));
+                              if (supRef[0] != null) supRef[0].reportSchedulerAdvance();
+                              return;
+                          }
+                          android.util.Log.d("DigipalNative", "[native-image-attempt] caller=schedulerShowImage type=" + s.type + " contentId=" + s.contentId + " urlPath=" + sanitizedUrlPath(_url));
+                          android.util.Log.w("DigipalNative", "[video-pressure] phase=scheduler-show-image type=" + s.type + " contentId=" + s.contentId);
                           if (healthMonitor != null) healthMonitor.setRendererTypeNative();
                           try { io.sentry.Breadcrumb _iBc = new io.sentry.Breadcrumb("Slide start: IMAGE"); _iBc.setCategory("playback"); _iBc.setType("info"); _iBc.setLevel(io.sentry.SentryLevel.DEBUG); _iBc.setData("slide_id", _sid); _iBc.setData("duration_ms", _dur); io.sentry.Sentry.addBreadcrumb(_iBc); } catch (Throwable _sbc) {}
                           runOnUiThread(() -> {
@@ -2660,7 +3469,14 @@ public class MainActivity extends Activity {
                                   FrameLayout.LayoutParams _lp = new FrameLayout.LayoutParams(_dm.widthPixels, _dm.heightPixels);
                                   final android.widget.ImageView activeImgView  = activeImageViewIsA ? nativeImageView : nativeImageViewB;
                                   final android.widget.ImageView preloadImgView = activeImageViewIsA ? nativeImageViewB : nativeImageView;
-                                  if (_url.equals(preloadedImageUrl) && preloadImageReady) {
+                                  boolean _sDrOk = preloadImgView == preloadedImageView
+                                          && preloadImgView.getDrawable() != null;
+                                  if (BuildConfig.DEBUG) android.util.Log.d("DigipalNative",
+                                      "[schedulerShowImage] urlMatch=" + _url.equals(preloadedImageUrl)
+                                      + " imgReady=" + preloadImageReady
+                                      + " viewMatch=" + (preloadImgView == preloadedImageView)
+                                      + " hasDrawable=" + (preloadImgView.getDrawable() != null));
+                                  if (_url.equals(preloadedImageUrl) && preloadImageReady && _sDrOk) {
                                       // Instant swap — preloaded image already decoded
                                       preloadImgView.setScaleType(st);
                                       preloadImgView.setLayoutParams(_lp);
@@ -2671,7 +3487,7 @@ public class MainActivity extends Activity {
                                       try { com.bumptech.glide.Glide.get(MainActivity.this).trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE); } catch (Throwable ignored) {}
                                       com.bumptech.glide.Glide.with(MainActivity.this).clear(activeImgView);
                                       activeImageViewIsA = !activeImageViewIsA;
-                                      preloadedImageUrl = null; preloadImageReady = false;
+                                      preloadedImageUrl = null; preloadImageReady = false; preloadedImageView = null;
                                       if (playlistScheduler != null) playlistScheduler.onRendererReady(_sid);
                                   } else {
                                       // Cold load — load directly; keep view INVISIBLE until Glide succeeds
@@ -2722,7 +3538,8 @@ public class MainActivity extends Activity {
                           });
                       }
                       @Override public void schedulerPreloadVideo(PlaylistScheduler.SlidePlan s) {
-                          final String _url = s.url;
+                          final String _url = (s.url != null && s.url.startsWith("/")) ? getServerUrl() + s.url : s.url;
+                          android.util.Log.w("DigipalNative", "[video-pressure] phase=scheduler-preload-video type=" + s.type + " contentId=" + s.contentId);
                           runOnUiThread(() -> {
                               try {
                                   // Preload video directly in Java — no WebView hop
@@ -2757,7 +3574,19 @@ public class MainActivity extends Activity {
                           });
                       }
                       @Override public void schedulerPreloadImage(PlaylistScheduler.SlidePlan s) {
-                          final String _url = s.url;
+                          final String _url = (s.url != null && s.url.startsWith("/")) ? getServerUrl() + s.url : s.url;
+                          // #2243 guard: only allow Glide for positively-known IMAGE slides.
+                          if (s.type != PlaylistScheduler.SlideType.IMAGE) {
+                              android.util.Log.w("DigipalNative", "[native-image-skip] caller=schedulerPreloadImage type=" + s.type + " contentId=" + s.contentId + " urlPath=" + sanitizedUrlPath(_url));
+                              return;
+                          }
+                          // #2252 guard: block IMAGE-type slides whose URL is unsafe for Glide.
+                          if (isUnsafeForGlide(_url)) {
+                              android.util.Log.w("DigipalNative", "[native-image-skip] caller=schedulerPreloadImage unsafeForGlide contentId=" + s.contentId + " urlPath=" + sanitizedUrlPath(_url));
+                              return;
+                          }
+                          android.util.Log.d("DigipalNative", "[native-image-attempt] caller=schedulerPreloadImage type=" + s.type + " contentId=" + s.contentId + " urlPath=" + sanitizedUrlPath(_url));
+                          android.util.Log.w("DigipalNative", "[video-pressure] phase=scheduler-preload-image type=" + s.type + " contentId=" + s.contentId);
                           runOnUiThread(() -> {
                               try {
                                   // Preload image directly in Java — no WebView hop
@@ -2771,12 +3600,13 @@ public class MainActivity extends Activity {
                                   preloadImgView.setVisibility(View.INVISIBLE);
                                   preloadImgView.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
                                   preloadedImageUrl = _url;
+                                  preloadedImageView = preloadImgView; // track which view owns this preload
                                   preloadImgView.setAlpha(1f);
                                   com.bumptech.glide.Glide.with(MainActivity.this).load(_url)
                                       .listener(new com.bumptech.glide.request.RequestListener<android.graphics.drawable.Drawable>() {
                                           @Override public boolean onLoadFailed(@androidx.annotation.Nullable com.bumptech.glide.load.engine.GlideException e, Object m,
                                                   com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> t, boolean f) {
-                                              if (_url.equals(preloadedImageUrl)) preloadImageReady = false; return false;
+                                              if (_url.equals(preloadedImageUrl)) { preloadImageReady = false; preloadedImageView = null; } return false;
                                           }
                                           @Override public boolean onResourceReady(android.graphics.drawable.Drawable r, Object m,
                                                   com.bumptech.glide.request.target.Target<android.graphics.drawable.Drawable> t,
@@ -2797,6 +3627,8 @@ public class MainActivity extends Activity {
                           // Hide WebView + pause timers — enforces single renderer ownership.
                           // WebView sits above native layers in FrameLayout z-order so it must be
                           // INVISIBLE while native video/image is the active renderer.
+                          // Guard: if a broadcast is currently showing, do NOT hide the WebView
+                          // — the BroadcastOverlay lives there and must stay visible.
                           nativeSchedulerOwnsDisplay = true;
                           if (hasBroadcastActive) {
                               showWebViewAboveNativeLayers("schedulerDeactivateWebView while broadcast active");
@@ -2805,15 +3637,17 @@ public class MainActivity extends Activity {
                           runOnUiThread(() -> {
                               try {
                                   if (webView != null) {
-                                      webView.setAlpha(0f);
-                                      webView.setVisibility(View.INVISIBLE);
+                                      if (!hasBroadcastActive) {
+                                          webView.setAlpha(0f);
+                                          webView.setVisibility(View.INVISIBLE);
+                                      }
                                       // Do not pause timers here. The hidden shell must keep receiving assignment updates.
-                                        // v59 Fix 11: proof-of-pairing log. Every pauseTimers() call here
-                                        // MUST be matched by a resumeTimers() call in
-                                        // schedulerActivateIsolatedRenderer() before that WebView is asked
-                                        // to run JS again -- grep logcat for "timers=paused"/"timers=resumed"
-                                        // to confirm no slide is left with frozen JS.
-                                        android.util.Log.d("RendererOwner", "owner=native webView hidden timers=paused");
+                                        // Accurate log: shows whether the broadcast guard skipped the hide,
+                                        // vs. the old misleading "hidden timers=paused" that fired even when
+                                        // hasBroadcastActive=true kept the WebView visible.
+                                        android.util.Log.d("RendererOwner", hasBroadcastActive
+                                            ? "owner=native broadcast-active skip-hide timers=not-paused"
+                                            : "owner=native webView hidden timers=not-paused");
                                         // Keepalive (task 1952): keep WebSocket + JS alive on ALL devices while
                                         // timers are paused -- not just Fire TV. pauseTimers() freezes
                                         // setInterval so the WS heartbeat and status polling stop; a Java
@@ -2864,9 +3698,13 @@ public class MainActivity extends Activity {
                             runOnUiThread(() -> {
                                 try {
                                     if (webView != null) {
-                                        webView.setAlpha(0f);
-                                        webView.setVisibility(View.INVISIBLE);
-                                        android.util.Log.d("RendererOwner", "owner=isolated webView hidden (timers not paused)");
+                                        if (!hasBroadcastActive) {
+                                            webView.setAlpha(0f);
+                                            webView.setVisibility(View.INVISIBLE);
+                                            android.util.Log.d("RendererOwner", "owner=isolated webView hidden (timers not paused)");
+                                        } else {
+                                            android.util.Log.d("RendererOwner", "owner=isolated broadcast-active skip-hide (timers not paused)");
+                                        }
                                     }
                                 } catch (Throwable ignored) {}
                             });
@@ -2893,6 +3731,20 @@ public class MainActivity extends Activity {
                                       // "owner=native webView hidden timers=paused" above.
                                       android.util.Log.d("RendererOwner", "owner=isolated webView timers=resumed");
                                   }
+                                  // Lifecycle bridge log (#2238): JS is alive here (timers just
+                                  // resumed); evaluateJavascript is safe and the event flows
+                                  // through __playerLogFromNative -> logPlayerEvent pipeline.
+                                  try {
+                                      if (webView != null) {
+                                          webView.evaluateJavascript(
+                                              "try{if(window.__playerLogFromNative)"
+                                              + "window.__playerLogFromNative('INFO',"
+                                              + "'[native] isolated_renderer_activated"
+                                              + " cid=" + s.contentId + " type=" + s.type.name() + "')"
+                                              + "}catch(e){}",
+                                              null);
+                                      }
+                                  } catch (Throwable logIgnored) {}
                                   if (healthMonitor != null) healthMonitor.setRendererTypeWeb();
                                   hideNativeVideoSurfaces();
                                   hideNativeImagesForVideo();
@@ -2969,6 +3821,20 @@ public class MainActivity extends Activity {
                       @Override public void schedulerDeactivateIsolatedRenderer() {
                           runOnUiThread(() -> {
                               try {
+                                  // Lifecycle bridge log (#2238): JS is still alive during
+                                  // normal deactivation (timers may be paused but
+                                  // evaluateJavascript still executes; the event is queued
+                                  // in playerLogger._queue and flushed on next heartbeat).
+                                  if (webView != null) {
+                                      try {
+                                          webView.evaluateJavascript(
+                                              "try{if(window.__playerLogFromNative)"
+                                              + "window.__playerLogFromNative('INFO',"
+                                              + "'[native] isolated_renderer_deactivated')"
+                                              + "}catch(e){}",
+                                              null);
+                                      } catch (Throwable logIgnored) {}
+                                  }
                                   if (isolatedWebRenderer != null) {
                                       isolatedWebRenderer.hide();
                                       // Low-memory WebView policy: on CRITICAL tier, reuse of a hidden
@@ -2995,8 +3861,15 @@ public class MainActivity extends Activity {
                                       if (exoPlayer != null) exoPlayer.removeListener(nativeVideoListener);
                                       nativeVideoListener = null;
                                   }
-                                  releaseVideoPlayer(exoPlayer); exoPlayer = null;
-                                  if (pendingOldPlayer != null) { releaseVideoPlayer(pendingOldPlayer); pendingOldPlayer = null; }
+                                  // Task #2119: cancel buffer watchdog BEFORE release so it cannot
+                                  // fire onRendererError() against a player that is already draining.
+                                  stopBufferWatchdog();
+                                  drainAndRelease(exoPlayer); exoPlayer = null;
+                                  if (pendingOldPlayer != null) { drainAndRelease(pendingOldPlayer); pendingOldPlayer = null; }
+                                  // Fix: also drain+release preloadPlayer — it may be attached to
+                                  // incomingTexView; skipping clearVideoOutput() causes SurfaceTexture
+                                  // -22 on the next playlist's surface attach.
+                                  if (preloadPlayer != null) { drainAndRelease(preloadPlayer); preloadPlayer = null; preloadedVideoUrl = null; preloadVideoReady = false; }
                                   hideNativeVideoSurfaces();
                               } catch (Throwable ignored) {}
                           });
@@ -3011,12 +3884,35 @@ public class MainActivity extends Activity {
                                   nativeImageViewB.setAlpha(1f);
                                   nativeImageView.setVisibility(View.INVISIBLE);
                                   nativeImageViewB.setVisibility(View.INVISIBLE);
-                                  preloadedImageUrl = null; preloadImageReady = false;
+                                  preloadedImageUrl = null; preloadImageReady = false; preloadedImageView = null;
                               } catch (Throwable ignored) {}
                           });
                       }
                       @Override public void schedulerOnStateChanged(PlaylistScheduler.State state, String slideId) {
                           android.util.Log.d("DigipalScheduler", "[state] " + state + " slide=" + slideId);
+                          // When the scheduler goes IDLE, native content is no longer playing.
+                          // Clear the flag so setHasBroadcast(false) does not re-hide the WebView
+                          // unnecessarily if a broadcast clears after the scheduler stopped.
+                          if (state == PlaylistScheduler.State.IDLE) {
+                              nativeSchedulerOwnsDisplay = false;
+                              // Re-show the WebView so React can render content after the native
+                              // scheduler stops (e.g. schedule transition from native video/image
+                              // to a non-native design/website playlist). schedulerDeactivateWebView()
+                              // hid the WebView when native playback started; this restores it so
+                              // the JS player can immediately take over without a black screen.
+                              // Safe as a no-op if the WebView was never hidden (boot-time IDLE).
+                              runOnUiThread(() -> {
+                                  try {
+                                      if (webView != null) {
+                                          webView.setAlpha(1f);
+                                          webView.setVisibility(View.VISIBLE);
+                                          webView.setTranslationZ(0f);
+                                          webView.resumeTimers();
+                                          android.util.Log.d("DigipalScheduler", "[state] IDLE: WebView restored (alpha=1 VISIBLE z=0)");
+                                      }
+                                  } catch (Throwable ignored) {}
+                              });
+                          }
                           if (telemetryManager != null) {
                               telemetryManager.setCurrentSlide(
                                   String.valueOf(playlistScheduler.getActiveRevisionId()),
@@ -3181,26 +4077,23 @@ public class MainActivity extends Activity {
             }
             lastRelaunchScheduleElapsedMs = now;
 
-            Intent intent = new Intent(this, MainActivity.class);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                    | Intent.FLAG_ACTIVITY_CLEAR_TOP
-                    | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            // Route through RelaunchReceiver (full-screen-intent notification) — same
+            // BAL-safe approach as BootLaunchService.schedulePlayerLaunch().
+            Intent relaunchIntent = new Intent(this, RelaunchReceiver.class);
+            relaunchIntent.setAction(RelaunchReceiver.ACTION_RELAUNCH);
 
             int flags = PendingIntent.FLAG_CANCEL_CURRENT;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 flags |= PendingIntent.FLAG_IMMUTABLE;
             }
+            PendingIntent pendingIntent = PendingIntent.getBroadcast(this, 1002, relaunchIntent, flags);
 
-            PendingIntent pendingIntent = PendingIntent.getActivity(this, 1002, intent, flags);
             AlarmManager alarmManager = (AlarmManager) getSystemService(ALARM_SERVICE);
             if (alarmManager == null) return;
 
-            long earliest = now + delayMs;
-            alarmManager.setWindow(
-                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                    earliest,
-                    5_000L,
-                    pendingIntent);
+            // setWindow() — inexact (±5 s), no SCHEDULE_EXACT_ALARM needed.
+            long trigger = android.os.SystemClock.elapsedRealtime() + delayMs;
+            alarmManager.setWindow(AlarmManager.ELAPSED_REALTIME_WAKEUP, trigger, 5000L, pendingIntent);
         } catch (Throwable t) {
             Log.e("Digipal", "scheduleAppRelaunch failed", t);
         }
@@ -3400,7 +4293,12 @@ public class MainActivity extends Activity {
                   .build();
           androidx.media3.exoplayer.DefaultRenderersFactory renderersFactory =
                 new androidx.media3.exoplayer.DefaultRenderersFactory(this)
-                    .setExtensionRendererMode(androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER);
+                    .setExtensionRendererMode(androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+                    // Fall back to the next available decoder (e.g. software) when the
+                    // primary hardware MediaCodecVideoRenderer fails (avc1.640032 H.264
+                    // High L5.0 1080p on low-end Android TV boxes). Without this flag
+                    // ExoPlayer surfaces the error directly and the slide goes black.
+                    .setEnableDecoderFallback(true);
             androidx.media3.exoplayer.ExoPlayer player =
                 new androidx.media3.exoplayer.ExoPlayer.Builder(this, renderersFactory)
                     .setMediaSourceFactory(new androidx.media3.exoplayer.source.DefaultMediaSourceFactory(cacheFactory))
@@ -3505,6 +4403,10 @@ public class MainActivity extends Activity {
     private int renderGoneIdx = 0;
     private volatile boolean webViewRecoveryInProgress = false;
     private long lastMemoryReloadMs = 0L;
+    // Accessed exclusively on the main thread (onTrimMemory/onLowMemory are Activity
+    // callbacks guaranteed on the main thread; handleMemoryPressure has no off-thread
+    // call path). No need for volatile — main-thread-only access is sufficient.
+    private boolean memoryFallbackCheckPending = false; // deduplicates concurrent 4-s checks
     // --- Self-heal watchdog (heartbeat-based WebView reload) ----------------
     // The web player calls Android.heartbeat() from its JS event loop every few
     // seconds. This main-thread Handler keeps ticking even when the WebView JS
@@ -3644,16 +4546,64 @@ public class MainActivity extends Activity {
                     "window.dispatchEvent(new CustomEvent('android-memory-pressure',{detail:{level:'critical'}}));",
                     null);
                 try { webView.clearCache(false); } catch (Throwable ignored) {}
-                long now = System.currentTimeMillis();
-                if (now - lastMemoryReloadMs > 120_000L) {
-                    lastMemoryReloadMs = now;
-                    // Give the player a few seconds to recover gracefully, then
-                    // reload natively as a safety net if we are still alive.
+                // Only schedule a fallback check if one is not already pending.
+                // memoryFallbackCheckPending is cleared in the finally block of the callback,
+                // so the next trim signal after a suppression can immediately re-arm.
+                // Safe without volatile — this method runs exclusively on the main thread.
+                if (!memoryFallbackCheckPending) {
+                    memoryFallbackCheckPending = true;
+                    final int capturedLevel = level;
                     webView.postDelayed(() -> {
-                        try { webView.evaluateJavascript(
-                            "window.__digipalRecoveryReason='memory_critical_reload';", null);
-                        } catch (Throwable ignored) {}
-                        try { loadPlayerUrl(getServerUrl()); } catch (Throwable ignored) {}
+                        try {
+                            // Re-evaluate here — state can change during the 4-second delay.
+                            boolean schedulerRunning = playlistScheduler != null
+                                    && playlistScheduler.isRunning();
+                            boolean recentHeartbeat  = lastHeartbeatMs > 0
+                                    && System.currentTimeMillis() - lastHeartbeatMs < 60_000L;
+                            boolean activePlayback   = schedulerRunning
+                                    || nativeSingleContentActive
+                                    || (appMountConfirmed && !hasHttpError && recentHeartbeat);
+
+                            if (activePlayback) {
+                                android.util.Log.w("DigipalNative",
+                                    "[DigipalNativeReinit] suppressed source=onTrimMemory-critical"
+                                    + " level=" + capturedLevel
+                                    + " appMounted=" + appMountConfirmed
+                                    + " schedulerRunning=" + schedulerRunning
+                                    + " nativeSingle=" + nativeSingleContentActive
+                                    + " recentHeartbeat=" + recentHeartbeat);
+                                return;
+                            }
+
+                            // Playback is blank/stalled/error — reload is warranted.
+                            // Consume the reload cooldown only here; suppressed paths never touch it.
+                            if (System.currentTimeMillis() - lastMemoryReloadMs <= 120_000L) return;
+                            lastMemoryReloadMs = System.currentTimeMillis();
+
+                            android.util.Log.w("DigipalNative",
+                                "[DigipalNativeReinit] executed source=onTrimMemory-critical"
+                                + " level=" + capturedLevel
+                                + " appMounted=" + appMountConfirmed
+                                + " schedulerRunning=" + schedulerRunning
+                                + " nativeSingle=" + nativeSingleContentActive
+                                + " recentHeartbeat=" + recentHeartbeat);
+
+                            // Persist source before reload so the next page load can report it.
+                            // Uses PREFS_NAME ("DigipalPrefs") — same file as crash pipeline.
+                            try {
+                                getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                                    .putString("digipal_pending_native_reinit",
+                                        "memory_pressure_critical:" + capturedLevel)
+                                    .apply();
+                            } catch (Throwable ignored) {}
+
+                            try { loadPlayerUrl(getServerUrl()); } catch (Throwable ignored) {}
+
+                        } finally {
+                            // Always clear pending so the next trim signal can re-arm
+                            // immediately, even after a suppression.
+                            memoryFallbackCheckPending = false;
+                        }
                     }, 4000);
                 }
             } else if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
@@ -3745,6 +4695,23 @@ public class MainActivity extends Activity {
 
     private void forcePlayerReload() {
         try { io.sentry.Breadcrumb _frBc = new io.sentry.Breadcrumb("Player page forced reload"); _frBc.setCategory("lifecycle"); _frBc.setType("info"); _frBc.setLevel(io.sentry.SentryLevel.WARNING); io.sentry.Sentry.addBreadcrumb(_frBc); } catch (Throwable _sbc) {}
+        // Guard: do not flash a blank loading WebView over live ExoPlayer/Glide content.
+        // HealthMonitor fires this callback without knowing whether native is playing.
+        // If native owns the display, the scheduler will self-recover or HealthMonitor
+        // will escalate through rendererRebuild → hardRestart instead.
+        // Note: the applyContentRevisionFromNativeHeartbeat call site already clears
+        // nativeSchedulerOwnsDisplay and hasActiveNativePlaylist before calling here,
+        // so the guard evaluates to false there and the reload still proceeds normally.
+        if (nativeSchedulerOwnsDisplay || hasActiveNativePlaylist) {
+            android.util.Log.w("DigipalNative",
+                "[forcePlayerReload] skipped — native scheduler owns display; ExoPlayer/Glide uninterrupted");
+            return;
+        }
+        if (nativeSingleContentActive) {
+            android.util.Log.w("DigipalNative",
+                "[forcePlayerReload] skipped — single native content (image/video) active; Glide/ExoPlayer uninterrupted");
+            return;
+        }
         runOnUiThread(() -> {
             try {
                 if (errorContainer != null) errorContainer.setVisibility(View.GONE);
@@ -3882,21 +4849,28 @@ public class MainActivity extends Activity {
               // Back is a no-op in kiosk/signage mode â swallow to prevent accidental navigation.
               return true;
           }
+        if (keyCode == KeyEvent.KEYCODE_INFO) {
+            if (BuildConfig.DEBUG && debugHudManager != null) debugHudManager.toggle();
+            return true;
+        }
           if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
                   || keyCode == KeyEvent.KEYCODE_ENTER
                   || keyCode == KeyEvent.KEYCODE_BUTTON_A
                   || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) {
+              // Always forward to WebView first so the JS kiosk-unlock gesture (7 presses)
+              // is never blocked by native debug-gesture counting.
+              if (webView != null) webView.dispatchKeyEvent(event);
               long now = System.currentTimeMillis();
               if (now - dpadFirstPressMs > 5_000L) { dpadPressCount = 0; dpadFirstPressMs = now; }
               dpadPressCount++;
-              if (dpadPressCount == 5) {
-                  // 5 DPAD presses: toggle video renderer (TextureView ↔ SurfaceView) + restart pipeline
+              if (dpadPressCount == 12) {
+                  // 12 DPAD presses (debug): toggle video renderer (TextureView ↔ SurfaceView) + restart pipeline
                   dpadPressCount = 0;
                   android.content.SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
                   String cur = prefs.getString(PREF_VIDEO_RENDERER, "texture" /* TextureView for all Android TV — avoids SurfaceView z-order issues on Android box */);
                   String next = "texture".equals(cur) ? "surface" : "texture";
                   prefs.edit().putString(PREF_VIDEO_RENDERER, next).apply();
-                  android.util.Log.i("DigipalVideo", "[DPAD5] renderer toggled: " + cur + " -> " + next);
+                  android.util.Log.i("DigipalVideo", "[DPAD12] renderer toggled: " + cur + " -> " + next);
                   runOnUiThread(() -> {
                       resetVideoRenderer();
                       // Brief toast-style feedback via diagnostics overlay
@@ -3905,12 +4879,13 @@ public class MainActivity extends Activity {
                   });
                   return true;
               }
-              if (dpadPressCount >= 7) {
+              if (dpadPressCount >= 15) {
                   dpadPressCount = 0;
                   if (diagnosticsOverlay != null) hideDiagnosticsOverlay();
                   else showDiagnosticsOverlay();
                   return true;
               }
+              return true;
           }
           if (webView != null) webView.dispatchKeyEvent(event);
           return true;
@@ -3927,6 +4902,16 @@ public class MainActivity extends Activity {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
             hideSystemUI();
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        String _newReason = intent != null ? intent.getStringExtra("relaunchReason") : null;
+        if (_newReason != null) {
+            android.util.Log.i("DigipalRecovery", "MainActivity onNewIntent, reason=" + _newReason);
         }
     }
 
@@ -3961,6 +4946,12 @@ public class MainActivity extends Activity {
        * ExoPlayer SurfaceView leaks that cause OOM on long Fire TV sessions.
        */
       private void releaseAllRenderers() {
+            // Clean up native banner overlay
+            if (nativeBannerContainer != null) {
+                nativeBannerContainer.removeAllViews();
+                if (rootLayout != null) rootLayout.removeView(nativeBannerContainer);
+                nativeBannerContainer = null;
+            }
           try {
               stopStallWatchdog();
               stopBufferWatchdog();
@@ -3976,19 +4967,20 @@ public class MainActivity extends Activity {
                   }
                   nativeVideoListener = null;
               }
-              // Release active ExoPlayer
+              // Release active ExoPlayer — drainAndRelease gives the Amlogic codec
+              // dequeue thread 150ms to flush pending buffers before MediaCodec is torn down.
               if (exoPlayer != null) {
-                  try { exoPlayer.stop(); exoPlayer.release(); } catch (Throwable ignored) {}
+                  drainAndRelease(exoPlayer);
                   exoPlayer = null;
               }
               // Release preload ExoPlayer (was missing from onDestroy — OOM source on long sessions)
               if (preloadPlayer != null) {
-                  try { preloadPlayer.stop(); preloadPlayer.release(); } catch (Throwable ignored) {}
+                  drainAndRelease(preloadPlayer);
                   preloadPlayer = null; preloadedVideoUrl = null; preloadVideoReady = false;
               }
               // Release pending-old ExoPlayer (held during dual-buffer swap)
               if (pendingOldPlayer != null) {
-                  try { pendingOldPlayer.stop(); pendingOldPlayer.release(); } catch (Throwable ignored) {}
+                  drainAndRelease(pendingOldPlayer);
                   pendingOldPlayer = null;
               }
               // Detach players from all video surfaces and hide everything
@@ -4011,6 +5003,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (debugHudManager != null) { debugHudManager.stop(); debugHudManager = null; }
         stopAnrWatchdog();
         stopHeartbeatWatchdog();
         if (memoryBudgetManager != null) { memoryBudgetManager.stop(); memoryBudgetManager = null; }
@@ -4080,7 +5073,7 @@ public class MainActivity extends Activity {
                     + "\nIP:       " + ip
                     + "\nUptime:   " + uptime
                     + "\nDevice:   " + android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL
-                    + "\n\nPress SELECT x7 to dismiss");
+                    + "\n\nPress SELECT x15 to dismiss");
                 container.addView(infoTv);
 
                 // --- VIDEO RENDERER SETTINGS ROW ---
@@ -4145,5 +5138,65 @@ public class MainActivity extends Activity {
           }
       }
   
+    /** Returns the last path segment of a URL with query string stripped.
+     *  Used for safe logging — never log full signed URLs. */
+    private static String sanitizedUrlPath(String url) {
+        if (url == null) return "null";
+        int q = url.indexOf('?'); if (q >= 0) url = url.substring(0, q);
+        int s = url.lastIndexOf('/'); return s >= 0 ? url.substring(s) : url;
+    }
+
+    /** Heuristic: returns true when the URL path ends with a known video extension.
+     *  Used as a secondary defensive guard in JS-bridge image methods where SlideType
+     *  is not available. */
+    /** Returns true when the URL should NOT be fed to Glide.
+     *
+     *  Blocks:
+     *   - Known video extensions (.mp4, .mov, .webm, etc.)
+     *   - .svg extension
+     *   - External HTTP(S) URLs whose path has no file extension, or whose
+     *     extension is not a known safe raster format.  Covers URLs like
+     *     https://placehold.co/1920x1080/ec4899/fff?text=Spring+Sale which
+     *     return image/svg+xml but carry no .svg extension.
+     *     Internal /objects/ paths are exempt because they always have
+     *     proper raster extensions baked into the object key.
+     */
+    private static boolean isUnsafeForGlide(String url) {
+        if (url == null) return false;
+        String path = url.indexOf('?') >= 0 ? url.substring(0, url.indexOf('?')) : url;
+        String lower = path.toLowerCase(java.util.Locale.ROOT);
+        // Always block video and SVG extensions
+        if (lower.endsWith(".mp4") || lower.endsWith(".mov") || lower.endsWith(".webm")
+            || lower.endsWith(".avi") || lower.endsWith(".m4v") || lower.endsWith(".mkv")
+            || lower.endsWith(".ts") || lower.endsWith(".svg")) {
+            return true;
+        }
+        // For external HTTP(S) URLs apply a raster-extension allowlist.
+        // Extensionless external URLs (e.g. placehold.co/…) often serve SVG or
+        // other non-raster MIME types that Glide cannot decode and falls through
+        // to Stagefright/MediaMetadataRetriever, causing a CPU burst.
+        // Internal /objects/ paths are excluded — they always have a raster extension.
+        if ((lower.startsWith("http://") || lower.startsWith("https://"))
+                && !lower.contains("/objects/")) {
+            int lastSlash = lower.lastIndexOf('/');
+            String lastSegment = lastSlash >= 0 ? lower.substring(lastSlash + 1) : lower;
+            int dot = lastSegment.lastIndexOf('.');
+            if (dot < 0) {
+                // No extension — external URL with unknown content type; block it
+                return true;
+            }
+            String ext = lastSegment.substring(dot);
+            boolean safeRaster = ext.equals(".jpg") || ext.equals(".jpeg")
+                || ext.equals(".png") || ext.equals(".webp") || ext.equals(".gif")
+                || ext.equals(".bmp") || ext.equals(".avif");
+            return !safeRaster;
+        }
+        return false;
+    }
+
+
+
 }
+
+
 
