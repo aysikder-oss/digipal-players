@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Amazon Fire TV APK
 
 on:
   push:
@@ -37,25 +37,25 @@ jobs:
       - name: Rename APK
         run: |
           mkdir -p release
-          cp app/build/outputs/apk/debug/app-debug.apk release/DigipalPlayer-v3.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release/NexusCast-amazon-fire-tv.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v5
         with:
-          name: DigipalPlayer-v3
-          path: release/DigipalPlayer-v3.apk
+          name: NexusCast-amazon-fire-tv
+          path: release/NexusCast-amazon-fire-tv.apk
           retention-days: 90
 
       - name: Create Release
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.0.${{ github.run_number }}
-          name: Digipal Player v3.0.${{ github.run_number }}
-          files: release/DigipalPlayer-v3.apk
+          tag_name: amazon-fire-tv-v3.0.${{ github.run_number }}
+          name: NexusCast TV v3.0.${{ github.run_number }}
+          files: release/NexusCast-amazon-fire-tv.apk
           make_latest: true
           body: |
-            Digipal Player v3.0.${{ github.run_number }}
+            NexusCast TV v3.0.${{ github.run_number }}
             
             Includes native local media storage for offline playback.
             
