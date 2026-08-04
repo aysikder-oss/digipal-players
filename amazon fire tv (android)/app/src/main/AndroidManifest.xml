@@ -8,9 +8,38 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
-    <!-- SYSTEM_ALERT_WINDOW, SCHEDULE_EXACT_ALARM, USE_EXACT_ALARM removed — not used by any code path -->
+    <!-- USE_FULL_SCREEN_INTENT: normal permission (auto-granted on install, API 29+).
+         Required for full-screen-intent notifications used by RelaunchReceiver to
+         start MainActivity from the background (BAL-safe on Android 14 / targetSdk 35). -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- POST_NOTIFICATIONS: runtime permission on Android 13+ (API 33+).
+         Required for RelaunchReceiver to post the relaunch notification.
+         On TV / Fire TV devices this is typically pre-granted or not enforced. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- SYSTEM_ALERT_WINDOW ("Display over other apps"): special permission that
+         grants an explicit Background Activity Launch (BAL) exemption in AOSP
+         ActivityStarter.  When granted, RelaunchReceiver can call startActivity()
+         directly without alarm/notification machinery — the most reliable path
+         on Android TV / Fire TV ROMs that suppress full-screen intent dispatch.
+         Grant once per device:
+           adb shell appops set <package> SYSTEM_ALERT_WINDOW allow
+         Or via Settings > Apps > Special app access > Display over other apps. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- REORDER_TASKS: allows AppTask.moveToFront() to bring a backgrounded
+         (not-killed) task to the foreground without any additional exemption. -->
+    <uses-permission android:name="android.permission.REORDER_TASKS" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- ACCESS_FINE_LOCATION (and COARSE as prerequisite) required on Android 10+
+         to read the connected WiFi SSID via WifiManager.getConnectionInfo().
+         We request it once at startup; if denied, SSID is silently omitted from
+         diagnostics — playback is never blocked. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- REBOOT: privileged permission for OS-level reboot/shutdown via PowerManager.
+         Only grantable to system/signed APKs; standard user-space installs will
+         receive "unsupported" from the bridge — never silently ignored. -->
+    <uses-permission android:name="android.permission.REBOOT" />
 
     <!-- Android TV feature declarations -->
     <uses-feature
@@ -67,10 +96,39 @@
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"
-            android:exported="true">
+            android:exported="true"
+            android:directBootAware="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Recovers from WebView provider package replacement (SIGKILL with no onDestroy).
+             Schedules a 3-second relaunch via BootLaunchService.schedulePlayerLaunch()
+             when the WebView provider or Digipal APK itself is updated/replaced. -->
+        <receiver
+            android:name=".PackageUpdateReceiver"
+            android:enabled="true"
+            android:exported="true"
+            android:directBootAware="true">
+            <intent-filter>
+                <!-- Digipal APK itself was updated. No <data> needed for MY_PACKAGE_REPLACED. -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+            <intent-filter>
+                <!-- WebView provider / Chrome / Trichrome updated or replaced. -->
+                <action android:name="android.intent.action.PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.PACKAGE_ADDED" />
+                <action android:name="android.intent.action.PACKAGE_CHANGED" />
+                <data android:scheme="package" />
+            </intent-filter>
+            <!-- Debug-only test action — allows exercising the WebView-replacement recovery
+                 path on Android 14+ without needing the protected PACKAGE_REPLACED broadcast.
+                 adb shell am broadcast -a com.digipal.signage.debug.SIMULATE_WEBVIEW_PACKAGE_REPLACED -p com.digipal.signage.debug
+                 The receiver guards this with BuildConfig.DEBUG so it is a no-op in release builds. -->
+            <intent-filter>
+                <action android:name="com.digipal.signage.debug.SIMULATE_WEBVIEW_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
         <!-- Foreground service that safely opens MainActivity on boot (API 29+ fix). -->
@@ -91,5 +149,25 @@
             android:name="io.sentry.android.core.SentryPerformanceProvider"
             android:authorities="${applicationId}.SentryPerformanceProvider"
             tools:node="remove" />
+
+        <!-- Receives relaunch alarms and posts a full-screen-intent notification
+             to start MainActivity — the only BAL-safe path on Android 14 / targetSdk 35
+             without SCHEDULE_EXACT_ALARM.  android:exported="false" so only the app
+             itself can trigger it (via PendingIntent.getBroadcast). -->
+        <receiver
+            android:name=".RelaunchReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+
+        <!-- Suppress LeakCanary's launcher activity from appearing as a
+             separate launcher entry on Android TV / Fire TV home screens.
+             LeakCanary is debugImplementation only; this stub is a no-op
+             in release builds where the activity does not exist. -->
+        <activity
+            android:name="leakcanary.internal.activity.LeakLauncherActivity"
+            tools:node="remove" />
+
+
       </application>
   </manifest>
