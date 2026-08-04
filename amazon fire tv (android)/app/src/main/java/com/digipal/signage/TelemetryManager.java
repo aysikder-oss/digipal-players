@@ -1,4 +1,4 @@
-package com.nexuscast.player;
+package com.digipal.signage;
 
 import android.app.ActivityManager;
 import android.content.Context;
@@ -282,6 +282,12 @@ public class TelemetryManager {
         o.put("freeStorageBytes", freeStorage);
         o.put("memoryPressure", memPressure);
         o.put("lastError", lastError);
+        // RAM: total and used bytes so the dashboard can render a real usage bar
+        // instead of just the binary HIGH/NORMAL pressure flag.
+        o.put("memTotalBytes", mi.totalMem);
+        o.put("memUsedBytes", mi.totalMem - mi.availMem);
+        // Storage total bytes (paired with existing freeStorageBytes for the bar)
+        try { o.put("storageTotalBytes", new StatFs(ctx.getFilesDir().getPath()).getTotalBytes()); } catch (Exception ignored2) {}
         o.put("transitionGapMs", transitionGapMs.get());
         o.put("heartbeatIntervalMs", currentHeartbeatIntervalMs);
         o.put("shellSource", shellSource);
