@@ -49,8 +49,8 @@ android {
         applicationId "com.nexuscast.player"
         minSdk 21
         targetSdk 35
-        versionCode 137
-        versionName "3.16.134"
+        versionCode 138
+        versionName "3.16.135"
 
         buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
         buildConfigField "String", "SENTRY_DSN", "\"${System.getenv('SENTRY_DSN') ?: ''}\""
