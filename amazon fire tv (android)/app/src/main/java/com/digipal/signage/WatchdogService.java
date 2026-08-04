@@ -1,4 +1,4 @@
-package com.nexuscast.player;
+package com.digipal.signage;
 
       import android.app.AlarmManager;
       import android.app.Notification;
@@ -75,10 +75,16 @@ package com.nexuscast.player;
               // is hard-killed before the periodic Handler loop gets a chance to run.
               // Only armed when auto-relaunch is enabled.
               if (isAutoRelaunchEnabled()) {
-                  int cpf = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
+                  // Build crashAlarmPi — targets BootLaunchService so it can be promoted to
+                  // foreground on O+. BootLaunchService.onStartCommand reads relaunchReason
+                  // and forwards it to scheduleLaunch → MainActivity intent.
+                  Intent bls = new Intent(this, BootLaunchService.class);
+                  bls.putExtra("relaunchReason", "watchdog_deadman");
+                  int cpf = PendingIntent.FLAG_UPDATE_CURRENT
+                          | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
                   crashAlarmPi = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                      ? PendingIntent.getForegroundService(this, 99, new Intent(this, BootLaunchService.class), cpf)
-                      : PendingIntent.getService(this, 99, new Intent(this, BootLaunchService.class), cpf);
+                      ? PendingIntent.getForegroundService(this, 99, bls, cpf)
+                      : PendingIntent.getService(this, 99, bls, cpf);
                   armCrashAlarm();
               }
           }
