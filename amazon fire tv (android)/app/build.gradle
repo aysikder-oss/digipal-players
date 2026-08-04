@@ -46,7 +46,7 @@ android {
     }
 
     defaultConfig {
-        applicationId "com.digipal.signage"
+        applicationId "com.nexuscast.player"
         minSdk 21
         targetSdk 35
         versionCode 137
@@ -55,7 +55,7 @@ android {
         buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
         buildConfigField "String", "SENTRY_DSN", "\"${System.getenv('SENTRY_DSN') ?: ''}\""
         buildConfigField "String", "GIT_SHA", "\"${gitSha}\""
-        buildConfigField "String", "BUILD_FLAVOR", "\"android-tv\""
+        buildConfigField "String", "BUILD_FLAVOR", "\"amazon-fire-tv\""
 
         javaCompileOptions {
             annotationProcessorOptions {
@@ -75,7 +75,7 @@ android {
         debug {
             applicationIdSuffix ".debug"
             versionNameSuffix "-debug"
-            resValue "string", "app_name", "Digipal TV (Debug)"
+            resValue "string", "app_name", "NexusCast TV (Debug)"
             debuggable true
             minifyEnabled false
             // Point debug builds at the Replit dev server — web changes
