@@ -1,4 +1,4 @@
-package com.nexuscast.player;
+package com.digipal.signage;
 
 import android.os.Handler;
 import android.os.SystemClock;
@@ -41,13 +41,14 @@ import java.util.concurrent.Executors;
 public class PlaylistScheduler {
 
     private static final String TAG = "PlaylistScheduler";
+    private static final String BRIDGE_TAG = "DigipalBridge";
     private static final int MAX_FAILURES = 3;
     private static final int MAX_SLIDE_RETRIES = 3;
     private static final long FALLBACK_EXTEND_MS = 5_000L;
 
     public enum State {
         IDLE, BOOTING, RESTORING_LAST_GOOD,
-        PREPARING_CURRENT, PLAYING,
+        PREPARING_CURRENT, WAITING_FOR_WEBVIEW_READY, PLAYING,
         PREPARING_NEXT, TRANSITIONING,
         DEGRADED_PLAYBACK, RECOVERING_RENDERER
     }
@@ -130,7 +131,7 @@ public class PlaylistScheduler {
     private State state = State.IDLE;
     private List<SlidePlan> slides = new ArrayList<>();
     private int currentIndex = 0;
-    private boolean running = false;
+    private volatile boolean running = false;
     private int consecutiveFailures = 0;
     private long activeRevisionId = -1;
     private long slideStartMs;
@@ -187,6 +188,7 @@ public class PlaylistScheduler {
     public String getLastWebViewPolicyName() { return lastWebViewPolicy; }
     public String getShellSourceName() { return shellSource; }
     public boolean isLastFallbackUsed() { return lastFallbackUsed; }
+    public boolean isRunning() { return running; }
     public String getMemoryTierName() { return currentMemoryTier(); }
     public String getCurrentSlideId() { return currentSlideId; }
     public int getCurrentContentId() { return currentContentId; }
@@ -235,6 +237,20 @@ public class PlaylistScheduler {
      *  no-op if stale, so a superseded setPlaylist() call's async onReady()/onFailed() can never
      *  clobber a newer one (stale-callback protection). */
     private long pendingRevisionSeq = 0;
+    /** Tracks the seq of the most recently completed (committed or failed) revision so
+     *  the 30s hard-timeout cannot fire for a revision that already succeeded via
+     *  commitLocalRevision(). Without this guard the timeout fires regardless and
+     *  handlePipelineFailed() stops a working playlist and falls back to remote URLs. */
+    private long completedRevisionSeq = -1L;
+
+    /** Epoch-ms nonce set by {@link #setPlaylistRevisionId} immediately before each
+     *  {@link #setPlaylist} call.  Consumed (reset to 0) at the start of setPlaylist
+     *  so we can compare it against lastCommittedRevisionNonce. */
+    private long pendingRevisionNonce = 0L;
+    /** Highest nonce seen from a setPlaylist() call that was not rejected.  Any subsequent
+     *  setPlaylist() call whose nonce is lower (older coordinator effect) is a stale Phase 1
+     *  that the JS cancelled flag may have missed; it is silently ignored. */
+    private long lastCommittedRevisionNonce = 0L;
 
     // ── Asset readiness grace period ────────────────────────────────────────
     /** Retry count for empty-URL grace period; resets whenever a slide has a usable URL. */
@@ -249,6 +265,11 @@ public class PlaylistScheduler {
     private int rendererReadyTimeoutGen = -1;
     /** Safety runnable: starts advance timer if renderer never calls onRendererReady(). */
     private Runnable rendererReadyTimeout;
+    /** Task #2118: content-ready gate armed after onRendererReady() for WEBVIEW_* slides;
+     *  gives React time to route, fetch data, and paint before the advance timer starts. */
+    private Runnable webViewReadyTimeout;
+    /** Max extra time (ms) to wait for JS webViewSlideReady() after isolated-renderer first-paint. */
+    private static final long WEBVIEW_READY_TIMEOUT_MS = 3_000L;
       /** Set true for exactly one slide -- the first slide dispatched after a playlist
        *  structural change -- so showCurrent() can grant it a longer cold-start timeout. */
       private volatile boolean coldRevisionFirstSlide = false;
@@ -274,11 +295,36 @@ public class PlaylistScheduler {
         this.prefs = prefs;
           // Task #1891 fix: reload the active revision from Room the instant a WEBVIEW_PDF's
           // pages finish prerendering, instead of waiting for the next full playlist refresh.
-          this.repository.setPdfPrerenderReadyListener(assetId -> reloadActiveRevisionFromRoom());
+          if (repository != null) {
+              this.repository.setPdfPrerenderReadyListener(assetId -> reloadActiveRevisionFromRoom());
+          }
+    }
+
+    /** Test-only constructor — bypasses Room (repository=null). */
+    PlaylistScheduler(Delegate delegate) {
+        this(delegate, null, null, null);
+    }
+
+    /** Test-only: directly start playing a pre-built slide list, bypassing the Room pipeline.
+     *  Call from unit tests after constructing with PlaylistScheduler(Delegate). */
+    synchronized void startPlayingForTest(List<SlidePlan> testSlides) {
+        this.slides = new ArrayList<>(testSlides);
+        this.currentIndex = 0;
+        this.consecutiveFailures = 0;
+        this.retrySlideId = null;
+        this.retryCountForSlide = 0;
+        this.coldRevisionFirstSlide = true;
+        this.firstSlideRemainingMs = -1L;
+        generation++;
+        if (advanceRunnable != null) { handler.removeCallbacks(advanceRunnable); advanceRunnable = null; }
+        if (rendererReadyTimeout != null) { handler.removeCallbacks(rendererReadyTimeout); rendererReadyTimeout = null; }
+        running = true;
+        showCurrent();
     }
 
     /** Called from MainActivity.onCreate() -- restores last playlist from Room if available. */
     public void boot() {
+        Log.d(BRIDGE_TAG, "[" + android.os.SystemClock.elapsedRealtime() + "ms] boot()");
         toState(State.BOOTING, "");
         dbExec.execute(() -> {
             // Task #1892: a live setPlaylist() call (either a buffered playlist flushed
@@ -400,23 +446,66 @@ public class PlaylistScheduler {
       }
 
       /**
+    /**
+     * Called from JS immediately before each {@code setNativePlaylist} bridge call.
+     * Stores the coordinator's revision nonce (epoch-ms, generated once per coordinator
+     * effect invocation) so the subsequent {@link #setPlaylist} can detect and discard
+     * stale Phase 1 payloads from superseded effects.  Both Phase 1 and Phase 2 within
+     * the same coordinator effect share the same nonce; only cross-effect stale calls are
+     * rejected.  No-op for APKs that pre-date this method (optional bridge capability).
+     */
+    @android.webkit.JavascriptInterface
+    public synchronized void setPlaylistRevisionId(String revisionId) {
+        try {
+            long nonce = Long.parseLong(revisionId);
+            if (nonce > 0L) {
+                pendingRevisionNonce = nonce;
+                Log.d(BRIDGE_TAG, "[setPlaylistRevisionId] nonce=" + nonce);
+            }
+        } catch (NumberFormatException e) {
+            Log.w(BRIDGE_TAG, "[setPlaylistRevisionId] unparseable: " + revisionId);
+        }
+    }
+
+    /**
      * Called from setNativePlaylist JS bridge.
      * Passing "[]" stops playback and clears the active Room revision so boot()
      * does not restore stale content after a commanded page reload.
      */
     public synchronized void setPlaylist(String json) {
+        Log.d(BRIDGE_TAG, "[" + android.os.SystemClock.elapsedRealtime() + "ms] setPlaylist len=" + (json == null ? 0 : json.length()) + " gen=" + generation);
+        // Consume the nonce set by the immediately preceding setPlaylistRevisionId() call.
+        // A stale nonce (from an old coordinator effect whose JS `cancelled` flag fired after
+        // the bridge call was already enqueued) is silently rejected to prevent a superseded
+        // Phase 1 payload from overwriting a newer committed revision.
+        // Phase 1 and Phase 2 of the SAME effect share the same nonce → both are allowed.
+        final long incomingNonce = pendingRevisionNonce;
+        pendingRevisionNonce = 0L;
+        if (incomingNonce > 0L && incomingNonce < lastCommittedRevisionNonce) {
+            Log.i(TAG, "[setPlaylist] stale nonce=" + incomingNonce
+                    + " < last=" + lastCommittedRevisionNonce + " — ignored");
+            return;
+        }
+        if (incomingNonce > lastCommittedRevisionNonce) {
+            lastCommittedRevisionNonce = incomingNonce;
+        }
         lastSetJson = json;
         List<SlidePlan> newSlides = parseSlides(json);
         if (newSlides.isEmpty()) {
             pendingRevisionSeq++; // invalidate any in-flight pipeline callback for a superseded revision
             stop();
-            dbExec.execute(() -> repository.clearActiveRevision());
+            // clearActiveRevision() removed: KEY_PLS_WAS_STOPPED already prevents
+            // ghost-playing across reboots (boot() checks it and stays IDLE). Keeping
+            // the Room revision means when a schedule override ends and the real playlist
+            // arrives, isSameStructure() returns true → immediate resume, no re-download.
+            // Previously every schedule handoff wiped Room and forced a full pipeline
+            // re-download on every transition back.
             // Persist stop signal across device reboots — boot() stays IDLE even when
             // the server is unreachable, preventing a removed video from ghost-playing.
             if (prefs != null) {
                 prefs.edit().putBoolean(KEY_PLS_WAS_STOPPED, true).apply();
             }
-            Log.i(TAG, "[setPlaylist] empty -- stopped and cleared active revision");
+            Log.i(TAG, "[setPlaylist] empty -- stopped");
             return;
         }
 
@@ -444,6 +533,19 @@ public class PlaylistScheduler {
                 Log.i(TAG, "[setPlaylist] signed URL changed for active video contentId=" + activeNew.contentId + " — reloading ExoPlayer (remote source)");
                 final Delegate _d = delegate; final SlidePlan _slide = activeNew;
                 handler.post(() -> _d.schedulerPlayVideo(_slide));
+            } else if (activeOld != null && activeNew != null
+                    && activeOld.type == SlideType.IMAGE
+                    && activeNew.url != null && !activeNew.url.isEmpty()
+                    && !activeOld.url.equals(activeNew.url)
+                    && !activeIsLocal
+                    && running && delegate != null) {
+                // Fix: Phase 2 delivers the real signed URL for an image whose Phase 1 URL was
+                // empty (cache miss on the first push). Re-dispatch schedulerShowImage() so
+                // Glide loads the actual image instead of keeping the old one on screen.
+                slides = newSlides;
+                Log.i(TAG, "[setPlaylist] signed URL changed for active image contentId=" + activeNew.contentId + " — reloading Glide (remote source)");
+                final Delegate _d2 = delegate; final SlidePlan _slide2 = activeNew;
+                handler.post(() -> _d2.schedulerShowImage(_slide2));
             } else {
                 Log.d(TAG, "[setPlaylist] URL refresh -- keeping local/current slides, index=" + currentIndex
                         + " activeIsLocal=" + activeIsLocal);
@@ -487,6 +589,21 @@ public class PlaylistScheduler {
             }
         }
 
+        // Schedule-transition fix: post a 30s hard timeout. If the download pipeline
+        // hasn't called onReady/onFailed by then, treat it as a pipeline failure so we
+        // fall back to remote URLs immediately rather than leaving a stale schedule on
+        // screen indefinitely. The stale-seq guard in handlePipelineFailed cancels this
+        // automatically if onReady fires first (or if a newer setPlaylist() call fires).
+        final long timeoutSeq = mySeq;
+        handler.postDelayed(() -> {
+            // completedRevisionSeq guard: if commitLocalRevision() already succeeded for
+            // this seq the playlist is playing normally — do NOT call handlePipelineFailed.
+            if (timeoutSeq == pendingRevisionSeq && completedRevisionSeq != timeoutSeq) {
+                Log.w(TAG, "[setPlaylist] pipeline timeout seq=" + timeoutSeq + " after 30s — falling back to remote");
+                handlePipelineFailed(timeoutSeq, -1L, "pipeline_timeout", finalJson);
+            }
+        }, 30_000L);
+
         dbExec.execute(() -> {
             repository.startRevisionPipeline("default", finalJson, new PlaylistRepository.OnRevisionReady() {
                 @Override
@@ -523,6 +640,13 @@ public class PlaylistScheduler {
             Log.d(TAG, "[setPlaylist] stale onReady ignored seq=" + seq + " current=" + pendingRevisionSeq);
             return;
         }
+        // Idempotency guard: commitLocalRevision can theoretically be posted more than once
+        // (e.g. a double onReady from the pipeline). The first call sets completedRevisionSeq;
+        // subsequent calls for the same seq are safe no-ops.
+        if (completedRevisionSeq == seq) {
+            Log.d(TAG, "[setPlaylist] duplicate onReady ignored seq=" + seq + " already committed");
+            return;
+        }
         List<SlidePlan> local = (localManifestJson != null && !localManifestJson.isEmpty())
                 ? parseSlides(localManifestJson) : new ArrayList<>();
         if (local.isEmpty()) {
@@ -554,8 +678,26 @@ public class PlaylistScheduler {
         }
 
         running = true;
+        // Mark this seq as completed so the 30s timeout postDelayed no-ops even if it
+        // fires after showCurrent() has started rendering the playlist.
+        completedRevisionSeq = seq;
         Log.i(TAG, "[setPlaylist] committing local revision seq=" + seq + " revId=" + revId);
         showCurrent();
+    }
+
+    /** Test-only: set pendingRevisionSeq and completedRevisionSeq to {@code seq}, simulating
+     *  the state that exists after commitLocalRevision() has succeeded for that seq.
+     *  Used by PlaylistSchedulerTest to verify the 30s timeout guard. */
+    synchronized void forTestOnly_markRevisionCompleted(long seq) {
+        pendingRevisionSeq = seq;
+        completedRevisionSeq = seq;
+    }
+
+    /** Test-only: invoke handlePipelineFailed() for {@code seq}, exactly as the 30s
+     *  postDelayed timeout does. Used by PlaylistSchedulerTest to verify that a previously
+     *  committed revision causes handlePipelineFailed to no-op (completedRevisionSeq guard). */
+    synchronized void forTestOnly_invokePipelineFailed(long seq) {
+        handlePipelineFailed(seq, -1L, "pipeline_timeout_test", "[]");
     }
 
     /**
@@ -570,15 +712,23 @@ public class PlaylistScheduler {
             Log.d(TAG, "[setPlaylist] stale onFailed ignored seq=" + seq + " current=" + pendingRevisionSeq);
             return;
         }
-        final boolean fallbackToRemote = !running;
-        Log.w(TAG, "[setPlaylist] pipeline failed seq=" + seq + " revId=" + revId + " reason=" + reason
-                + " fallbackToRemote=" + fallbackToRemote);
-
-        if (!fallbackToRemote) {
-            // An old playlist is still playing -- keep it running rather than replacing it
-            // with an unresolved/failed revision.
+        // completedRevisionSeq guard: if commitLocalRevision() already succeeded for this
+        // seq the playlist is playing normally. The 30s timeout can still reach here (it
+        // bypasses the outer stale-seq check because pendingRevisionSeq hasn't changed).
+        // Returning here prevents stop() + remote-URL fallback from disrupting good playback.
+        if (completedRevisionSeq == seq) {
+            Log.d(TAG, "[setPlaylist] pipeline timeout ignored — revision seq=" + seq + " already committed successfully");
             return;
         }
+        completedRevisionSeq = seq;
+        // Schedule-transition fix: always fall back to remote URLs on pipeline failure.
+        // Previously this was gated on !running (only fallback when idle), which silently
+        // kept the OLD playlist running when a schedule activated new content and the
+        // download pipeline failed or timed out.  The remote HTTPS URLs from the server
+        // are valid and ExoPlayer/Glide handles them fine — using them is better than
+        // leaving a stale schedule on screen indefinitely.
+        Log.w(TAG, "[setPlaylist] pipeline failed seq=" + seq + " revId=" + revId + " reason=" + reason
+                + " running=" + running + " -- falling back to remote URLs");
 
         List<SlidePlan> remote = parseSlides(rawJson);
         if (remote.isEmpty()) {
@@ -632,6 +782,10 @@ public class PlaylistScheduler {
             rendererReadyTimeout = null;
         }
         rendererReadyTimeoutGen = -1;
+        if (webViewReadyTimeout != null) {
+            handler.removeCallbacks(webViewReadyTimeout);
+            webViewReadyTimeout = null;
+        }
         toState(State.IDLE, "");
         // Clear lingering native renderers immediately so old content vanishes on playlist switch
         if (delegate != null) {
@@ -710,12 +864,40 @@ public class PlaylistScheduler {
                 rendererReadyTimeout = null;
             }
             rendererReadyTimeoutGen = -1;
-            toState(State.PLAYING, slideId);
-            startAdvanceTimer(generation, pendingAdvanceDurationMs);
-            // Task #1902 fix: preload the next slide only now that we're actually PLAYING —
-            // see the comment above the schedulePreload() call site in showCurrent() for why
-            // this can no longer happen before onRendererReady() fires.
-            schedulePreload();
+            // Task #2118: for WEBVIEW_* slides, first-paint from the isolated renderer
+            // != content visible (widget data not yet fetched). Enter a secondary
+            // WAITING_FOR_WEBVIEW_READY gate; JS's notifyContentVisible() fires
+            // webViewSlideReady() to start the advance timer. 3s fallback in case the
+            // signal never arrives (e.g. content broken, JS side not calling).
+            if ("isolated_webview".equals(currentRendererKind)) {
+                toState(State.WAITING_FOR_WEBVIEW_READY, slideId);
+                final int myGen = generation;
+                final String mySlideId = slideId;
+                final long dur = pendingAdvanceDurationMs;
+                if (webViewReadyTimeout != null) handler.removeCallbacks(webViewReadyTimeout);
+                webViewReadyTimeout = () -> {
+                    if (generation != myGen) return;
+                    Log.w(TAG, "[webview_ready_timeout] no JS webViewSlideReady for slide="
+                            + mySlideId + " after " + WEBVIEW_READY_TIMEOUT_MS
+                            + "ms — starting advance timer anyway");
+                    if (telemetry != null) telemetry.logEvent("webview_ready_timeout", mySlideId,
+                            "{\"timeoutMs\":" + WEBVIEW_READY_TIMEOUT_MS + "}");
+                    webViewReadyTimeout = null;
+                    if (state == State.WAITING_FOR_WEBVIEW_READY) {
+                        toState(State.PLAYING, mySlideId);
+                        startAdvanceTimer(myGen, dur);
+                        schedulePreload();
+                    }
+                };
+                handler.postDelayed(webViewReadyTimeout, WEBVIEW_READY_TIMEOUT_MS);
+            } else {
+                toState(State.PLAYING, slideId);
+                startAdvanceTimer(generation, pendingAdvanceDurationMs);
+                // Task #1902 fix: preload the next slide only now that we're actually PLAYING —
+                // see the comment above the schedulePreload() call site in showCurrent() for why
+                // this can no longer happen before onRendererReady() fires.
+                schedulePreload();
+            }
         }
     }
 
@@ -732,6 +914,31 @@ public class PlaylistScheduler {
             Log.i(TAG, "[VideoLoop][Scheduler] naturalEnd reason=naturalEnd slide=" + slideId);
             if (advanceRunnable != null) { handler.removeCallbacks(advanceRunnable); advanceRunnable = null; }
             advance();
+        });
+    }
+
+    /**
+     * Task #2118: called by MainActivity's @JavascriptInterface webViewSlideReady() when
+     * React's notifyContentVisible() fires for a WEBVIEW_* slide. Transitions from
+     * WAITING_FOR_WEBVIEW_READY → PLAYING and starts the advance timer so the full
+     * configured slide duration is spent on visible content, not on load overhead.
+     */
+    public void onWebViewSlideReady() {
+        handler.post(() -> {
+            if (state != State.WAITING_FOR_WEBVIEW_READY) return;
+            if (slides.isEmpty() || currentIndex >= slides.size()) return;
+            final String slideId = slides.get(currentIndex).slideId;
+            long readyMs = SystemClock.elapsedRealtime() - slideStartMs;
+            Log.d(TAG, "[webview_ready] JS signal for slide=" + slideId + " in " + readyMs + "ms");
+            if (telemetry != null) telemetry.logEvent("webview_ready", slideId,
+                    "{\"readyMs\":" + readyMs + ",\"source\":\"js_signal\"}");
+            if (webViewReadyTimeout != null) {
+                handler.removeCallbacks(webViewReadyTimeout);
+                webViewReadyTimeout = null;
+            }
+            toState(State.PLAYING, slideId);
+            startAdvanceTimer(generation, pendingAdvanceDurationMs);
+            schedulePreload();
         });
     }
 
@@ -772,6 +979,10 @@ public class PlaylistScheduler {
             rendererReadyTimeout = null;
         }
         rendererReadyTimeoutGen = -1;
+        if (webViewReadyTimeout != null) {
+            handler.removeCallbacks(webViewReadyTimeout);
+            webViewReadyTimeout = null;
+        }
         retryCountForSlide++;
         consecutiveFailures++;
         if (telemetry != null) telemetry.logEvent("slide_failed", slideId,
@@ -1003,13 +1214,48 @@ public class PlaylistScheduler {
           //                    — never instantiated — and have been deleted.)
           switch (eff) {
               case VIDEO:
+                  final String prevRendererKindForBarrier = currentRendererKind;
                   currentRendererKind = "native_video";
                   delegate.schedulerDeactivateWebView();
                   // Release any isolated per-slide WebView left active from a prior
                   // WEBVIEW_DESIGN/KIOSK/URL slide -- without this it stays alive
                   // (and visible on some z-order paths) behind the native video.
                   delegate.schedulerDeactivateIsolatedRenderer();
-                  delegate.schedulerPlayVideo(dispatch);
+                  // Fire TV / low-RAM decoder-release barrier (#2238): if the outgoing
+                  // slide was an isolated WebView (design/PDF/URL), its embedded <video>
+                  // decoder may still hold a hardware slot. On constrained devices
+                  // (LOW/CRITICAL memory tier) two simultaneous codec clients exhaust
+                  // the media.resource_manager budget and cause Fire OS to kill the
+                  // WebView renderer process (logcat: signal 9 on the chromium sandbox
+                  // right after "registerClient ... 2 ... video=1"). A 150ms delay gives
+                  // the WebView renderer time to release the slot before ExoPlayer
+                  // claims it. The generation token cancels the delayed dispatch if the
+                  // playlist has already advanced while the delay was running.
+                  if ("isolated_webview".equals(prevRendererKindForBarrier)
+                          && !"NORMAL".equals(currentMemoryTier())) {
+                      final int barrierGen = generation;
+                      if (telemetry != null) telemetry.logEvent("decoder_release_wait_applied",
+                              slide.slideId,
+                              "{\"prevRendererKind\":\"" + prevRendererKindForBarrier + "\""
+                              + ",\"memoryTier\":\"" + currentMemoryTier() + "\""
+                              + ",\"index\":" + currentIndex
+                              + ",\"contentId\":" + slide.contentId + ",\"delayMs\":150}");
+                      Log.i(TAG, "[decoder_release_wait] 150ms barrier before video dispatch"
+                              + " prevKind=" + prevRendererKindForBarrier
+                              + " tier=" + currentMemoryTier() + " slide=" + slide.slideId);
+                      final Delegate _delegate = delegate;
+                      final SlidePlan _dispatch = dispatch;
+                      handler.postDelayed(() -> {
+                          if (generation == barrierGen && running) {
+                              _delegate.schedulerPlayVideo(_dispatch);
+                          } else {
+                              Log.i(TAG, "[decoder_release_wait] cancelled gen=" + generation
+                                      + " barrierGen=" + barrierGen + " running=" + running);
+                          }
+                      }, 150);
+                  } else {
+                      delegate.schedulerPlayVideo(dispatch);
+                  }
                   break;
               case IMAGE:
                   currentRendererKind = "native_image";
@@ -1115,6 +1361,7 @@ public class PlaylistScheduler {
 
     /** Codex fix item 6: synchronized to match showCurrent() — see the comment there. */
     private synchronized void advance() {
+        Log.d(BRIDGE_TAG, "[" + android.os.SystemClock.elapsedRealtime() + "ms] advance idx=" + currentIndex + " gen=" + generation);
         if (!running) return;
         final SlidePlan cur = currentIndex < slides.size() ? slides.get(currentIndex) : null;
         final boolean curIsNative = cur != null
@@ -1291,6 +1538,7 @@ public class PlaylistScheduler {
        */
       private List<SlidePlan> expandPdfIfPrerendered(SlidePlan pdfSlide) {
           if (pdfSlide.type != SlideType.WEBVIEW_PDF) return Collections.singletonList(pdfSlide);
+          if (repository == null) return Collections.singletonList(pdfSlide); // null in test path
           try {
               String assetId = "native_asset_" + pdfSlide.contentId + "_pdf";
               PlaylistDatabase.AssetEntity ae = repository.getAsset(assetId);
@@ -1394,4 +1642,6 @@ public class PlaylistScheduler {
     }
 
 }
+
+
 
