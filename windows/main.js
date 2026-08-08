@@ -225,6 +225,14 @@ function createWindow() {
     retryCount = 0;
   });
 
+  mainWindow.on('close', (event) => {
+    if (tray && !app.isQuiting) {
+      event.preventDefault();
+      mainWindow.hide();
+      return;
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -274,6 +282,16 @@ function createTray() {
     if (!fs.existsSync(iconPath)) return;
     const icon = nativeImage.createFromPath(iconPath).resize({ width: 22, height: 22 });
     tray = new Tray(icon);
+    tray.on('click', () => {
+      if (mainWindow) {
+        if (mainWindow.isVisible()) {
+          mainWindow.focus();
+        } else {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      }
+    });
     updateTray();
   } catch (e) {
     console.error('Failed to create tray:', e.message);
@@ -289,6 +307,13 @@ function updateTray() {
 
   const contextMenu = Menu.buildFromTemplate([
     { label: `Digipal Player v${app.getVersion()}`, enabled: false },
+    { type: 'separator' },
+    {
+      label: 'Show Window',
+      click: () => {
+        if (mainWindow) { mainWindow.show(); mainWindow.focus(); }
+      }
+    },
     { type: 'separator' },
     { label: `Server: ${serverUrl || 'Not configured'}`, enabled: false },
     { label: `Mode: ${modeLabel}${state.cloudConnected ? ' + Cloud Channel' : ''}`, enabled: false },
@@ -336,6 +361,7 @@ function updateTray() {
     {
       label: 'Quit',
       click: () => {
+        app.isQuiting = true;
         app.quit();
       }
     }
@@ -370,7 +396,14 @@ function setupMediaIPC() {
   });
 
   ipcMain.on('app:setAutoRelaunch', (event, enabled) => {
-    app.setLoginItemSettings({ openAtLogin: enabled });
+    app.setLoginItemSettings({ openAtLogin: enabled, openAsHidden: false });
+  });
+
+  ipcMain.on('app:setKioskMode', (event, enabled) => {
+    kioskMode = enabled;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setKiosk(enabled);
+    }
   });
 
   ipcMain.on('app:scheduleRelaunch', () => {
@@ -393,6 +426,8 @@ function setupMediaIPC() {
       cloudUrlPending = false;
       saveConfig(pairUrl, false);
       console.log('[main] Device paired — config saved:', pairUrl);
+      // Auto-enable launch at login on first pairing
+      app.setLoginItemSettings({ openAtLogin: true, openAsHidden: false });
     }
   });
 }
@@ -553,10 +588,13 @@ app.on('ready', async () => {
 });
 
 app.on('window-all-closed', () => {
-  globalShortcut.unregisterAll();
-  if (connectionManager) connectionManager.stop();
-  if (bonjourBrowser) bonjourBrowser.stop();
-  app.quit();
+  // Keep running in system tray — quit only via tray menu
+  if (!tray) {
+    globalShortcut.unregisterAll();
+    if (connectionManager) connectionManager.stop();
+    if (bonjourBrowser) bonjourBrowser.stop();
+    app.quit();
+  }
 });
 
 app.on('activate', () => {
@@ -569,3 +607,4 @@ app.on('before-quit', () => {
   if (connectionManager) connectionManager.stop();
   if (bonjourBrowser) bonjourBrowser.stop();
 });
+
