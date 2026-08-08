@@ -26,6 +26,9 @@
     "appId": "com.digipal.player.smart-triggers",
     "productName": "Digipal Player (Smart Triggers)",
     "asar": false,
+    "directories": {
+      "output": "release"
+    },
     "win": {
       "target": [
         {
