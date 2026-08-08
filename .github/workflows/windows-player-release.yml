@@ -51,13 +51,13 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install dependencies
+      - name: Install dependencies (skip native build scripts)
         working-directory: windows-smart-triggers
-        run: npm install
+        run: npm install --ignore-scripts
 
-      - name: Rebuild native modules
+      - name: Rebuild native modules for Electron
         working-directory: windows-smart-triggers
-        run: npx electron-rebuild
+        run: npx electron-rebuild --force
 
       - name: Build NSIS installer
         working-directory: windows-smart-triggers
