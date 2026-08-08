@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, globalShortcut, dialog, shell, ipcMain, session, protocol, net } = require('electron');
+const { app, BrowserWindow, Menu, globalShortcut, dialog, shell, ipcMain, session, protocol, net, Tray, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { HardwareManager } = require('./hardware');
@@ -10,6 +10,7 @@ const CONFIG_FILE = 'config.json';
 
 let mainWindow = null;
 let loadingWindow = null;
+let tray = null;
 let kioskMode = false;
 let hardwareManager = null;
 let serverUrl = '';
@@ -157,6 +158,14 @@ function createWindow() {
       console.log('Retrying connection...');
       mainWindow.loadURL(serverUrl + PLAYER_PATH);
     }, 5000);
+  });
+
+  mainWindow.on('close', (event) => {
+    if (tray && !app.isQuiting) {
+      event.preventDefault();
+      mainWindow.hide();
+      return;
+    }
   });
 
   mainWindow.on('closed', () => {
@@ -320,6 +329,114 @@ function setupMediaIPC() {
   });
 }
 
+function setupMediaIPC() {
+  ipcMain.on('media:download', (event, objectPath, signedUrl) => {
+    if (mediaManager) mediaManager.downloadMedia(objectPath, signedUrl);
+  });
+
+  ipcMain.on('media:getLocalPath', (event, objectPath) => {
+    event.returnValue = mediaManager ? mediaManager.getLocalMediaPath(objectPath) : '';
+  });
+
+  ipcMain.on('media:delete', (event, objectPath) => {
+    event.returnValue = mediaManager ? mediaManager.deleteMedia(objectPath) : false;
+  });
+
+  ipcMain.on('media:deleteAll', (event) => {
+    event.returnValue = mediaManager ? mediaManager.deleteAllMedia() : 0;
+  });
+
+  ipcMain.on('media:getStorageInfo', (event) => {
+    event.returnValue = mediaManager ? mediaManager.getStorageInfo() : '{"usedBytes":0,"freeBytes":0,"totalSpace":0,"totalFiles":0}';
+  });
+
+  ipcMain.on('media:clearCache', () => {
+    if (mediaManager) mediaManager.deleteAllMedia();
+  });
+
+  ipcMain.on('app:setAutoRelaunch', (event, enabled) => {
+    app.setLoginItemSettings({ openAtLogin: enabled, openAsHidden: false });
+  });
+
+  ipcMain.on('app:setKioskMode', (event, enabled) => {
+    kioskMode = enabled;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setKiosk(enabled);
+    }
+  });
+
+  ipcMain.on('app:scheduleRelaunch', () => {
+    app.relaunch();
+    app.exit(0);
+  });
+
+  ipcMain.on('device:paired', (_event, url) => {
+    const pairUrl = url || serverUrl;
+    if (pairUrl) {
+      saveConfig(pairUrl);
+      console.log('[main] Device paired — config saved:', pairUrl);
+      // Auto-enable launch at login on first pairing
+      app.setLoginItemSettings({ openAtLogin: true, openAsHidden: false });
+    }
+  });
+
+  ipcMain.on('bonjour:getServers', (event) => {
+    event.returnValue = bonjourBrowser ? JSON.stringify(bonjourBrowser.getServers()) : '[]';
+  });
+}
+
+function createTray() {
+  try {
+    const iconPath = path.join(__dirname, 'icon.png');
+    if (!fs.existsSync(iconPath)) return;
+    const icon = nativeImage.createFromPath(iconPath).resize({ width: 22, height: 22 });
+    tray = new Tray(icon);
+    tray.on('click', () => {
+      if (mainWindow) {
+        if (mainWindow.isVisible()) {
+          mainWindow.focus();
+        } else {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      }
+    });
+    const contextMenu = Menu.buildFromTemplate([
+      { label: `Digipal Player (Smart Triggers) v${app.getVersion()}`, enabled: false },
+      { type: 'separator' },
+      {
+        label: 'Show Window',
+        click: () => {
+          if (mainWindow) { mainWindow.show(); mainWindow.focus(); }
+        }
+      },
+      { type: 'separator' },
+      { label: `Server: ${serverUrl || 'Not configured'}`, enabled: false },
+      { type: 'separator' },
+      {
+        label: 'Reload (F5)',
+        click: () => {
+          if (mainWindow) mainWindow.webContents.reload();
+        }
+      },
+      { type: 'separator' },
+      {
+        label: 'Quit',
+        click: () => {
+          app.isQuiting = true;
+          if (hardwareManager) hardwareManager.stop();
+          if (bonjourBrowser) bonjourBrowser.stop();
+          app.quit();
+        }
+      }
+    ]);
+    tray.setContextMenu(contextMenu);
+    tray.setToolTip('Digipal Player (Smart Triggers)');
+  } catch (e) {
+    console.error('Failed to create tray:', e.message);
+  }
+}
+
 app.on('ready', async () => {
   protocol.handle('local-media', (request) => {
     const filePath = decodeURIComponent(request.url.replace('local-media://', ''));
@@ -333,6 +450,7 @@ app.on('ready', async () => {
   bonjourBrowser.start();
 
   setupMediaIPC();
+  createTray();
 
   // Stage 1: always show loading screen first
   showLoadingScreen();
@@ -355,12 +473,15 @@ app.on('ready', async () => {
 });
 
 app.on('window-all-closed', () => {
-  if (hardwareManager) {
-    hardwareManager.stop();
+  // Keep running in system tray — quit only via tray menu
+  if (!tray) {
+    if (hardwareManager) {
+      hardwareManager.stop();
+    }
+    if (bonjourBrowser) bonjourBrowser.stop();
+    globalShortcut.unregisterAll();
+    app.quit();
   }
-  if (bonjourBrowser) bonjourBrowser.stop();
-  globalShortcut.unregisterAll();
-  app.quit();
 });
 
 app.on('activate', () => {
@@ -368,3 +489,4 @@ app.on('activate', () => {
     createWindow();
   }
 });
+
