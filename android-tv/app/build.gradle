@@ -49,8 +49,8 @@ android {
         applicationId "com.digipal.signage"
         minSdk 21
         targetSdk 35
-        versionCode 140
-        versionName "3.16.137"
+        versionCode 141
+        versionName "3.16.138"
 
         buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
         buildConfigField "String", "SENTRY_DSN", "\"${System.getenv('SENTRY_DSN') ?: ''}\""
@@ -140,7 +140,7 @@ dependencies {
     // OkHttp — asset downloader with SHA256 + ETag + Range resume
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     // Sentry — crash & ANR reporting
-    implementation 'io.sentry:sentry-android:7.14.0'
+    implementation 'io.sentry:sentry-android:8.16.0'
     // Debug-only: memory leak detection + OkHttp request logging
     debugImplementation 'com.squareup.leakcanary:leakcanary-android:2.14'
     implementation 'com.squareup.okhttp3:logging-interceptor:4.12.0'
