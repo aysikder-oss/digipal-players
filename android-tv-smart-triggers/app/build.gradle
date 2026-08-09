@@ -27,8 +27,8 @@ plugins {
           applicationId "com.nexuscast.player"
           minSdk 21
           targetSdk 35
-          versionCode 38
-          versionName "3.12.16"
+          versionCode 39
+          versionName "3.12.17"
 
           buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
           buildConfigField "String", "SENTRY_DSN", "\"${System.getenv('SENTRY_DSN') ?: ''}\""
