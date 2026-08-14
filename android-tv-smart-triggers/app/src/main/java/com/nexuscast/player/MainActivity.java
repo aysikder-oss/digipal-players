@@ -860,7 +860,9 @@ import android.os.Looper;
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
                     PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
                     if (pm == null) return "unsupported";
-                    pm.shutdown(false, null, false);
+                    java.lang.reflect.Method m = pm.getClass().getMethod(
+                        "shutdown", boolean.class, String.class, boolean.class);
+                    m.invoke(pm, false, null, false);
                     return "acknowledged";
                 }
                 return "unsupported";
