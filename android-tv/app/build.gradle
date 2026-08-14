@@ -29,7 +29,7 @@ def hasReleaseSigning = hasEnvSigning || hasInjectedSigning
 
 android {
     namespace 'com.digipal.signage'
-    compileSdk 35
+    compileSdk 36
 
     signingConfigs {
         release {
@@ -48,9 +48,9 @@ android {
     defaultConfig {
         applicationId "com.digipal.signage"
         minSdk 21
-        targetSdk 35
-        versionCode 142
-        versionName "4.0"
+        targetSdk 36
+        versionCode 143
+        versionName "4.0.1"
 
         buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
         buildConfigField "String", "SENTRY_DSN", "\"${System.getenv('SENTRY_DSN') ?: ''}\""
@@ -124,11 +124,11 @@ dependencies {
     implementation 'androidx.webkit:webkit:1.9.0'
     implementation 'com.google.android.material:material:1.11.0'
     // ExoPlayer (Media3) — native video overlay via PlayerView
-    implementation 'androidx.media3:media3-exoplayer:1.3.1'
-    implementation 'androidx.media3:media3-ui:1.3.1'
-    implementation 'androidx.media3:media3-common:1.3.1'
+    implementation 'androidx.media3:media3-exoplayer:1.4.1'
+    implementation 'androidx.media3:media3-ui:1.4.1'
+    implementation 'androidx.media3:media3-common:1.4.1'
     // ExoPlayer on-disk video cache
-    implementation 'androidx.media3:media3-datasource:1.3.1'
+    implementation 'androidx.media3:media3-datasource:1.4.1'
     // Glide — native image overlay
     implementation 'com.github.bumptech.glide:glide:4.16.0'
     annotationProcessor 'com.github.bumptech.glide:compiler:4.16.0'
