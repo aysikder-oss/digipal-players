@@ -96,6 +96,7 @@ public class PlaylistScheduler {
     private int consecutiveFailures = 0;
     private long activeRevisionId = -1;
     private long slideStartMs;
+    private String currentRendererKind = "";
     private Runnable advanceRunnable;
 
     /** Incremented on every stop()/setPlaylist() to invalidate stale advance callbacks. */
