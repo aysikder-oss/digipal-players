@@ -109,7 +109,8 @@ public class SmartTriggerBridgeTest {
                     + "window.__digipalNativeImageReady_st_test=function(){window.testReady=true;Android.setWebViewDormant(true)};"
                     + "setInterval(function(){window.testTicks++},100);"
                     + "window.addEventListener('hw:signalCaptured',function(){window.testCaptures++});"
-                    + "window.addEventListener('keydown',function(e){if(e.code==='KeyB')window.testKeyDowns++});"
+                    + "window.addEventListener('keydown',function(e){window.testLastKey={code:e.code,key:e.key,keyCode:e.keyCode};"
+                    + "if(e.code==='KeyB'||e.key==='b'||e.key==='B'||e.keyCode===66)window.testKeyDowns++});"
                     + "Android.showNativeImage(" + org.json.JSONObject.quote(android.net.Uri.fromFile(image[0]).toString())
                     + ",0,0,128,128,'contain','st_test');true", "trigger-test-token");
             assertEquals("true", init);
@@ -118,7 +119,9 @@ public class SmartTriggerBridgeTest {
             androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
                     .sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_B);
             Thread.sleep(300);
-            assertEquals("1", evaluate(scenario, "window.testKeyDowns", null));
+            assertEquals("Android virtual keys can lack a physical KeyboardEvent.code: "
+                    + evaluate(scenario, "JSON.stringify(window.testLastKey)", null),
+                    "1", evaluate(scenario, "window.testKeyDowns", null));
             evaluate(scenario, "window.smartTriggers.startLearnMode({});true", null);
             androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
                     .sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_A);
