@@ -124,11 +124,15 @@ public class PlaylistSchedulerTest {
         // Now stop
         sched.setPlaylist("[]");
 
-        // First call must be stopVideo — no spurious playVideo from a stale pipeline
+        // State/isolated cleanup notifications may precede the native stop.
+        // The regression is playback after stopping, not diagnostic call order.
         assertFalse("calls list should not be empty after setPlaylist([])", d.calls.isEmpty());
-        assertTrue("first call after stop must be stopVideo, got: " + d.calls,
-                d.calls.get(0).startsWith("stopVideo"));
+        assertTrue("native video must stop synchronously, got: " + d.calls,
+                d.hasCalled("stopVideo"));
+        assertFalse("stopping must not issue another playVideo", d.hasCalled("playVideo"));
         assertEquals(PlaylistScheduler.State.IDLE, sched.getState());
+        drainMain(5000);
+        assertFalse("stale callbacks must not restart playback after stop", d.hasCalled("playVideo"));
     }
 
     /**
