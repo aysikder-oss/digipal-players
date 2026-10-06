@@ -35,6 +35,7 @@ jobs:
       - name: Verify scope and adapter behavior
         run: |
           python3 scripts/check-protected-paths.py
+          python3 scripts/check-bridge-contract.py
           node --test tests/adapter.test.cjs
       - name: Prepare ST-only signing
         shell: bash

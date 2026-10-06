@@ -950,6 +950,12 @@ public class MainActivity extends Activity {
     }
 
     private class WebAppInterface {
+        @JavascriptInterface public void setPlaylistRevisionId(String token, String revisionId) {
+            if (!isValidBridgeToken(token)) return;
+            runOnUiThread(() -> {
+                if (playlistScheduler != null) playlistScheduler.setPlaylistRevisionId(revisionId);
+            });
+        }
         @JavascriptInterface public String getSmartTriggerPairingCode(String token) {
             return isValidBridgeToken(token) && cachedPairingCode != null ? cachedPairingCode : "";
         }
@@ -1439,6 +1445,8 @@ public class MainActivity extends Activity {
                   o.put("manufacturer", android.os.Build.MANUFACTURER);
                   o.put("androidVersion", android.os.Build.VERSION.RELEASE);
                   o.put("appVersion", BuildConfig.VERSION_NAME);
+                  o.put("appVariant", "smart-triggers");
+                  o.put("packageName", getPackageName());
                   o.put("deviceId", getOrCreateInstallId());
                   return o.toString();
               } catch (Throwable e) {

@@ -7,7 +7,7 @@ import org.junit.Test;
 
 /**
  * Unit tests for the revision watchdog decision logic extracted into
- * {@link MainActivity.PlayerWebViewClient#revisionWatchdogShouldReload}.
+ * {@link MainActivity#revisionWatchdogShouldReload}.
  *
  * These tests guard the fix for the black-screen bug where the 10-second
  * watchdog in applyContentRevisionFromNativeHeartbeat() was incorrectly
@@ -21,7 +21,7 @@ public class MainActivityRevisionWatchdogTest {
     // ── Helper alias for readability ──────────────────────────────────────────
 
     private static boolean shouldReload(boolean nativeOwns, boolean hasNative, boolean dormant) {
-        return MainActivity.PlayerWebViewClient.revisionWatchdogShouldReload(
+        return MainActivity.revisionWatchdogShouldReload(
                 nativeOwns, hasNative, dormant);
     }
 
