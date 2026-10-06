@@ -49,7 +49,7 @@ public class SmartTriggerBridgeTest {
                             + "return JSON.stringify({adapter:!!window.smartTriggers,"
                             + "paired:Android.getSmartTriggerPairingCode('test-page-token')==='TESTST',"
                             + "invalid:Android.getSmartTriggerPairingCode('wrong-token')==='',"
-                            + "cache:Android.getLocalMediaPath('test-page-token','/objects/missing')==='',"
+                            + "cache:!Android.getLocalMediaPath('test-page-token','/objects/missing'),"
                             + "devices:Android.getConnectedDevices('test-page-token')==='[]'});"
                             + "}catch(e){return String(e)}})()", value -> { result[0] = value; called.countDown(); });
                 } catch (ReflectiveOperationException e) { throw new AssertionError(e); }

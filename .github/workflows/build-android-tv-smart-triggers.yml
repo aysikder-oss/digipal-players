@@ -72,10 +72,16 @@ jobs:
         with:
           name: smart-triggers-unit-reports
           path: android-tv-smart-triggers/app/build/reports/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smart-triggers-release-symbols
+          path: android-tv-smart-triggers/app/build/outputs/mapping/release/
+          if-no-files-found: error
       - name: Delete transient signing file
         if: always()
         run: rm -f "$RUNNER_TEMP/st-release.jks"
   instrumented:
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
