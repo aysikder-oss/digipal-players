@@ -43,6 +43,10 @@ package com.nexuscast.player;
           @Override
           public void onCreate() {
               super.onCreate();
+              if (!isAutoRelaunchEnabled()) {
+                  stopSelf();
+                  return;
+              }
               // Read configurable interval from prefs (set by setRelaunchCheckSec JS bridge).
               int checkSec = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                       .getInt(KEY_CHECK_SEC, DEFAULT_CHECK_SEC);
@@ -71,15 +75,28 @@ package com.nexuscast.player;
               // is hard-killed before the periodic Handler loop gets a chance to run.
               // Only armed when auto-relaunch is enabled.
               if (isAutoRelaunchEnabled()) {
-                  int cpf = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
+                  // Build crashAlarmPi — targets BootLaunchService so it can be promoted to
+                  // foreground on O+. BootLaunchService.onStartCommand reads relaunchReason
+                  // and forwards it to scheduleLaunch → MainActivity intent.
+                  Intent bls = new Intent(this, BootLaunchService.class);
+                  bls.putExtra("relaunchReason", "watchdog_deadman");
+                  int cpf = PendingIntent.FLAG_UPDATE_CURRENT
+                          | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
                   crashAlarmPi = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                      ? PendingIntent.getForegroundService(this, 99, new Intent(this, BootLaunchService.class), cpf)
-                      : PendingIntent.getService(this, 99, new Intent(this, BootLaunchService.class), cpf);
+                      ? PendingIntent.getForegroundService(this, 99, bls, cpf)
+                      : PendingIntent.getService(this, 99, bls, cpf);
                   armCrashAlarm();
               }
           }
 
-          @Override public int onStartCommand(Intent i, int f, int s) { return START_STICKY; }
+          @Override
+          public int onStartCommand(Intent i, int f, int s) {
+              if (!isAutoRelaunchEnabled()) {
+                  stopSelf();
+                  return START_NOT_STICKY;
+              }
+              return START_STICKY;
+          }
           @Override public IBinder onBind(Intent i) { return null; }
           @Override public void onDestroy() {
               if (handler != null) handler.removeCallbacks(loop);
@@ -92,7 +109,7 @@ package com.nexuscast.player;
 
           private boolean isAutoRelaunchEnabled() {
               SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-              return prefs.getBoolean(KEY_AUTO_RELAUNCH, true);
+              return prefs.getBoolean(KEY_AUTO_RELAUNCH, false);
           }
 
           private boolean inForeground() {
@@ -101,7 +118,7 @@ package com.nexuscast.player;
               // as a foreground service the process stays at 125 even when the Activity
               // is backgrounded by the Home button, so the old check always returned true
               // and never triggered a relaunch.
-              return MainActivity.activityAlive;
+              return MainActivity.activityVisible;
           }
 
           private void armCrashAlarm() {
@@ -117,17 +134,15 @@ package com.nexuscast.player;
               // On Android O+ the alarm must use getForegroundService so the
               // PendingIntent can promote BootLaunchService to foreground.
               Intent i = new Intent(this, BootLaunchService.class);
-              int f = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
+              int f = PendingIntent.FLAG_UPDATE_CURRENT
+                      | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
               PendingIntent pi = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                   ? PendingIntent.getForegroundService(this, 2, i, f)
                   : PendingIntent.getService(this, 2, i, f);
               AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
               if (am == null) return;
-              long at = System.currentTimeMillis() + RESTART_MS;
-              try {
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi);
-                  else am.setExact(AlarmManager.RTC_WAKEUP, at, pi);
-              } catch (SecurityException e) { am.set(AlarmManager.RTC_WAKEUP, at, pi); }
+              long earliest = SystemClock.elapsedRealtime() + RESTART_MS;
+              am.setWindow(AlarmManager.ELAPSED_REALTIME_WAKEUP, earliest, 5_000L, pi);
           }
 
           private void ensureChannel() {
@@ -147,4 +162,3 @@ package com.nexuscast.player;
               return new Notification.Builder(this).setContentTitle("Digipal Player").setContentText("Running").setSmallIcon(android.R.drawable.ic_media_play).setPriority(Notification.PRIORITY_MIN).setOngoing(true).build();
           }
       }
-  

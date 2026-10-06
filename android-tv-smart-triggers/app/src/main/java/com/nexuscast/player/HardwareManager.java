@@ -40,6 +40,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+@android.annotation.SuppressLint("MissingPermission")
 public class HardwareManager {
     private static final String TAG = "HardwareManager";
     private static final String ACTION_USB_PERMISSION = "com.nexuscast.player.USB_PERMISSION";
@@ -49,10 +50,16 @@ public class HardwareManager {
     private final UsbManager usbManager;
     private final Handler handler;
 
-    private final Map<String, DeviceInfo> connectedDevices = new HashMap<>();
-    private final Map<String, UsbDeviceConnection> usbConnections = new HashMap<>();
-    private final Map<String, Thread> usbReaderThreads = new HashMap<>();
-    private final Map<String, BluetoothGatt> bleGatts = new HashMap<>();
+    private final Map<String, DeviceInfo> connectedDevices = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, UsbDeviceConnection> usbConnections = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, Thread> usbReaderThreads = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, BluetoothGatt> bleGatts = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Set<String> connectingBle = java.util.Collections.newSetFromMap(
+            new java.util.concurrent.ConcurrentHashMap<String, Boolean>());
+    private final Map<String, Integer> bleRetries = new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile boolean started;
+    private volatile int generation;
+    private volatile String learnDeviceFilter = "";
 
     private boolean learnMode = false;
     private BluetoothAdapter bluetoothAdapter;
@@ -118,11 +125,15 @@ public class HardwareManager {
         this.handler = new Handler(Looper.getMainLooper());
         this.bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
         if (this.bluetoothAdapter != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            this.bleScanner = this.bluetoothAdapter.getBluetoothLeScanner();
+            try { this.bleScanner = this.bluetoothAdapter.getBluetoothLeScanner(); }
+            catch (SecurityException ignored) { /* requested only by explicit Scan */ }
         }
     }
 
     public void start() {
+        if (started) return;
+        started = true;
+        generation++;
         // System USB broadcasts come from the OS and need RECEIVER_EXPORTED on API 33+.
         // Our private permission result must use RECEIVER_NOT_EXPORTED for security.
         IntentFilter systemFilter = new IntentFilter();
@@ -142,6 +153,12 @@ public class HardwareManager {
     }
 
     public void stop() {
+        if (!started) { stopBleScan(); return; }
+        started = false;
+        generation++;
+        learnMode = false;
+        connectingBle.clear();
+        bleRetries.clear();
         try {
             context.unregisterReceiver(usbReceiver);
         } catch (Exception e) {
@@ -189,6 +206,11 @@ public class HardwareManager {
     }
 
     public void startLearnMode() {
+        startLearnMode("");
+    }
+
+    public void startLearnMode(String deviceFilter) {
+        learnDeviceFilter = deviceFilter == null ? "" : deviceFilter;
         learnMode = true;
         Log.i(TAG, "Learn mode activated");
     }
@@ -206,12 +228,6 @@ public class HardwareManager {
                     == PackageManager.PERMISSION_GRANTED;
             if (!hasScan || !hasConnect) {
                 Log.w(TAG, "Missing runtime Bluetooth permissions (BLUETOOTH_SCAN=" + hasScan + ", BLUETOOTH_CONNECT=" + hasConnect + ")");
-                if (context instanceof android.app.Activity) {
-                    ((android.app.Activity) context).requestPermissions(
-                        new String[]{Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT},
-                        1001
-                    );
-                }
                 return false;
             }
         }
@@ -219,6 +235,10 @@ public class HardwareManager {
     }
 
     public void startBleScan() {
+        if (bleScanner == null && bluetoothAdapter != null && hasBluetoothPermissions()) {
+            try { bleScanner = bluetoothAdapter.getBluetoothLeScanner(); }
+            catch (SecurityException ignored) {}
+        }
         if (bleScanner == null || bleScanning) return;
         if (!hasBluetoothPermissions()) {
             Log.w(TAG, "BLE scan aborted: missing permissions");
@@ -229,6 +249,7 @@ public class HardwareManager {
         ScanCallback scanCallback = new ScanCallback() {
             @Override
             public void onScanResult(int callbackType, ScanResult result) {
+                if (!hasBluetoothPermissions()) { stopBleScan(); return; }
                 BluetoothDevice device = result.getDevice();
                 if (device == null) return;
                 String deviceId = "ble_" + device.getAddress().replace(":", "").toLowerCase();
@@ -278,16 +299,19 @@ public class HardwareManager {
     }
 
     private void requestUsbPermission(UsbDevice device) {
-        int flags = 0;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            flags = PendingIntent.FLAG_IMMUTABLE;
-        }
-        PendingIntent pi = PendingIntent.getBroadcast(context, 0,
-                new Intent(ACTION_USB_PERMISSION), flags);
+        if (!started || usbManager == null) return;
+        if (usbManager.hasPermission(device)) { connectUsbDevice(device); return; }
+        // USB permission result requires OS fill-in extras. Constrain the mutable
+        // PendingIntent to this package and one device (never an implicit intent).
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= 31) flags |= PendingIntent.FLAG_MUTABLE;
+        PendingIntent pi = PendingIntent.getBroadcast(context, device.getDeviceId(),
+                new Intent(ACTION_USB_PERMISSION).setPackage(context.getPackageName()), flags);
         usbManager.requestPermission(device, pi);
     }
 
     private void connectUsbDevice(UsbDevice device) {
+        if (!started) return;
         String deviceId = generateDeviceId(device);
         if (connectedDevices.containsKey(deviceId)) return;
 
@@ -359,7 +383,7 @@ public class HardwareManager {
                                 UsbEndpoint endpoint, DeviceInfo info) {
         Thread readerThread = new Thread(() -> {
             byte[] buffer = new byte[endpoint.getMaxPacketSize()];
-            while (!Thread.currentThread().isInterrupted()) {
+            while (started && !Thread.currentThread().isInterrupted()) {
                 int bytesRead = connection.bulkTransfer(endpoint, buffer, buffer.length, 1000);
                 if (bytesRead > 0) {
                     byte[] data = new byte[bytesRead];
@@ -375,6 +399,8 @@ public class HardwareManager {
 
     private void connectBleDevice(BluetoothDevice device, String deviceId) {
         if (!hasBluetoothPermissions()) return;
+        if (!started || connectedDevices.containsKey(deviceId) || !connectingBle.add(deviceId)) return;
+        final int connectionGeneration = generation;
         try {
             DeviceInfo info = new DeviceInfo();
             info.deviceId = deviceId;
@@ -385,9 +411,34 @@ public class HardwareManager {
             info.productId = 0;
 
             BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
+                private final java.util.ArrayDeque<BluetoothGattDescriptor> notificationQueue = new java.util.ArrayDeque<>();
+                private int writeGeneration;
+                private synchronized void writeNext(BluetoothGatt gatt) {
+                    final int write = ++writeGeneration;
+                    if (connectionGeneration != generation) return;
+                    BluetoothGattDescriptor descriptor = notificationQueue.poll();
+                    if (descriptor == null) return;
+                    boolean accepted = false;
+                    try { accepted = gatt.writeDescriptor(descriptor); } catch (SecurityException ignored) {}
+                    if (!accepted) {
+                        handler.postDelayed(() -> writeNext(gatt), 250);
+                    } else {
+                        handler.postDelayed(() -> {
+                            synchronized (this) {
+                                if (write == writeGeneration) writeNext(gatt);
+                            }
+                        }, 5000);
+                    }
+                }
+                @Override public void onDescriptorWrite(BluetoothGatt gatt, BluetoothGattDescriptor descriptor, int status) {
+                    writeNext(gatt);
+                }
                 @Override
                 public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
+                    if (connectionGeneration != generation) { gatt.close(); return; }
+                    connectingBle.remove(deviceId);
                     if (newState == BluetoothProfile.STATE_CONNECTED) {
+                        bleRetries.remove(deviceId);
                         connectedDevices.put(deviceId, info);
                         bleGatts.put(deviceId, gatt);
                         notifyDeviceConnected(info);
@@ -395,11 +446,18 @@ public class HardwareManager {
                     } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                         removeDevice(deviceId);
                         try { gatt.close(); } catch (Exception e) {}
+                        Integer previousRetries = bleRetries.get(deviceId);
+                        int retries = previousRetries == null ? 1 : previousRetries + 1;
+                        bleRetries.put(deviceId, retries);
+                        if (retries <= 6) handler.postDelayed(() -> {
+                            if (started && connectionGeneration == generation) connectBleDevice(device, deviceId);
+                        }, Math.min(30000L, 1000L << Math.min(retries, 5)));
                     }
                 }
 
                 @Override
                 public void onServicesDiscovered(BluetoothGatt gatt, int status) {
+                    if (connectionGeneration != generation || bleGatts.get(deviceId) != gatt) return;
                     if (status == BluetoothGatt.GATT_SUCCESS) {
                         for (BluetoothGattService service : gatt.getServices()) {
                             for (BluetoothGattCharacteristic characteristic : service.getCharacteristics()) {
@@ -416,7 +474,7 @@ public class HardwareManager {
                                                 ? BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                                                 : BluetoothGattDescriptor.ENABLE_INDICATION_VALUE;
                                             cccd.setValue(descriptorValue);
-                                            gatt.writeDescriptor(cccd);
+                                            notificationQueue.add(cccd);
                                         }
                                     } catch (SecurityException e) {
                                         Log.w(TAG, "BLE notification setup permission denied", e);
@@ -424,25 +482,35 @@ public class HardwareManager {
                                 }
                             }
                         }
+                        writeNext(gatt);
                     }
                 }
 
                 @Override
                 public void onCharacteristicChanged(BluetoothGatt gatt,
                                                     BluetoothGattCharacteristic characteristic) {
-                    byte[] data = characteristic.getValue();
-                    if (data != null && data.length > 0) {
-                        handleSignal(deviceId, info, data);
-                    }
+                    dispatchValue(gatt, characteristic.getValue());
+                }
+                @Override public void onCharacteristicChanged(BluetoothGatt gatt,
+                        BluetoothGattCharacteristic characteristic, byte[] value) {
+                    // Android 13+ supplies an immutable event value. Do not also
+                    // call the legacy callback and deliver the same signal twice.
+                    dispatchValue(gatt, value);
+                }
+                private void dispatchValue(BluetoothGatt gatt, byte[] data) {
+                    if (!started || connectionGeneration != generation || bleGatts.get(deviceId) != gatt) return;
+                    if (data != null && data.length > 0) handleSignal(deviceId, info, java.util.Arrays.copyOf(data, data.length));
                 }
             };
 
             try {
                 device.connectGatt(context, false, gattCallback);
             } catch (SecurityException e) {
+                connectingBle.remove(deviceId);
                 Log.e(TAG, "BLE connect permission denied", e);
             }
         } catch (Exception e) {
+            connectingBle.remove(deviceId);
             Log.e(TAG, "Failed to connect BLE device", e);
         }
     }
@@ -459,13 +527,16 @@ public class HardwareManager {
             signal.put("rawData", bytesToHex(rawData));
             signal.put("timestamp", System.currentTimeMillis());
 
-            if (learnMode) {
-                learnMode = false;
-                handler.post(() -> listener.onSignalCaptured(signal));
-                Log.i(TAG, "Signal captured in learn mode: " + signalKey);
-            } else {
-                handler.post(() -> listener.onSignalEvent(signal));
-            }
+            final int signalGeneration = generation;
+            handler.post(() -> {
+                if (signalGeneration != generation) return;
+                if (learnMode && (learnDeviceFilter.isEmpty() || learnDeviceFilter.equals(deviceId))) {
+                    learnMode = false;
+                    listener.onSignalCaptured(signal);
+                } else {
+                    listener.onSignalEvent(signal);
+                }
+            });
         } catch (JSONException e) {
             Log.e(TAG, "Error creating signal JSON", e);
         }

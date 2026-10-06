@@ -1,58 +1,125 @@
-name: Build Android TV APK (Smart Triggers)
-
+name: Build and Test Smart Triggers
 on:
   push:
-    paths:
-      - 'android-tv-smart-triggers/**'
-    branches:
-      - main
-    tags:
-      - 'android-tv-st-v*'
+    paths: ['android-tv-smart-triggers/**', '.github/workflows/build-android-tv-smart-triggers.yml']
+    branches: [main, st-stability-parity]
+    tags: ['android-tv-st-v*']
   workflow_dispatch:
-
 permissions:
-  contents: write
-
+  contents: read
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-
 jobs:
   build:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: android-tv-smart-triggers
+    env:
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      KEYSTORE_PASSWORD: ${{ secrets.ST_KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.ST_KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.ST_KEY_PASSWORD }}
+      ST_KEYSTORE_BASE64: ${{ secrets.ST_KEYSTORE_BASE64 }}
+      ST_SIGNING_CERT_SHA256: ${{ secrets.ST_SIGNING_CERT_SHA256 }}
+    steps:
+      - uses: actions/checkout@v5
+        with: {fetch-depth: 0}
+      - uses: actions/setup-java@v4
+        with: {java-version: '17', distribution: temurin}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - name: Verify scope and adapter behavior
+        run: |
+          python3 scripts/check-protected-paths.py
+          python3 scripts/check-bridge-contract.py
+          node --test tests/adapter.test.cjs
+      - name: Prepare ST-only signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ST_KEYSTORE_BASE64" && test -n "$KEYSTORE_PASSWORD"
+          test -n "$KEY_ALIAS" && test -n "$KEY_PASSWORD" && test -n "$ST_SIGNING_CERT_SHA256"
+          umask 077
+          printf '%s' "$ST_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/st-release.jks"
+          printf 'KEYSTORE_FILE=%s\n' "$RUNNER_TEMP/st-release.jks" >> "$GITHUB_ENV"
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" >/dev/null
+      - name: Unit tests and production APK/AAB
+        run: |
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest assembleRelease bundleRelease --stacktrace
+      - name: Verify and name production artifacts
+        run: |
+          VERSION=$(sed -n 's/.*versionName "\([^"]*\)".*/\1/p' app/build.gradle | head -1)
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            test "$GITHUB_REF_NAME" = "android-tv-st-v$VERSION"
+          fi
+          python3 scripts/verify-artifact.py app/build/outputs/apk/release/app-release.apk \
+            --tools "$ANDROID_HOME/build-tools/36.0.0" --version "$VERSION"
+          jarsigner -verify app/build/outputs/bundle/release/app-release.aab
+          mkdir -p release
+          cp app/build/outputs/apk/release/app-release.apk "release/DigipalPlayerSmartTriggers-v$VERSION.apk"
+          cp app/build/outputs/bundle/release/app-release.aab "release/DigipalPlayerSmartTriggers-v$VERSION.aab"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smart-triggers-production
+          path: android-tv-smart-triggers/release/*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smart-triggers-unit-reports
+          path: android-tv-smart-triggers/app/build/reports/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smart-triggers-release-symbols
+          path: android-tv-smart-triggers/app/build/outputs/mapping/release/
+          if-no-files-found: error
+      - name: Delete transient signing file
+        if: always()
+        run: rm -f "$RUNNER_TEMP/st-release.jks"
+  instrumented:
+    needs: build
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-java@v4
+        with: {java-version: '17', distribution: temurin}
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
         with:
-          java-version: '17'
-          distribution: 'temurin'
-      - uses: android-actions/setup-android@v3
-      - run: chmod +x gradlew
-      - run: ./gradlew assembleDebug
-      - run: |
-          mkdir -p release
-          cp app/build/outputs/apk/debug/app-debug.apk release/DigipalPlayerSmartTriggers-v3.apk
-      - uses: actions/upload-artifact@v5
+          api-level: 30
+          arch: x86_64
+          profile: pixel_5
+          script: cd android-tv-smart-triggers && chmod +x gradlew && ./gradlew connectedDebugAndroidTest --stacktrace
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: DigipalPlayerSmartTriggers-v3
-          path: android-tv-smart-triggers/release/DigipalPlayerSmartTriggers-v3.apk
-          retention-days: 90
-
+          name: smart-triggers-device-test-reports
+          path: android-tv-smart-triggers/app/build/reports/androidTests/
   release:
-    needs: build
+    needs: [build, instrumented]
     if: startsWith(github.ref, 'refs/tags/android-tv-st-v')
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    permissions: {contents: write}
     steps:
       - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
+        with: {name: smart-triggers-production, path: release}
       - uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*.apk
-          generate_release_notes: true
-  
+          files: |
+            release/*.apk
+            release/*.aab
+          body: |
+            Smart Triggers-only stability backport. Package: com.nexuscast.player.
+            Non-debuggable production APK/AAB with a dedicated, persistent ST signing identity.
+            Historical debug APKs are not signature-compatible. No customer ST installations existed at this release.
+            No standard Android TV source, workflow, signing or release was changed.
+            Automated native/unit/WebView bridge checks passed. Physical USB/BLE/camera/audio and low-memory soak testing was not run.

@@ -3,6 +3,7 @@ package com.nexuscast.player;
   import android.content.Context;
   import androidx.annotation.NonNull;
   import androidx.room.*;
+  import androidx.room.Index;
   import androidx.room.migration.Migration;
   import androidx.sqlite.db.SupportSQLiteDatabase;
   import java.util.List;
@@ -14,7 +15,7 @@ package com.nexuscast.player;
    * NOTE: the @Database-annotated class must stay top-level (see CacheDatabase for why) —
    * it is declared directly on this class rather than on a nested AppDatabase type.
    */
-  @Database(entities={PlaylistDatabase.PlaylistRevisionEntity.class,PlaylistDatabase.SlideEntity.class,PlaylistDatabase.AssetEntity.class,PlaylistDatabase.PlaybackEventEntity.class,PlaylistDatabase.PlayerErrorEntity.class}, version=2, exportSchema=false)
+  @Database(entities={PlaylistDatabase.PlaylistRevisionEntity.class,PlaylistDatabase.SlideEntity.class,PlaylistDatabase.AssetEntity.class,PlaylistDatabase.PlaybackEventEntity.class,PlaylistDatabase.PlayerErrorEntity.class}, version=3, exportSchema=true)
   public abstract class PlaylistDatabase extends RoomDatabase {
 
       @Entity(tableName = "playlist_revisions")
@@ -44,7 +45,11 @@ package com.nexuscast.player;
           @ColumnInfo(name = "config_json")       public String configJson = "{}";
       }
 
-      @Entity(tableName = "assets")
+      @Entity(tableName = "assets", indices = {
+              @Index(value = "asset_id", unique = true),
+              @Index("url"),
+              @Index("download_state")
+      })
       public static class AssetEntity {
           @PrimaryKey(autoGenerate = true) public long id;
           @ColumnInfo(name = "asset_id")          public String assetId = "";
@@ -111,6 +116,9 @@ package com.nexuscast.player;
           @Query("SELECT * FROM playlist_revisions WHERE status IN ('ACTIVE','SUPERSEDED','ROLLED_BACK') ORDER BY activated_at DESC LIMIT 2")
           List<PlaylistRevisionEntity> getLastTwo();
 
+          @Query("SELECT * FROM playlist_revisions WHERE status IN ('SUPERSEDED','ROLLED_BACK') AND id != :currentId ORDER BY activated_at DESC LIMIT 1")
+          PlaylistRevisionEntity getPreviousKnownGood(long currentId);
+
           @Query("SELECT * FROM playlist_revisions WHERE status='ROLLED_BACK' AND activated_at < :before")
           List<PlaylistRevisionEntity> getRolledBackBefore(long before);
 
@@ -168,6 +176,16 @@ package com.nexuscast.player;
           }
       };
 
+      static final Migration MIGRATION_2_3 = new Migration(2, 3) {
+          @Override
+          public void migrate(@NonNull SupportSQLiteDatabase database) {
+              database.execSQL("DELETE FROM assets WHERE id NOT IN (SELECT MAX(id) FROM assets GROUP BY asset_id)");
+              database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_assets_asset_id ON assets(asset_id)");
+              database.execSQL("CREATE INDEX IF NOT EXISTS index_assets_url ON assets(url)");
+              database.execSQL("CREATE INDEX IF NOT EXISTS index_assets_download_state ON assets(download_state)");
+          }
+      };
+
       public abstract PlaylistRevisionDao revisionDao();
       public abstract SlideDao slideDao();
       public abstract AssetDao assetDao();
@@ -180,7 +198,7 @@ package com.nexuscast.player;
               synchronized (PlaylistDatabase.class) {
                   if (INSTANCE == null) {
                       INSTANCE = Room.databaseBuilder(ctx.getApplicationContext(), PlaylistDatabase.class, "playlist_native.db")
-                          .addMigrations(MIGRATION_1_2)
+                          .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                           .build();
                   }
               }
@@ -188,4 +206,3 @@ package com.nexuscast.player;
           return INSTANCE;
       }
   }
-  

@@ -77,6 +77,16 @@ public class HealthMonitor {
         running = true;
         scheduleNext(INTERVAL_STARTUP);
         Log.i(TAG, "[start] HealthMonitor running, initial mode=" + currentMode);
+        // Fix 7: first-boot grace — some FireTV/Android Box devices never send a WebView
+        // heartbeat before the native PlaylistScheduler takes over. Without this, computeMode()
+        // stays in STARTUP indefinitely because heartbeatReceived is still false at the 3-min mark.
+        // After 90 s assume the player is healthy even without an explicit heartbeat ping.
+        handler.postDelayed(() -> {
+            if (!heartbeatReceived) {
+                heartbeatReceived = true;
+                Log.i(TAG, "[start] first-boot grace: marking heartbeatReceived after 90s");
+            }
+        }, 90_000L);
     }
 
     public void stop() {
@@ -159,7 +169,11 @@ public class HealthMonitor {
             if (stableWindow) {
                 return "web".equals(rendererType) ? Mode.STABLE_WEB : Mode.STABLE_NATIVE;
             }
-        } else {
+        } else if (schedulerState == PlaylistScheduler.State.IDLE
+                || schedulerState == PlaylistScheduler.State.RECOVERING_RENDERER) {
+            // Fix 8: only reset the playing clock on a truly non-playing state.
+            // PREPARING_CURRENT is a brief inter-slide transition, not a real stop —
+            // resetting here caused fast playlists to never accumulate 3 min of play time.
             playingStartMs = 0;
         }
         return Mode.STARTUP;

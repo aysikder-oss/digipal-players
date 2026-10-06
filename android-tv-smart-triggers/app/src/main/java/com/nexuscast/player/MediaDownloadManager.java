@@ -6,6 +6,8 @@ package com.nexuscast.player;
   import android.os.Looper;
   import android.webkit.WebView;
 
+  import java.util.Locale;
+
   import org.json.JSONException;
   import org.json.JSONObject;
 
@@ -43,11 +45,14 @@ package com.nexuscast.player;
       private final Set<String> activeDownloads;
       private final ConcurrentHashMap<String, List<DownloadCallback>> pendingCallbacks;
       private WebView webView;
+      /** Last time updateLastUsed() flushed to SharedPreferences. Throttled to once per 60 s to avoid
+       *  writing the full manifest JSON on every cache hit (Fix 2). */
+      private long lastManifestWriteMs = 0L;
 
       public MediaDownloadManager(Context context) {
           this.context = context;
           this.prefs = context.getSharedPreferences(MANIFEST_PREFS, Context.MODE_PRIVATE);
-          this.executor = Executors.newFixedThreadPool(4);
+          this.executor = Executors.newFixedThreadPool(2); // Fix 11: 2 threads avoid bandwidth saturation during ExoPlayer streaming
           this.mainHandler = new Handler(Looper.getMainLooper());
           this.activeDownloads = new HashSet<>();
           this.pendingCallbacks = new ConcurrentHashMap<>();
@@ -79,15 +84,25 @@ package com.nexuscast.player;
        */
       public void downloadMediaWithCallback(final String objectPath, final String signedUrl,
                                             final DownloadCallback callback) {
-          // Fast path: already cached locally
+          // Fast path: already cached locally -- but only if the source media hasn't
+          // changed since it was cached (Fix #5). Without this, an updated asset that
+          // reuses the same objectPath (e.g. content re-uploaded to the same slide) would
+          // serve the stale local file forever, since only objectPath was checked before.
           String existing = getLocalMediaPath(objectPath);
           if (!existing.isEmpty()) {
-              if (callback != null) {
-                  JSONObject entry = getManifest().optJSONObject(objectPath);
-                  long size = entry != null ? entry.optLong("size", 0) : 0;
-                  callback.onSuccess(objectPath, existing, size);
+              JSONObject entry = getManifest().optJSONObject(objectPath);
+              String cachedSource = entry != null ? entry.optString("sourceUrl", "") : "";
+              if (sameMediaSource(cachedSource, signedUrl)) {
+                  if (callback != null) {
+                      long size = entry != null ? entry.optLong("size", 0) : 0;
+                      callback.onSuccess(objectPath, existing, size);
+                  }
+                  return;
               }
-              return;
+              android.util.Log.i("MediaDownload", "[cache] source changed for obj=" + objectPath
+                      + " -- invalidating stale local copy and redownloading");
+              removeFromManifest(objectPath);
+              try { new File(existing).delete(); } catch (Exception ignored) {}
           }
 
           // Queue callback; if another download is already in flight just wait.
@@ -116,7 +131,26 @@ package com.nexuscast.player;
       // ─────────────────────────────────────────────────────────────────────────
 
       private void performDownload(String objectPath, String signedUrl) {
+          // Task P6: activeDownloads must be released on EVERY exit path, not just the
+          // final-retry-exhausted path below -- the early returns for missing storage dir,
+          // non-200 responses, insufficient disk space, and file-move failure all used to
+          // return directly from this method without going through the removal at the end,
+          // permanently leaking objectPath in this in-memory Set for the rest of the process
+          // lifetime (a 24/7 kiosk player never restarts, so this leaked without bound).
           try {
+
+          final int MAX_ATTEMPTS = 3;
+          String lastError = "Unknown error";
+          for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+              if (attempt > 1) {
+                  // Exponential backoff with jitter: 2s, 4s, 8s + random 0-1s, capped at 30s (Fix 1).
+                  long backoffMs = Math.min(30_000L, (long)(Math.pow(2, attempt - 1) * 2_000L));
+                  long jitterMs  = (long)(Math.random() * 1_000L);
+                  android.util.Log.d("MediaDownload", "[performDownload] retry attempt=" + attempt
+                          + " backoff=" + backoffMs + "ms jitter=" + jitterMs + "ms obj=" + objectPath);
+                  try { Thread.sleep(backoffMs + jitterMs); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+              }
+              try {
               File mediaDir = getMediaDir();
               if (mediaDir == null) {
                   notifyDownloadFailed(objectPath, "Storage not available");
@@ -127,18 +161,24 @@ package com.nexuscast.player;
               if (sanitizedName.length() > 200) {
                   sanitizedName = sanitizedName.substring(sanitizedName.length() - 200);
               }
-              File outputFile = new File(mediaDir, sanitizedName);
+              File outputFile = SafeFiles.child(mediaDir, sanitizedName);
 
-              File parentDir = outputFile.getParentFile();
-              if (parentDir != null && !parentDir.exists()) parentDir.mkdirs();
+                File parentDir = outputFile.getParentFile();
+                if (parentDir != null && !parentDir.exists()) parentDir.mkdirs();
 
-              URL url = new URL(signedUrl);
-              HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-              conn.setConnectTimeout(30000);
-              conn.setReadTimeout(60000);
-              conn.setRequestMethod("GET");
+                URL url = new URL(signedUrl);
+                String scheme = url.getProtocol();
+                if (!"https".equalsIgnoreCase(scheme)
+                        && !("http".equalsIgnoreCase(scheme) && UrlPolicy.isPrivateHost(url.getHost()))) {
+                    notifyDownloadFailed(objectPath, "Blocked non-trusted media URL");
+                    return;
+                }
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setConnectTimeout(30000);
+                conn.setReadTimeout(60000);
+                conn.setRequestMethod("GET");
 
-              int responseCode = conn.getResponseCode();
+                int responseCode = conn.getResponseCode();
               if (responseCode != 200) {
                   conn.disconnect();
                   notifyDownloadFailed(objectPath, "HTTP " + responseCode);
@@ -146,31 +186,36 @@ package com.nexuscast.player;
               }
 
               long contentLength = conn.getContentLength();
-              if (contentLength > 0) {
+              // GCS signed URLs sometimes return -1 for Content-Length; in that case
+              // assume up to 100 MB and check only that much headroom is available (Fix 3).
+              long reserveBytes = contentLength > 0 ? contentLength : 100 * 1024 * 1024L;
+              {
                   long freeSpace = mediaDir.getFreeSpace();
-                  if (freeSpace - contentLength < LOW_STORAGE_THRESHOLD) {
+                  if (freeSpace - reserveBytes < LOW_STORAGE_THRESHOLD) {
                       conn.disconnect();
                       notifyDownloadFailed(objectPath, "Insufficient storage");
                       return;
                   }
               }
 
-              File tempFile = new File(mediaDir, sanitizedName + ".tmp");
-              InputStream in = conn.getInputStream();
-              FileOutputStream out = new FileOutputStream(tempFile);
-              byte[] buffer = new byte[BUFFER_SIZE];
-              int bytesRead;
+              File tempFile = SafeFiles.child(mediaDir, sanitizedName + ".tmp");
               long totalRead = 0;
-
-              while ((bytesRead = in.read(buffer)) != -1) {
-                  out.write(buffer, 0, bytesRead);
-                  totalRead += bytesRead;
+              // Task P6: try-with-resources guarantees in/out are closed even if read()/write()
+              // throws mid-transfer (e.g. connection reset) -- the previous plain close() calls
+              // right after the loop were never reached on that path, leaking the socket's
+              // InputStream and an open FileOutputStream/file descriptor on every failed transfer.
+              try (InputStream in = conn.getInputStream();
+                   FileOutputStream out = new FileOutputStream(tempFile)) {
+                  byte[] buffer = new byte[BUFFER_SIZE];
+                  int bytesRead;
+                  while ((bytesRead = in.read(buffer)) != -1) {
+                      out.write(buffer, 0, bytesRead);
+                      totalRead += bytesRead;
+                  }
+                  out.flush();
+              } finally {
+                  conn.disconnect();
               }
-
-              out.flush();
-              out.close();
-              in.close();
-              conn.disconnect();
 
               if (outputFile.exists()) outputFile.delete();
               if (!tempFile.renameTo(outputFile)) {
@@ -179,11 +224,35 @@ package com.nexuscast.player;
                   return;
               }
 
-              addToManifest(objectPath, outputFile.getAbsolutePath(), totalRead);
+              // Fix 3: integrity check — verify file is non-empty and size approximates Content-Length.
+              if (totalRead == 0 || !outputFile.exists() || outputFile.length() == 0) {
+                  outputFile.delete();
+                  lastError = "Zero-byte file after download";
+                  android.util.Log.w("MediaDownload", "[integrity] zero-byte file: " + objectPath);
+                  continue; // retry
+              }
+              if (contentLength > 0) {
+                  double ratio = (double) outputFile.length() / contentLength;
+                  if (ratio < 0.95 || ratio > 1.05) {
+                      outputFile.delete();
+                      lastError = "File size mismatch: got " + outputFile.length() + " expected " + contentLength;
+                      android.util.Log.w("MediaDownload", "[integrity] size mismatch: " + lastError + " obj=" + objectPath);
+                      continue; // retry
+                  }
+              }
+              addToManifest(objectPath, outputFile.getAbsolutePath(), totalRead, signedUrl);
               notifyDownloadComplete(objectPath, "file://" + outputFile.getAbsolutePath());
 
-          } catch (Exception e) {
-              notifyDownloadFailed(objectPath, e.getMessage());
+              } catch (Exception e) {
+                  lastError = e.getMessage() != null ? e.getMessage() : "IOException";
+                  // Retry on network errors; continue for loop to next attempt
+                  continue;
+              }
+              return; // success — exit retry loop
+          } // end retry loop
+          // All attempts exhausted
+          notifyDownloadFailed(objectPath, lastError);
+
           } finally {
               synchronized (activeDownloads) { activeDownloads.remove(objectPath); }
           }
@@ -201,97 +270,103 @@ package com.nexuscast.player;
           String localPath = entry.optString("localPath", "");
           if (localPath.isEmpty()) return "";
 
-          File file = new File(localPath);
-          if (!file.exists()) {
-              removeFromManifest(objectPath);
-              return "";
+          File file = SafeFiles.existingFileInsideOrNull(getMediaDir(), localPath);
+            if (file == null) {
+                removeFromManifest(objectPath);
+                return "";
+            }
+
+            updateLastUsed(objectPath);
+              return "file://" + file.getAbsolutePath();
           }
 
-          updateLastUsed(objectPath);
-          return "file://" + localPath;
-      }
+        /** Unified Design Studio Renderer stabilization (Step 3): returns a web-servable
+         *  URL for locally-cached media, safe to embed directly in an isolated-renderer
+         *  WebView's <img>/<video> src. Raw file:// URLs are unreliable from an https://
+         *  origin WebView even with universal-file-access flags enabled (can be blocked by
+         *  OEM WebView builds), so this returns a same-origin-safe virtual URL under
+         *  https://appassets.androidplatform.net/media/<encoded objectPath> instead, which
+         *  IsolatedWebRenderer's shouldInterceptRequest() resolves back to the cached file
+         *  via resolveLocalMediaFile() below. Returns "" if objectPath is not cached yet --
+         *  callers (window.DigipalMedia.getLocalMediaWebUrl in the JS bridge) should fall
+         *  back to the original signed URL and/or trigger downloadMedia() in that case. */
+        public String getLocalMediaWebUrl(String objectPath) {
+            JSONObject manifest = getManifest();
+            JSONObject entry = manifest.optJSONObject(objectPath);
+            if (entry == null) return "";
 
-      /** Returns a WebView-only virtual https://appassets.androidplatform.net/media/
-       *  URL for a locally cached objectPath, or "" when not cached. Unlike raw
-       *  file:// paths these work from an https:// origin page; MainActivity's
-       *  shouldInterceptRequest() resolves them back to local bytes. */
-      public String getLocalMediaWebUrl(String objectPath) {
-          JSONObject manifest = getManifest();
-          JSONObject entry = manifest.optJSONObject(objectPath);
-          if (entry == null) return "";
+            String localPath = entry.optString("localPath", "");
+            if (localPath.isEmpty()) return "";
 
-          String localPath = entry.optString("localPath", "");
-          if (localPath.isEmpty()) return "";
+            File file = SafeFiles.existingFileInsideOrNull(getMediaDir(), localPath);
+              if (file == null) {
+                  removeFromManifest(objectPath);
+                  return "";
+              }
 
-          File file = new File(localPath);
-          if (!file.exists()) {
-              removeFromManifest(objectPath);
-              return "";
-          }
+              updateLastUsed(objectPath);
+            try {
+                String encoded = java.net.URLEncoder.encode(objectPath, "UTF-8");
+                return "https://appassets.androidplatform.net/media/" + encoded;
+            } catch (Exception e) {
+                return "";
+            }
+        }
 
-          updateLastUsed(objectPath);
-          try {
-              String encoded = java.net.URLEncoder.encode(objectPath, "UTF-8");
-              return "https://appassets.androidplatform.net/media/" + encoded;
-          } catch (Exception e) {
-              return "";
-          }
-      }
+        /** Resolves a virtual https://appassets.androidplatform.net/media/<encoded
+         *  objectPath> request (see getLocalMediaWebUrl() above) back to the locally
+         *  cached File for that objectPath. Only ever serves a path that is present in the
+         *  manifest and still exists on disk -- never serves an arbitrary filesystem path
+         *  derived directly from the request. Returns null on any mismatch. */
+        public File resolveLocalMediaFile(String virtualPath) {
+            if (virtualPath == null || !virtualPath.startsWith("/media/")) return null;
 
-      /** Resolves a virtual https://appassets.androidplatform.net/media/<encoded
-       *  objectPath> request (see getLocalMediaWebUrl() above) back to the locally
-       *  cached File for that objectPath. Only ever serves a path that is present
-       *  in the manifest and still exists on disk. Returns null on any mismatch. */
-      public File resolveLocalMediaFile(String virtualPath) {
-          if (virtualPath == null || !virtualPath.startsWith("/media/")) return null;
+            String objectPath;
+            try {
+                objectPath = java.net.URLDecoder.decode(virtualPath.substring("/media/".length()), "UTF-8");
+            } catch (Exception e) {
+                return null;
+            }
 
-          String objectPath;
-          try {
-              objectPath = java.net.URLDecoder.decode(virtualPath.substring("/media/".length()), "UTF-8");
-          } catch (Exception e) {
-              return null;
-          }
+            JSONObject manifest = getManifest();
+            JSONObject entry = manifest.optJSONObject(objectPath);
+            if (entry == null) return null;
 
-          JSONObject manifest = getManifest();
-          JSONObject entry = manifest.optJSONObject(objectPath);
-          if (entry == null) return null;
+            String localPath = entry.optString("localPath", "");
+            if (localPath.isEmpty()) return null;
 
-          String localPath = entry.optString("localPath", "");
-          if (localPath.isEmpty()) return null;
+            File file = SafeFiles.existingFileInsideOrNull(getMediaDir(), localPath);
+            if (file == null) return null;
+            return file;
+        }
 
-          File file = new File(localPath);
-          if (!file.exists()) return null;
-          return file;
-      }
+        /** Best-effort MIME type for a cached media file, used when serving it through
+         *  resolveLocalMediaFile()'s virtual URL from IsolatedWebRenderer. */
+        public static String guessMimeType(File file) {
+            String name = file.getName().toLowerCase(Locale.ROOT);
+            if (name.endsWith(".png")) return "image/png";
+            if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+            if (name.endsWith(".gif")) return "image/gif";
+            if (name.endsWith(".webp")) return "image/webp";
+            if (name.endsWith(".svg")) return "image/svg+xml";
+            if (name.endsWith(".mp4")) return "video/mp4";
+            if (name.endsWith(".webm")) return "video/webm";
+            if (name.endsWith(".mov")) return "video/quicktime";
+            if (name.endsWith(".pdf")) return "application/pdf";
+            if (name.endsWith(".mp3")) return "audio/mpeg";
+            if (name.endsWith(".wav")) return "audio/wav";
+            if (name.endsWith(".ogg")) return "audio/ogg";
+            return "application/octet-stream";
+        }
 
-      /** Best-effort MIME type for a cached media file, used when serving it through
-       *  resolveLocalMediaFile()'s virtual URL from shouldInterceptRequest(). */
-      public static String guessMimeType(File file) {
-          String name = file.getName().toLowerCase(java.util.Locale.ROOT);
-          if (name.endsWith(".png")) return "image/png";
-          if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
-          if (name.endsWith(".gif")) return "image/gif";
-          if (name.endsWith(".webp")) return "image/webp";
-          if (name.endsWith(".svg")) return "image/svg+xml";
-          if (name.endsWith(".mp4")) return "video/mp4";
-          if (name.endsWith(".webm")) return "video/webm";
-          if (name.endsWith(".mov")) return "video/quicktime";
-          if (name.endsWith(".pdf")) return "application/pdf";
-          if (name.endsWith(".mp3")) return "audio/mpeg";
-          if (name.endsWith(".wav")) return "audio/wav";
-          if (name.endsWith(".ogg")) return "audio/ogg";
-          return "application/octet-stream";
-      }
-
-      public boolean deleteMedia(String objectPath) {
+        public boolean deleteMedia(String objectPath) {
           JSONObject manifest = getManifest();
           JSONObject entry = manifest.optJSONObject(objectPath);
           if (entry == null) return false;
 
           String localPath = entry.optString("localPath", "");
           if (!localPath.isEmpty()) {
-              File file = new File(localPath);
-              if (file.exists()) file.delete();
+              SafeFiles.deleteFileInside(getMediaDir(), localPath);
           }
           removeFromManifest(objectPath);
           return true;
@@ -306,10 +381,7 @@ package com.nexuscast.player;
               JSONObject entry = manifest.optJSONObject(key);
               if (entry != null) {
                   String localPath = entry.optString("localPath", "");
-                  if (!localPath.isEmpty()) {
-                      File file = new File(localPath);
-                      if (file.exists()) { file.delete(); count++; }
-                  }
+                  if (!localPath.isEmpty() && SafeFiles.deleteFileInside(getMediaDir(), localPath)) count++;
               }
           }
 
@@ -383,7 +455,7 @@ package com.nexuscast.player;
               JSONObject entry = manifest.optJSONObject(key);
               if (entry != null) {
                   String localPath = entry.optString("localPath", "");
-                  if (!localPath.isEmpty() && !new File(localPath).exists()) toRemove.add(key);
+                  if (!localPath.isEmpty() && SafeFiles.existingFileInsideOrNull(mediaDir, localPath) == null) toRemove.add(key);
               }
           }
           for (String key : toRemove) manifest.remove(key);
@@ -411,6 +483,16 @@ package com.nexuscast.player;
       }
 
       private void addToManifest(String objectPath, String localPath, long size) {
+          addToManifest(objectPath, localPath, size, null);
+      }
+
+      /**
+       * Fix #5: manifest entries now record the source URL (stripped of query params/signing
+       * tokens) that produced the cached file, so a later request for the same objectPath but
+       * a different underlying asset (URL changed) can be detected as stale instead of serving
+       * the old cached bytes forever.
+       */
+      private void addToManifest(String objectPath, String localPath, long size, String sourceUrl) {
           JSONObject manifest = getManifest();
           try {
               JSONObject entry = new JSONObject();
@@ -418,9 +500,31 @@ package com.nexuscast.player;
               entry.put("size", size);
               entry.put("downloadedAt", System.currentTimeMillis());
               entry.put("lastUsed", System.currentTimeMillis());
+              if (sourceUrl != null && !sourceUrl.isEmpty()) {
+                  entry.put("sourceUrl", canonicalMediaSource(sourceUrl));
+              }
               manifest.put(objectPath, entry);
               prefs.edit().putString(KEY_MANIFEST, manifest.toString()).apply();
           } catch (JSONException ignored) {}
+      }
+
+      /** Strips query string/fragment (signed-URL tokens, expiry, etc.) so the same
+       *  underlying object re-signed with a fresh token still compares equal. */
+      private static String canonicalMediaSource(String rawUrl) {
+          if (rawUrl == null) return "";
+          String s = rawUrl.trim();
+          int hash = s.indexOf('#');
+          if (hash >= 0) s = s.substring(0, hash);
+          int q = s.indexOf('?');
+          if (q >= 0) s = s.substring(0, q);
+          return s;
+      }
+
+      private static boolean sameMediaSource(String a, String b) {
+          String ca = canonicalMediaSource(a);
+          String cb = canonicalMediaSource(b);
+          if (ca.isEmpty() || cb.isEmpty()) return true; // unknown -- don't force a redownload
+          return ca.equals(cb);
       }
 
       private void removeFromManifest(String objectPath) {
@@ -430,13 +534,18 @@ package com.nexuscast.player;
       }
 
       private void updateLastUsed(String objectPath) {
+          long now = System.currentTimeMillis();
+          // Throttle: only flush manifest to SharedPreferences once per 60 s to avoid
+          // rewriting the entire JSON blob on every cache-hit (Fix 2).
+          if (now - lastManifestWriteMs < 60_000L) return;
           JSONObject manifest = getManifest();
           JSONObject entry = manifest.optJSONObject(objectPath);
           if (entry != null) {
               try {
-                  entry.put("lastUsed", System.currentTimeMillis());
+                  entry.put("lastUsed", now);
                   manifest.put(objectPath, entry);
                   prefs.edit().putString(KEY_MANIFEST, manifest.toString()).apply();
+                  lastManifestWriteMs = now;
               } catch (JSONException ignored) {}
           }
       }
@@ -447,8 +556,8 @@ package com.nexuscast.player;
           // Fire legacy WebView JS notification
           if (webView == null) return;
           mainHandler.post(() -> {
-              String js = "javascript:if(window.__onMediaDownloaded){window.__onMediaDownloaded('"
-                      + escapeJs(objectPath) + "','" + escapeJs(localPath) + "');}";
+              String js = "if(window.__onMediaDownloaded){window.__onMediaDownloaded("
+                      + JSONObject.quote(objectPath) + "," + JSONObject.quote(localPath) + ");}";
               webView.evaluateJavascript(js, null);
           });
       }
@@ -459,8 +568,9 @@ package com.nexuscast.player;
           // Fire legacy WebView JS notification
           if (webView == null) return;
           mainHandler.post(() -> {
-              String js = "javascript:if(window.__onMediaDownloadFailed){window.__onMediaDownloadFailed('"
-                      + escapeJs(objectPath) + "','" + escapeJs(error != null ? error : "Unknown error") + "');}";
+              String safeError = error != null ? error : "Unknown error";
+              String js = "if(window.__onMediaDownloadFailed){window.__onMediaDownloadFailed("
+                      + JSONObject.quote(objectPath) + "," + JSONObject.quote(safeError) + ");}";
               webView.evaluateJavascript(js, null);
           });
       }
@@ -486,6 +596,11 @@ package com.nexuscast.player;
           }
       }
 
+      /** Release executor resources. Call from MainActivity.onDestroy(). */
+      public void shutdown() {
+          try { executor.shutdownNow(); } catch (Throwable ignored) {}
+      }
+
       private String escapeJs(String s) {
           if (s == null) return "";
           return s.replace("\\", "\\\\")
@@ -494,4 +609,3 @@ package com.nexuscast.player;
                   .replace("\r", "\\r");
       }
   }
-  

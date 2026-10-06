@@ -40,9 +40,12 @@ public class ReliabilitySupervisor {
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private final AtomicLong lastSchedulerAdvanceMs = new AtomicLong(System.currentTimeMillis());
-    private final AtomicLong lastHeartbeatMs        = new AtomicLong(System.currentTimeMillis());
+    private final AtomicLong lastHeartbeatMs        = new AtomicLong(android.os.SystemClock.elapsedRealtime()); // Fix 9: monotonic
     private final AtomicInteger softCount           = new AtomicInteger(0);
     private final AtomicInteger mediumCount         = new AtomicInteger(0);
+
+    // Current scheduler state — used to skip stall checks when scheduler is not actively playing
+    private volatile PlaylistScheduler.State schedulerState = PlaylistScheduler.State.IDLE;
 
     private Runnable checkRunnable;
       private boolean running = false;
@@ -52,6 +55,8 @@ public class ReliabilitySupervisor {
       private RecoveryCoordinator recoveryCoordinator;
       // Optional MemoryBudgetManager — used to pass memory tier to coordinator.
       private MemoryBudgetManager memoryBudgetManager;
+      // Optional PlaylistRepository — used to persist error entities to Room.
+      private PlaylistRepository playlistRepository;
 
     public ReliabilitySupervisor(Context ctx, RecoveryDelegate delegate, TelemetryManager telemetry) {
         this.ctx = ctx; this.delegate = delegate; this.telemetry = telemetry;
@@ -63,6 +68,10 @@ public class ReliabilitySupervisor {
 
       public void setMemoryBudgetManager(MemoryBudgetManager mbm) {
           this.memoryBudgetManager = mbm;
+      }
+
+      public void setPlaylistRepository(PlaylistRepository repo) {
+          this.playlistRepository = repo;
       }
 
       public void start() {
@@ -83,14 +92,34 @@ public class ReliabilitySupervisor {
     }
 
     /** Call on WebView heartbeat bridge callback. */
-    public void reportHeartbeat() { lastHeartbeatMs.set(System.currentTimeMillis()); }
+    public void reportHeartbeat() { lastHeartbeatMs.set(android.os.SystemClock.elapsedRealtime()); } // Fix 9: monotonic
+
+    /** Update the known scheduler state so stall detection can skip idle/booting states. */
+    public void setSchedulerState(PlaylistScheduler.State state) {
+        this.schedulerState = state;
+        // Reset stall clock whenever scheduler enters an active play state
+        if (state == PlaylistScheduler.State.PLAYING
+                || state == PlaylistScheduler.State.PREPARING_CURRENT
+                || state == PlaylistScheduler.State.TRANSITIONING) {
+            lastSchedulerAdvanceMs.set(System.currentTimeMillis());
+        }
+    }
 
     /** Call when any renderer encounters an error. */
     public void reportError(String component, String error) {
         Log.w(TAG, "[error] " + component + ": " + error);
-        if (telemetry != null) {
+        // Persist error to Room so telemetry sync can upload it
+        try {
             PlaylistDatabase.PlayerErrorEntity e = new PlaylistDatabase.PlayerErrorEntity();
-            e.timestamp = System.currentTimeMillis(); e.component = component; e.message = error;
+            e.timestamp = System.currentTimeMillis();
+            e.component = component;
+            e.message = error;
+            e.severity = "ERROR";
+            if (playlistRepository != null) {
+                playlistRepository.getDb().errorDao().insert(e);
+            }
+        } catch (Exception ex) {
+            Log.w(TAG, "[error] failed to persist error entity: " + ex.getMessage());
         }
         int sc = softCount.incrementAndGet();
         if (sc >= SOFT_BEFORE_MEDIUM) {
@@ -136,19 +165,31 @@ public class ReliabilitySupervisor {
     private void check() {
         long now = System.currentTimeMillis();
 
-        // Scheduler stall: no advance for MAX_IDLE_MS
-        if (now - lastSchedulerAdvanceMs.get() > MAX_IDLE_MS) {
-            Log.w(TAG, "[stall] scheduler hasn't advanced in " + (now - lastSchedulerAdvanceMs.get()) + "ms");
+        // Scheduler stall: only check if actively playing (skip IDLE/BOOTING/RESTORING states)
+        PlaylistScheduler.State curState = schedulerState;
+        boolean activelyPlaying = curState == PlaylistScheduler.State.PLAYING
+                || curState == PlaylistScheduler.State.PREPARING_CURRENT
+                || curState == PlaylistScheduler.State.PREPARING_NEXT
+                || curState == PlaylistScheduler.State.TRANSITIONING
+                || curState == PlaylistScheduler.State.DEGRADED_PLAYBACK;
+        if (!activelyPlaying) {
+            // Scheduler is idle or initialising — reset the stall clock so it does not fire
+            // on the first advance after a long idle/boot period.
+            lastSchedulerAdvanceMs.set(System.currentTimeMillis());
+        } else if (now - lastSchedulerAdvanceMs.get() > MAX_IDLE_MS) {
+            Log.w(TAG, "[stall] scheduler hasn't advanced in " + (now - lastSchedulerAdvanceMs.get()) + "ms (state=" + curState + ")");
             reportError("scheduler", "stall");
         }
 
         // Memory pressure
         ActivityManager am = (ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
-        ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
-        am.getMemoryInfo(mi);
-        if (mi.lowMemory) {
-            Log.w(TAG, "[memory] low memory pressure detected");
-            soft("low_memory");
+        if (am != null) {
+            ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
+            am.getMemoryInfo(mi);
+            if (mi.lowMemory) {
+                Log.w(TAG, "[memory] low memory pressure detected");
+                soft("low_memory");
+            }
         }
 
         // Storage pressure

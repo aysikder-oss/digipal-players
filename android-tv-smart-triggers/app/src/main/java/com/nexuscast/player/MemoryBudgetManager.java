@@ -72,6 +72,7 @@ package com.nexuscast.player;
 
       private void poll() {
           ActivityManager am = (ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
+          if (am == null) return;
           ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
           am.getMemoryInfo(mi);
 
@@ -111,4 +112,3 @@ package com.nexuscast.player;
           jsBridge.eval(js);
       }
   }
-  

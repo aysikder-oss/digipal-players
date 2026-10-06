@@ -3,27 +3,55 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- USE_FULL_SCREEN_INTENT: normal permission (auto-granted on install, API 29+).
+         Required for full-screen-intent notifications used by RelaunchReceiver to
+         start MainActivity from the background (BAL-safe on Android 14 / targetSdk 35). -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- POST_NOTIFICATIONS: runtime permission on Android 13+ (API 33+).
+         Required for RelaunchReceiver to post the relaunch notification.
+         On TV / Fire TV devices this is typically pre-granted or not enforced. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- SYSTEM_ALERT_WINDOW ("Display over other apps"): special permission that
+         grants an explicit Background Activity Launch (BAL) exemption in AOSP
+         ActivityStarter.  When granted, RelaunchReceiver can call startActivity()
+         directly without alarm/notification machinery — the most reliable path
+         on Android TV / Fire TV ROMs that suppress full-screen intent dispatch.
+         Grant once per device:
+           adb shell appops set <package> SYSTEM_ALERT_WINDOW allow
+         Or via Settings > Apps > Special app access > Display over other apps. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
-
-    <!-- Bluetooth permissions for BLE device detection -->
-    <uses-permission android:name="android.permission.BLUETOOTH" />
-    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
-    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
-    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- REORDER_TASKS: allows AppTask.moveToFront() to bring a backgrounded
+         (not-killed) task to the foreground without any additional exemption. -->
+    <uses-permission android:name="android.permission.REORDER_TASKS" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- ACCESS_FINE_LOCATION (and COARSE as prerequisite) required on Android 10+
+         to read the connected WiFi SSID via WifiManager.getConnectionInfo().
+         We request it once at startup; if denied, SSID is silently omitted from
+         diagnostics — playback is never blocked. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <!-- REBOOT: privileged permission for OS-level reboot/shutdown via PowerManager.
          Only grantable to system/signed APKs; standard user-space installs will
          receive "unsupported" from the bridge — never silently ignored. -->
     <uses-permission android:name="android.permission.REBOOT" />
-
-    <!-- Camera permission for camera-based triggers and content -->
-    <uses-permission android:name="android.permission.CAMERA" />
 
     <!-- Android TV feature declarations -->
     <uses-feature
@@ -32,26 +60,8 @@
     <uses-feature
         android:name="android.hardware.touchscreen"
         android:required="false" />
-
-    <!-- USB Host support for physical buttons/sensors -->
     <uses-feature
-        android:name="android.hardware.usb.host"
-        android:required="false" />
-
-    <!-- Bluetooth optional -->
-    <uses-feature
-        android:name="android.hardware.bluetooth"
-        android:required="false" />
-    <uses-feature
-        android:name="android.hardware.bluetooth_le"
-        android:required="false" />
-
-    <!-- Camera optional -->
-    <uses-feature
-        android:name="android.hardware.camera"
-        android:required="false" />
-    <uses-feature
-        android:name="android.hardware.camera.autofocus"
+        android:name="android.hardware.wifi"
         android:required="false" />
 
     <application
@@ -65,15 +75,14 @@
         android:hardwareAccelerated="true"
         android:largeHeap="true"
         android:networkSecurityConfig="@xml/network_security_config"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         tools:targetApi="31">
 
-        <!-- Main TV Launcher Activity -->
+        <!-- Server Setup Activity (launcher entry point) -->
         <activity
-            android:name=".MainActivity"
+            android:name=".ServerSetupActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:screenOrientation="landscape"
-            android:keepScreenOn="true"
             android:theme="@style/Theme.DigipalPlayer.Fullscreen">
 
             <!-- Standard launcher -->
@@ -89,6 +98,13 @@
             </intent-filter>
         </activity>
 
+        <!-- Main Player Activity -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:theme="@style/Theme.DigipalPlayer.Fullscreen" />
+
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"
@@ -96,8 +112,35 @@
             android:directBootAware="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Recovers from WebView provider package replacement (SIGKILL with no onDestroy).
+             Schedules a 3-second relaunch via BootLaunchService.schedulePlayerLaunch()
+             when the WebView provider or Digipal APK itself is updated/replaced. -->
+        <receiver
+            android:name=".PackageUpdateReceiver"
+            android:enabled="true"
+            android:exported="true"
+            android:directBootAware="true">
+            <intent-filter>
+                <!-- Digipal APK itself was updated. No <data> needed for MY_PACKAGE_REPLACED. -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+            <intent-filter>
+                <!-- WebView provider / Chrome / Trichrome updated or replaced. -->
+                <action android:name="android.intent.action.PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.PACKAGE_ADDED" />
+                <action android:name="android.intent.action.PACKAGE_CHANGED" />
+                <data android:scheme="package" />
+            </intent-filter>
+            <!-- Debug-only test action — allows exercising the WebView-replacement recovery
+                 path on Android 14+ without needing the protected PACKAGE_REPLACED broadcast.
+                 adb shell am broadcast -a com.nexuscast.player.debug.SIMULATE_WEBVIEW_PACKAGE_REPLACED -p com.nexuscast.player.debug
+                 The receiver guards this with BuildConfig.DEBUG so it is a no-op in release builds. -->
+            <intent-filter>
+                <action android:name="com.nexuscast.player.debug.SIMULATE_WEBVIEW_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
         <!-- Foreground service that safely opens MainActivity on boot (API 29+ fix). -->
@@ -113,5 +156,30 @@
             android:name="io.sentry.android.core.SentryInitProvider"
             android:authorities="${applicationId}.SentryInitProvider"
             tools:node="remove" />
+
+        <provider
+            android:name="io.sentry.android.core.SentryPerformanceProvider"
+            android:authorities="${applicationId}.SentryPerformanceProvider"
+            tools:node="remove" />
+
+        <!-- Receives relaunch alarms and posts a full-screen-intent notification
+             to start MainActivity — the only BAL-safe path on Android 14 / targetSdk 35
+             without SCHEDULE_EXACT_ALARM.  android:exported="false" so only the app
+             itself can trigger it (via PendingIntent.getBroadcast). -->
+        <receiver
+            android:name=".RelaunchReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+
+        <!-- Suppress LeakCanary's launcher activity from appearing as a
+             separate launcher entry on Android TV / Fire TV home screens.
+             LeakCanary is debugImplementation only; this stub is a no-op
+             in release builds where the activity does not exist. -->
+        <activity
+            android:name="leakcanary.internal.activity.LeakLauncherActivity"
+            tools:node="remove" />
+
+
       </application>
   </manifest>
