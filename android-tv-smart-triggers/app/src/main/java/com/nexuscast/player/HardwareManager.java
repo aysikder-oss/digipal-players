@@ -457,6 +457,7 @@ public class HardwareManager {
 
                 @Override
                 public void onServicesDiscovered(BluetoothGatt gatt, int status) {
+                    if (connectionGeneration != generation || bleGatts.get(deviceId) != gatt) return;
                     if (status == BluetoothGatt.GATT_SUCCESS) {
                         for (BluetoothGattService service : gatt.getServices()) {
                             for (BluetoothGattCharacteristic characteristic : service.getCharacteristics()) {
@@ -488,10 +489,17 @@ public class HardwareManager {
                 @Override
                 public void onCharacteristicChanged(BluetoothGatt gatt,
                                                     BluetoothGattCharacteristic characteristic) {
-                    byte[] data = characteristic.getValue();
-                    if (data != null && data.length > 0) {
-                        handleSignal(deviceId, info, data);
-                    }
+                    dispatchValue(gatt, characteristic.getValue());
+                }
+                @Override public void onCharacteristicChanged(BluetoothGatt gatt,
+                        BluetoothGattCharacteristic characteristic, byte[] value) {
+                    // Android 13+ supplies an immutable event value. Do not also
+                    // call the legacy callback and deliver the same signal twice.
+                    dispatchValue(gatt, value);
+                }
+                private void dispatchValue(BluetoothGatt gatt, byte[] data) {
+                    if (!started || connectionGeneration != generation || bleGatts.get(deviceId) != gatt) return;
+                    if (data != null && data.length > 0) handleSignal(deviceId, info, java.util.Arrays.copyOf(data, data.length));
                 }
             };
 

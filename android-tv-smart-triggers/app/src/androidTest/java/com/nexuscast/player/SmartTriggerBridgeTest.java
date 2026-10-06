@@ -8,20 +8,27 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.junit.Test;
 import org.junit.Before;
+import org.junit.After;
 import org.junit.runner.RunWith;
 import static org.junit.Assert.*;
 
 @RunWith(AndroidJUnit4.class)
 public class SmartTriggerBridgeTest {
-    @Before public void isolatedTestInstallation() {
+    private LocalPlayerServer backend;
+    @Before public void isolatedTestInstallation() throws Exception {
+        backend = new LocalPlayerServer();
         android.content.Context context = androidx.test.platform.app.InstrumentationRegistry
                 .getInstrumentation().getTargetContext();
         context.getSharedPreferences("DigipalPrefs", android.content.Context.MODE_PRIVATE)
-                .edit().putBoolean("auto_relaunch", false).apply();
+                .edit().putBoolean("auto_relaunch", false)
+                .putString("server_url", backend.origin()).apply();
         android.app.UiAutomation automation = androidx.test.platform.app.InstrumentationRegistry
                 .getInstrumentation().getUiAutomation();
         automation.grantRuntimePermission(context.getPackageName(), "android.permission.ACCESS_COARSE_LOCATION");
         automation.grantRuntimePermission(context.getPackageName(), "android.permission.ACCESS_FINE_LOCATION");
+    }
+    @After public void closeLocalBackend() throws Exception {
+        if (backend != null) backend.close();
     }
     @Test public void realWebViewAuthenticatedBridgeAndAdapterAreCallable() throws Exception {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
@@ -32,7 +39,7 @@ public class SmartTriggerBridgeTest {
                     field.setAccessible(true);
                     WebView view = (WebView) field.get(activity);
                     assertNotNull(view);
-                    view.loadDataWithBaseURL("https://www.digipalsignage.com/tv/TESTST",
+                    view.loadDataWithBaseURL(backend.origin() + "/tv/TESTST",
                             "<html><body>ST bridge test</body></html>", "text/html", "UTF-8", null);
                     view.postDelayed(() -> loaded.countDown(), 2000);
                 } catch (ReflectiveOperationException e) { throw new AssertionError(e); }
@@ -51,6 +58,7 @@ public class SmartTriggerBridgeTest {
                     token.setAccessible(true);
                     token.set(activity, "test-page-token");
                     view.evaluateJavascript("window.__digipalBridgeToken='test-page-token';"
+                            + "Android.reportAppMounted();"
                             + "(function(){try{"
                             + "Android.reportPairingCode('TESTST');"
                             + "Android.setPlaylistRevisionId('test-page-token','123');"
@@ -92,24 +100,28 @@ public class SmartTriggerBridgeTest {
                         for (int n; (n = in.read(buffer)) >= 0;) out.write(buffer, 0, n);
                     }
                     WebView view = webView(activity);
-                    view.loadDataWithBaseURL("https://www.digipalsignage.com/tv/TESTST",
+                    view.loadDataWithBaseURL(backend.origin() + "/tv/TESTST",
                             "<html><body>ST native/trigger test</body></html>", "text/html", "UTF-8", null);
                 } catch (Exception e) { throw new AssertionError(e); }
             });
             Thread.sleep(1500);
             String init = evaluate(scenario, "window.__digipalBridgeToken='trigger-test-token';"
-                    + "window.testTicks=0;window.testCaptures=0;window.testReady=false;"
-                    + "window.__digipalNativeImageReady_st_test=function(){window.testReady=true};"
+                    + "Android.reportAppMounted();"
+                    + "window.testTicks=0;window.testCaptures=0;window.testReady=false;window.testKeyDowns=0;"
+                    + "window.__digipalNativeImageReady_st_test=function(){window.testReady=true;Android.setWebViewDormant(true)};"
                     + "setInterval(function(){window.testTicks++},100);"
                     + "window.addEventListener('hw:signalCaptured',function(){window.testCaptures++});"
+                    + "window.addEventListener('keydown',function(e){if(e.code==='KeyA')window.testKeyDowns++});"
                     + "window.smartTriggers.startLearnMode({});"
                     + "Android.showNativeImage(" + org.json.JSONObject.quote(android.net.Uri.fromFile(image[0]).toString())
                     + ",0,0,128,128,'contain','st_test');true", "trigger-test-token");
             assertEquals("true", init);
             Thread.sleep(2000);
             assertEquals("true", evaluate(scenario, "window.testReady && window.testTicks>3", null));
-            assertEquals("true", evaluate(scenario,
-                    "window.dispatchEvent(new KeyboardEvent('keydown',{code:'KeyA',key:'a'}));window.testCaptures===1", null));
+            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+                    .sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_A);
+            Thread.sleep(300);
+            assertEquals("true", evaluate(scenario, "window.testCaptures===1 && window.testKeyDowns===1", null));
             evaluate(scenario, "Android.playNativeVideo(" + org.json.JSONObject.quote(android.net.Uri.fromFile(video[0]).toString())
                     + ",0,0,128,128,'contain',true,0,'st_video');true", null);
             Thread.sleep(2000);
@@ -124,7 +136,25 @@ public class SmartTriggerBridgeTest {
                     assertEquals("ST compositor must remain active", android.view.View.VISIBLE, webView(activity).getVisibility());
                 } catch (ReflectiveOperationException e) { throw new AssertionError(e); }
             });
-            evaluate(scenario, "Android.stopNativeVideo();window.testReady=false;"
+            evaluate(scenario, "Android.setHasBroadcast(true);true", null);
+            Thread.sleep(300);
+            scenario.onActivity(activity -> {
+                try { assertEquals(1f, webView(activity).getAlpha(), 0.01f); }
+                catch (ReflectiveOperationException e) { throw new AssertionError(e); }
+            });
+            evaluate(scenario, "Android.setHasBroadcast(false);"
+                    + "Android.setPlaylistRevisionId('trigger-test-token','999');"
+                    + "Android.setNativePlaylist('trigger-test-token','[]');true", null);
+            Thread.sleep(300);
+            scenario.onActivity(activity -> {
+                try {
+                    Field field = MainActivity.class.getDeclaredField("exoPlayer");
+                    field.setAccessible(true);
+                    androidx.media3.exoplayer.ExoPlayer player = (androidx.media3.exoplayer.ExoPlayer) field.get(activity);
+                    assertTrue("Trigger override must stop native video", player == null || !player.isPlaying());
+                } catch (ReflectiveOperationException e) { throw new AssertionError(e); }
+            });
+            evaluate(scenario, "window.testReady=false;"
                     + "Android.showNativeImage(" + org.json.JSONObject.quote(android.net.Uri.fromFile(image[0]).toString())
                     + ",0,0,128,128,'contain','st_test');true", null);
             Thread.sleep(1500);

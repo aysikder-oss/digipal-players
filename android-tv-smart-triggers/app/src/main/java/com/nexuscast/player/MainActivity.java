@@ -63,10 +63,12 @@ public class MainActivity extends Activity {
             if ("https".equals(origin.getScheme()) && "appassets.androidplatform.net".equals(origin.getHost())) {
                 return bootedFromLocalShell;
             }
-            int originPort = origin.getPort() < 0 ? ("https".equals(origin.getScheme()) ? 443 : 80) : origin.getPort();
-            int serverPort = server.getPort() < 0 ? ("https".equals(server.getScheme()) ? 443 : 80) : server.getPort();
-            return origin.getUserInfo() == null && java.util.Objects.equals(origin.getScheme(), server.getScheme())
-                    && java.util.Objects.equals(origin.getHost(), server.getHost()) && originPort == serverPort;
+            if (origin.getHost() == null || server.getHost() == null || origin.getScheme() == null
+                    || server.getScheme() == null || !UrlPolicy.isAllowedServerUrl(getServerUrl())) return false;
+            int originPort = origin.getPort() < 0 ? ("https".equalsIgnoreCase(origin.getScheme()) ? 443 : 80) : origin.getPort();
+            int serverPort = server.getPort() < 0 ? ("https".equalsIgnoreCase(server.getScheme()) ? 443 : 80) : server.getPort();
+            return origin.getUserInfo() == null && origin.getScheme().equalsIgnoreCase(server.getScheme())
+                    && origin.getHost().equalsIgnoreCase(server.getHost()) && originPort == serverPort;
         } catch (Throwable ignored) { return false; }
     }
 
@@ -656,7 +658,10 @@ public class MainActivity extends Activity {
           if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
               java.util.Set<String> origins = new java.util.HashSet<>();
               Uri serverOrigin = Uri.parse(getServerUrl());
-              origins.add(serverOrigin.getScheme() + "://" + serverOrigin.getAuthority());
+              if (UrlPolicy.isAllowedServerUrl(getServerUrl())) {
+                  origins.add(serverOrigin.getScheme().toLowerCase(java.util.Locale.ROOT) + "://"
+                          + serverOrigin.getAuthority().toLowerCase(java.util.Locale.ROOT));
+              }
               origins.add("https://appassets.androidplatform.net");
               androidx.webkit.WebViewCompat.addDocumentStartJavaScript(webView, smartTriggerScript, origins);
           }
@@ -5119,11 +5124,14 @@ public class MainActivity extends Activity {
     }
       @Override
       public boolean dispatchKeyEvent(KeyEvent event) {
-          if (webView != null && event.getAction() == KeyEvent.ACTION_DOWN) {
+          if (webView != null && diagnosticsOverlay == null) {
               int k = event.getKeyCode();
               if (k != KeyEvent.KEYCODE_BACK && k != KeyEvent.KEYCODE_HOME
                       && k != KeyEvent.KEYCODE_APP_SWITCH && k != KeyEvent.KEYCODE_MENU) {
-                  webView.dispatchKeyEvent(event);
+                  // A focused WebView already receives super.dispatchKeyEvent().
+                  // Forward directly only when native playback owns focus, and
+                  // never dispatch the same down/up event through both paths.
+                  if (!webView.hasFocus()) return webView.dispatchKeyEvent(event);
               }
           }
           return super.dispatchKeyEvent(event);
