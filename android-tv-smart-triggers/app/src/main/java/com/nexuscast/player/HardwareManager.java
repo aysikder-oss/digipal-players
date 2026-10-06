@@ -54,7 +54,8 @@ public class HardwareManager {
     private final Map<String, UsbDeviceConnection> usbConnections = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, Thread> usbReaderThreads = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, BluetoothGatt> bleGatts = new java.util.concurrent.ConcurrentHashMap<>();
-    private final java.util.Set<String> connectingBle = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final java.util.Set<String> connectingBle = java.util.Collections.newSetFromMap(
+            new java.util.concurrent.ConcurrentHashMap<String, Boolean>());
     private final Map<String, Integer> bleRetries = new java.util.concurrent.ConcurrentHashMap<>();
     private volatile boolean started;
     private volatile int generation;
@@ -445,7 +446,8 @@ public class HardwareManager {
                     } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                         removeDevice(deviceId);
                         try { gatt.close(); } catch (Exception e) {}
-                        int retries = bleRetries.getOrDefault(deviceId, 0) + 1;
+                        Integer previousRetries = bleRetries.get(deviceId);
+                        int retries = previousRetries == null ? 1 : previousRetries + 1;
                         bleRetries.put(deviceId, retries);
                         if (retries <= 6) handler.postDelayed(() -> {
                             if (started && connectionGeneration == generation) connectBleDevice(device, deviceId);
