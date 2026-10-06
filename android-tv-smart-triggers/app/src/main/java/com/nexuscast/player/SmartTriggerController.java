@@ -119,6 +119,7 @@ final class SmartTriggerController implements HardwareManager.HardwareListener {
             activity.requestPermissions(missing.toArray(new String[0]), BLE_PERMISSION_REQUEST);
             return;
         }
+        enable(true);
         hardware.startBleScan();
     }
 
@@ -187,7 +188,7 @@ final class SmartTriggerController implements HardwareManager.HardwareListener {
                     ? activity.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
                     && activity.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
                     : Build.VERSION.SDK_INT < 23 || activity.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
-            if (granted) hardware.startBleScan();
+            if (granted) { enable(true); hardware.startBleScan(); }
             else emit("hw:permissionDenied", new JSONObject());
         }
     }

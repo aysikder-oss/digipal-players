@@ -54,6 +54,8 @@ public class HardwareManager {
     private final Map<String, UsbDeviceConnection> usbConnections = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, Thread> usbReaderThreads = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, BluetoothGatt> bleGatts = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Set<String> connectingBle = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final Map<String, Integer> bleRetries = new java.util.concurrent.ConcurrentHashMap<>();
     private volatile boolean started;
     private volatile int generation;
     private volatile String learnDeviceFilter = "";
@@ -154,6 +156,8 @@ public class HardwareManager {
         started = false;
         generation++;
         learnMode = false;
+        connectingBle.clear();
+        bleRetries.clear();
         try {
             context.unregisterReceiver(usbReceiver);
         } catch (Exception e) {
@@ -394,6 +398,7 @@ public class HardwareManager {
 
     private void connectBleDevice(BluetoothDevice device, String deviceId) {
         if (!hasBluetoothPermissions()) return;
+        if (!started || connectedDevices.containsKey(deviceId) || !connectingBle.add(deviceId)) return;
         final int connectionGeneration = generation;
         try {
             DeviceInfo info = new DeviceInfo();
@@ -405,10 +410,34 @@ public class HardwareManager {
             info.productId = 0;
 
             BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
+                private final java.util.ArrayDeque<BluetoothGattDescriptor> notificationQueue = new java.util.ArrayDeque<>();
+                private int writeGeneration;
+                private synchronized void writeNext(BluetoothGatt gatt) {
+                    final int write = ++writeGeneration;
+                    if (connectionGeneration != generation) return;
+                    BluetoothGattDescriptor descriptor = notificationQueue.poll();
+                    if (descriptor == null) return;
+                    boolean accepted = false;
+                    try { accepted = gatt.writeDescriptor(descriptor); } catch (SecurityException ignored) {}
+                    if (!accepted) {
+                        handler.postDelayed(() -> writeNext(gatt), 250);
+                    } else {
+                        handler.postDelayed(() -> {
+                            synchronized (this) {
+                                if (write == writeGeneration) writeNext(gatt);
+                            }
+                        }, 5000);
+                    }
+                }
+                @Override public void onDescriptorWrite(BluetoothGatt gatt, BluetoothGattDescriptor descriptor, int status) {
+                    writeNext(gatt);
+                }
                 @Override
                 public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
                     if (connectionGeneration != generation) { gatt.close(); return; }
+                    connectingBle.remove(deviceId);
                     if (newState == BluetoothProfile.STATE_CONNECTED) {
+                        bleRetries.remove(deviceId);
                         connectedDevices.put(deviceId, info);
                         bleGatts.put(deviceId, gatt);
                         notifyDeviceConnected(info);
@@ -416,6 +445,11 @@ public class HardwareManager {
                     } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                         removeDevice(deviceId);
                         try { gatt.close(); } catch (Exception e) {}
+                        int retries = bleRetries.getOrDefault(deviceId, 0) + 1;
+                        bleRetries.put(deviceId, retries);
+                        if (retries <= 6) handler.postDelayed(() -> {
+                            if (started && connectionGeneration == generation) connectBleDevice(device, deviceId);
+                        }, Math.min(30000L, 1000L << Math.min(retries, 5)));
                     }
                 }
 
@@ -437,7 +471,7 @@ public class HardwareManager {
                                                 ? BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                                                 : BluetoothGattDescriptor.ENABLE_INDICATION_VALUE;
                                             cccd.setValue(descriptorValue);
-                                            gatt.writeDescriptor(cccd);
+                                            notificationQueue.add(cccd);
                                         }
                                     } catch (SecurityException e) {
                                         Log.w(TAG, "BLE notification setup permission denied", e);
@@ -445,6 +479,7 @@ public class HardwareManager {
                                 }
                             }
                         }
+                        writeNext(gatt);
                     }
                 }
 
@@ -461,9 +496,11 @@ public class HardwareManager {
             try {
                 device.connectGatt(context, false, gattCallback);
             } catch (SecurityException e) {
+                connectingBle.remove(deviceId);
                 Log.e(TAG, "BLE connect permission denied", e);
             }
         } catch (Exception e) {
+            connectingBle.remove(deviceId);
             Log.e(TAG, "Failed to connect BLE device", e);
         }
     }
