@@ -33,6 +33,10 @@
     if (!learning || event.repeat) return;
     const filter = learning.deviceId || learning.deviceFilter;
     if (filter && filter !== 'web_keyboard') return;
+    // Consume a learned key before the player's normal keyboard-trigger
+    // listener can use it to fire an existing queue/action trigger.
+    if (typeof event.preventDefault === 'function') event.preventDefault();
+    if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
     const detail = {
       deviceId: 'web_keyboard', deviceName: 'Keyboard', protocol: 'usb_hid',
       deviceType: 'keyboard', signalKey: hex(`key_${event.code}_${event.key}`),

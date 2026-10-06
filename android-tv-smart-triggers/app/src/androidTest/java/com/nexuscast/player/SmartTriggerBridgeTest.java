@@ -39,8 +39,7 @@ public class SmartTriggerBridgeTest {
                     field.setAccessible(true);
                     WebView view = (WebView) field.get(activity);
                     assertNotNull(view);
-                    view.loadDataWithBaseURL(backend.origin() + "/tv/TESTST",
-                            "<html><body>ST bridge test</body></html>", "text/html", "UTF-8", null);
+                    view.loadUrl(backend.origin() + "/tv/TESTST");
                     view.postDelayed(() -> loaded.countDown(), 2000);
                 } catch (ReflectiveOperationException e) { throw new AssertionError(e); }
             });
@@ -100,8 +99,7 @@ public class SmartTriggerBridgeTest {
                         for (int n; (n = in.read(buffer)) >= 0;) out.write(buffer, 0, n);
                     }
                     WebView view = webView(activity);
-                    view.loadDataWithBaseURL(backend.origin() + "/tv/TESTST",
-                            "<html><body>ST native/trigger test</body></html>", "text/html", "UTF-8", null);
+                    view.loadUrl(backend.origin() + "/tv/TESTST");
                 } catch (Exception e) { throw new AssertionError(e); }
             });
             Thread.sleep(1500);
@@ -111,17 +109,21 @@ public class SmartTriggerBridgeTest {
                     + "window.__digipalNativeImageReady_st_test=function(){window.testReady=true;Android.setWebViewDormant(true)};"
                     + "setInterval(function(){window.testTicks++},100);"
                     + "window.addEventListener('hw:signalCaptured',function(){window.testCaptures++});"
-                    + "window.addEventListener('keydown',function(e){if(e.code==='KeyA')window.testKeyDowns++});"
-                    + "window.smartTriggers.startLearnMode({});"
+                    + "window.addEventListener('keydown',function(e){if(e.code==='KeyB')window.testKeyDowns++});"
                     + "Android.showNativeImage(" + org.json.JSONObject.quote(android.net.Uri.fromFile(image[0]).toString())
                     + ",0,0,128,128,'contain','st_test');true", "trigger-test-token");
             assertEquals("true", init);
             Thread.sleep(2000);
             assertEquals("true", evaluate(scenario, "window.testReady && window.testTicks>3", null));
             androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+                    .sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_B);
+            Thread.sleep(300);
+            assertEquals("1", evaluate(scenario, "window.testKeyDowns", null));
+            evaluate(scenario, "window.smartTriggers.startLearnMode({});true", null);
+            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
                     .sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_A);
             Thread.sleep(300);
-            assertEquals("true", evaluate(scenario, "window.testCaptures===1 && window.testKeyDowns===1", null));
+            assertEquals("true", evaluate(scenario, "window.testCaptures===1", null));
             evaluate(scenario, "Android.playNativeVideo(" + org.json.JSONObject.quote(android.net.Uri.fromFile(video[0]).toString())
                     + ",0,0,128,128,'contain',true,0,'st_video');true", null);
             Thread.sleep(2000);
