@@ -40,6 +40,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+@android.annotation.SuppressLint("MissingPermission")
 public class HardwareManager {
     private static final String TAG = "HardwareManager";
     private static final String ACTION_USB_PERMISSION = "com.nexuscast.player.USB_PERMISSION";
@@ -49,10 +50,13 @@ public class HardwareManager {
     private final UsbManager usbManager;
     private final Handler handler;
 
-    private final Map<String, DeviceInfo> connectedDevices = new HashMap<>();
-    private final Map<String, UsbDeviceConnection> usbConnections = new HashMap<>();
-    private final Map<String, Thread> usbReaderThreads = new HashMap<>();
-    private final Map<String, BluetoothGatt> bleGatts = new HashMap<>();
+    private final Map<String, DeviceInfo> connectedDevices = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, UsbDeviceConnection> usbConnections = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, Thread> usbReaderThreads = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, BluetoothGatt> bleGatts = new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile boolean started;
+    private volatile int generation;
+    private volatile String learnDeviceFilter = "";
 
     private boolean learnMode = false;
     private BluetoothAdapter bluetoothAdapter;
@@ -118,11 +122,15 @@ public class HardwareManager {
         this.handler = new Handler(Looper.getMainLooper());
         this.bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
         if (this.bluetoothAdapter != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            this.bleScanner = this.bluetoothAdapter.getBluetoothLeScanner();
+            try { this.bleScanner = this.bluetoothAdapter.getBluetoothLeScanner(); }
+            catch (SecurityException ignored) { /* requested only by explicit Scan */ }
         }
     }
 
     public void start() {
+        if (started) return;
+        started = true;
+        generation++;
         // System USB broadcasts come from the OS and need RECEIVER_EXPORTED on API 33+.
         // Our private permission result must use RECEIVER_NOT_EXPORTED for security.
         IntentFilter systemFilter = new IntentFilter();
@@ -142,6 +150,10 @@ public class HardwareManager {
     }
 
     public void stop() {
+        if (!started) { stopBleScan(); return; }
+        started = false;
+        generation++;
+        learnMode = false;
         try {
             context.unregisterReceiver(usbReceiver);
         } catch (Exception e) {
@@ -189,6 +201,11 @@ public class HardwareManager {
     }
 
     public void startLearnMode() {
+        startLearnMode("");
+    }
+
+    public void startLearnMode(String deviceFilter) {
+        learnDeviceFilter = deviceFilter == null ? "" : deviceFilter;
         learnMode = true;
         Log.i(TAG, "Learn mode activated");
     }
@@ -206,12 +223,6 @@ public class HardwareManager {
                     == PackageManager.PERMISSION_GRANTED;
             if (!hasScan || !hasConnect) {
                 Log.w(TAG, "Missing runtime Bluetooth permissions (BLUETOOTH_SCAN=" + hasScan + ", BLUETOOTH_CONNECT=" + hasConnect + ")");
-                if (context instanceof android.app.Activity) {
-                    ((android.app.Activity) context).requestPermissions(
-                        new String[]{Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT},
-                        1001
-                    );
-                }
                 return false;
             }
         }
@@ -219,6 +230,10 @@ public class HardwareManager {
     }
 
     public void startBleScan() {
+        if (bleScanner == null && bluetoothAdapter != null && hasBluetoothPermissions()) {
+            try { bleScanner = bluetoothAdapter.getBluetoothLeScanner(); }
+            catch (SecurityException ignored) {}
+        }
         if (bleScanner == null || bleScanning) return;
         if (!hasBluetoothPermissions()) {
             Log.w(TAG, "BLE scan aborted: missing permissions");
@@ -229,6 +244,7 @@ public class HardwareManager {
         ScanCallback scanCallback = new ScanCallback() {
             @Override
             public void onScanResult(int callbackType, ScanResult result) {
+                if (!hasBluetoothPermissions()) { stopBleScan(); return; }
                 BluetoothDevice device = result.getDevice();
                 if (device == null) return;
                 String deviceId = "ble_" + device.getAddress().replace(":", "").toLowerCase();
@@ -278,16 +294,19 @@ public class HardwareManager {
     }
 
     private void requestUsbPermission(UsbDevice device) {
-        int flags = 0;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            flags = PendingIntent.FLAG_IMMUTABLE;
-        }
-        PendingIntent pi = PendingIntent.getBroadcast(context, 0,
-                new Intent(ACTION_USB_PERMISSION), flags);
+        if (!started || usbManager == null) return;
+        if (usbManager.hasPermission(device)) { connectUsbDevice(device); return; }
+        // USB permission result requires OS fill-in extras. Constrain the mutable
+        // PendingIntent to this package and one device (never an implicit intent).
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= 31) flags |= PendingIntent.FLAG_MUTABLE;
+        PendingIntent pi = PendingIntent.getBroadcast(context, device.getDeviceId(),
+                new Intent(ACTION_USB_PERMISSION).setPackage(context.getPackageName()), flags);
         usbManager.requestPermission(device, pi);
     }
 
     private void connectUsbDevice(UsbDevice device) {
+        if (!started) return;
         String deviceId = generateDeviceId(device);
         if (connectedDevices.containsKey(deviceId)) return;
 
@@ -359,7 +378,7 @@ public class HardwareManager {
                                 UsbEndpoint endpoint, DeviceInfo info) {
         Thread readerThread = new Thread(() -> {
             byte[] buffer = new byte[endpoint.getMaxPacketSize()];
-            while (!Thread.currentThread().isInterrupted()) {
+            while (started && !Thread.currentThread().isInterrupted()) {
                 int bytesRead = connection.bulkTransfer(endpoint, buffer, buffer.length, 1000);
                 if (bytesRead > 0) {
                     byte[] data = new byte[bytesRead];
@@ -375,6 +394,7 @@ public class HardwareManager {
 
     private void connectBleDevice(BluetoothDevice device, String deviceId) {
         if (!hasBluetoothPermissions()) return;
+        final int connectionGeneration = generation;
         try {
             DeviceInfo info = new DeviceInfo();
             info.deviceId = deviceId;
@@ -387,6 +407,7 @@ public class HardwareManager {
             BluetoothGattCallback gattCallback = new BluetoothGattCallback() {
                 @Override
                 public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
+                    if (connectionGeneration != generation) { gatt.close(); return; }
                     if (newState == BluetoothProfile.STATE_CONNECTED) {
                         connectedDevices.put(deviceId, info);
                         bleGatts.put(deviceId, gatt);
@@ -459,13 +480,16 @@ public class HardwareManager {
             signal.put("rawData", bytesToHex(rawData));
             signal.put("timestamp", System.currentTimeMillis());
 
-            if (learnMode) {
-                learnMode = false;
-                handler.post(() -> listener.onSignalCaptured(signal));
-                Log.i(TAG, "Signal captured in learn mode: " + signalKey);
-            } else {
-                handler.post(() -> listener.onSignalEvent(signal));
-            }
+            final int signalGeneration = generation;
+            handler.post(() -> {
+                if (signalGeneration != generation) return;
+                if (learnMode && (learnDeviceFilter.isEmpty() || learnDeviceFilter.equals(deviceId))) {
+                    learnMode = false;
+                    listener.onSignalCaptured(signal);
+                } else {
+                    listener.onSignalEvent(signal);
+                }
+            });
         } catch (JSONException e) {
             Log.e(TAG, "Error creating signal JSON", e);
         }

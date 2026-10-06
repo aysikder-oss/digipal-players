@@ -5,6 +5,7 @@ import android.os.StatFs;
 import android.util.Log;
 import java.io.*;
 import java.security.MessageDigest;
+import java.util.Locale;
 import java.util.concurrent.*;
 import okhttp3.*;
 
@@ -27,9 +28,24 @@ public class AssetCacheManager {
     private final Context ctx;
     private final PlaylistRepository repo;
     private final OkHttpClient http;
-    private volatile int configuredMax = MAX_CONCURRENT;
-    private final Semaphore sem = new Semaphore(MAX_CONCURRENT, true);
+    private final Object concurrencyLock = new Object();
+    private int configuredMax = MAX_CONCURRENT;
+    private int inFlight = 0;
     private final ExecutorService exec = Executors.newFixedThreadPool(MAX_CONCURRENT + 1);
+
+    private void acquireSlot() throws InterruptedException {
+        synchronized (concurrencyLock) {
+            while (inFlight >= configuredMax) concurrencyLock.wait();
+            inFlight++;
+        }
+    }
+
+    private void releaseSlot() {
+        synchronized (concurrencyLock) {
+            if (inFlight > 0) inFlight--;
+            concurrencyLock.notifyAll();
+        }
+    }
 
     public AssetCacheManager(Context ctx, PlaylistRepository repo) {
         this.ctx = ctx;
@@ -46,8 +62,9 @@ public class AssetCacheManager {
         PlaylistDatabase.AssetEntity e = repo.getAsset(assetId);
         if (e == null || e.localPath == null || e.localPath.isEmpty()) return null;
         if (!"READY".equals(e.downloadState) && !"PINNED_FOR_ROLLBACK".equals(e.downloadState)) return null;
-        File f = new File(e.localPath);
-        return f.exists() ? f : null;
+        File mediaDir = getMediaDir();
+        File f = SafeFiles.existingFileInsideOrNull(mediaDir, e.localPath);
+        return f;
     }
 
     /**
@@ -57,11 +74,11 @@ public class AssetCacheManager {
     public void downloadAsync(String assetId, String url, String expectedSha256, DownloadCallback cb) {
         exec.execute(() -> {
             try {
-                sem.acquire();
+                acquireSlot();
                 try {
                     download(assetId, url, expectedSha256, cb);
                 } finally {
-                    sem.release();
+                    releaseSlot();
                 }
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
@@ -82,41 +99,80 @@ public class AssetCacheManager {
     public void setOnAssetReadyListener(OnAssetReadyListener l) { this.onAssetReadyListener = l; }
 
     private void download(String assetId, String url, String expectedSha256, DownloadCallback cb) {
+        if (!UrlPolicy.isAllowedServerUrl(url)) {
+            if (cb != null) cb.onFailure(assetId, "blocked_url");
+            return;
+        }
+        // Upsert: ensure an asset row exists before downloading.
+        // markAssetReady() is update-only; insert() is required for brand-new assets.
+        try {
+            PlaylistDatabase.AssetEntity existing = repo.getDb().assetDao().findById(assetId);
+            if (existing == null) {
+                PlaylistDatabase.AssetEntity row = new PlaylistDatabase.AssetEntity();
+                row.assetId = assetId;
+                row.url = url;
+                row.downloadState = "DOWNLOADING";
+                row.sha256 = expectedSha256 != null ? expectedSha256 : "";
+                row.lastUsedAt = System.currentTimeMillis();
+                repo.getDb().assetDao().insert(row);
+                Log.d(TAG, "[upsert] inserted asset row for " + assetId);
+            }
+        } catch (Exception upsertEx) {
+            Log.w(TAG, "[upsert] failed to ensure asset row: " + upsertEx.getMessage());
+        }
         File mediaDir = getMediaDir();
-        if (mediaDir == null) { cb.onFailure(assetId, "storage_unavailable"); return; }
-        if (freeBytes() < MIN_FREE_BYTES) { cb.onFailure(assetId, "storage_full"); return; }
+        if (mediaDir == null) { if (cb != null) cb.onFailure(assetId, "storage_unavailable"); return; }
+        if (freeBytes() < MIN_FREE_BYTES) { if (cb != null) cb.onFailure(assetId, "storage_full"); return; }
 
         String safeId = assetId.replaceAll("[^a-zA-Z0-9._-]", "_");
         if (safeId.length() > 180) safeId = safeId.substring(safeId.length() - 180);
-        File finalFile = new File(mediaDir, safeId);
-        File tmpFile   = new File(mediaDir, safeId + ".tmp");
+        File finalFile;
+        File tmpFile;
+        try {
+            finalFile = SafeFiles.child(mediaDir, safeId);
+            tmpFile   = SafeFiles.child(mediaDir, safeId + ".tmp");
+        } catch (IOException | SecurityException pathEx) {
+            Log.w(TAG, "[download] unsafe asset path for " + assetId + ": " + pathEx.getMessage());
+            if (cb != null) cb.onFailure(assetId, "invalid_path");
+            return;
+        }
+        if (finalFile == null || tmpFile == null) { if (cb != null) cb.onFailure(assetId, "invalid_path"); return; }
 
         // Check ETag / Last-Modified for conditional fetch
         PlaylistDatabase.AssetEntity existing = repo.getAsset(assetId);
         Request.Builder reqBuilder = new Request.Builder().url(url);
-        if (existing != null && !existing.etag.isEmpty()) {
-            reqBuilder.header("If-None-Match", existing.etag);
-        } else if (existing != null && !existing.lastModified.isEmpty()) {
-            reqBuilder.header("If-Modified-Since", existing.lastModified);
+        if (existing != null) {
+            String etag = existing.etag == null ? "" : existing.etag;
+            String lm = existing.lastModified == null ? "" : existing.lastModified;
+            if (!etag.isEmpty()) {
+                reqBuilder.header("If-None-Match", etag);
+            } else if (!lm.isEmpty()) {
+                reqBuilder.header("If-Modified-Since", lm);
+            }
         }
         // Range request: resume if .tmp exists
         long resumeFrom = tmpFile.exists() ? tmpFile.length() : 0;
         if (resumeFrom > 0) reqBuilder.header("Range", "bytes=" + resumeFrom + "-");
 
-        try {
-            Response resp = http.newCall(reqBuilder.build()).execute();
+        try (Response resp = http.newCall(reqBuilder.build()).execute()) {
             if (resp.code() == 304) {
                 // Not modified — existing file is still valid
                 Log.d(TAG, "[skip] 304 Not Modified: " + assetId);
-                resp.close();
-                repo.markAssetReady(assetId, finalFile.getAbsolutePath(),
-                        existing.sha256, existing.etag, existing.lastModified, finalFile.length());
-                cb.onSuccess(assetId, finalFile.getAbsolutePath());
+                // Use stored values safely (existing may be null in pathological cases)
+                String existingSha = existing != null ? (existing.sha256 == null ? "" : existing.sha256) : "";
+                String existingEtag = existing != null ? (existing.etag == null ? "" : existing.etag) : "";
+                String existingLm = existing != null ? (existing.lastModified == null ? "" : existing.lastModified) : "";
+                try {
+                    repo.markAssetReady(assetId, finalFile.getAbsolutePath(),
+                            existingSha, existingEtag, existingLm, finalFile.length());
+                } catch (Exception ex) {
+                    Log.w(TAG, "markAssetReady() failed for 304 path: ", ex);
+                }
+                if (cb != null) cb.onSuccess(assetId, finalFile.getAbsolutePath());
                 return;
             }
             if (!resp.isSuccessful() && resp.code() != 206) {
-                resp.close();
-                cb.onFailure(assetId, "http_" + resp.code());
+                if (cb != null) cb.onFailure(assetId, "http_" + resp.code());
                 return;
             }
 
@@ -136,11 +192,15 @@ public class AssetCacheManager {
                 tmpFile.delete(); // fresh start
             }
 
-            try (ResponseBody body = resp.body();
+            ResponseBody body = resp.body();
+            if (body == null) {
+                if (cb != null) cb.onFailure(assetId, "empty_body");
+                return;
+            }
+            try (InputStream in = body.byteStream();
                  FileOutputStream fos = new FileOutputStream(tmpFile, resume)) {
-                if (body == null) { cb.onFailure(assetId, "empty_body"); return; }
                 byte[] buf = new byte[8192]; int n;
-                while ((n = body.byteStream().read(buf)) != -1) {
+                while ((n = in.read(buf)) != -1) {
                     fos.write(buf, 0, n);
                     digest.update(buf, 0, n);
                 }
@@ -151,26 +211,43 @@ public class AssetCacheManager {
             if (expectedSha256 != null && !expectedSha256.isEmpty()
                     && !expectedSha256.equalsIgnoreCase(actualSha)) {
                 tmpFile.delete();
-                cb.onFailure(assetId, "sha256_mismatch expected=" + expectedSha256 + " got=" + actualSha);
+                if (cb != null) cb.onFailure(assetId, "sha256_mismatch expected=" + expectedSha256 + " got=" + actualSha);
                 return;
             }
 
             // Atomic rename
             if (!tmpFile.renameTo(finalFile)) {
                 tmpFile.delete();
-                cb.onFailure(assetId, "rename_failed");
+                if (cb != null) cb.onFailure(assetId, "rename_failed");
                 return;
             }
 
-            repo.markAssetReady(assetId, finalFile.getAbsolutePath(), actualSha, etag, lm, finalFile.length());
+            try {
+                repo.markAssetReady(assetId, finalFile.getAbsolutePath(), actualSha, etag, lm, finalFile.length());
+            } catch (Exception ex) {
+                Log.w(TAG, "markAssetReady() failed after download: ", ex);
+            }
             Log.i(TAG, "[done] " + assetId + " sha=" + actualSha.substring(0, 8) + "…");
-            cb.onSuccess(assetId, finalFile.getAbsolutePath());
-            if (onAssetReadyListener != null) onAssetReadyListener.onAssetReady(url, finalFile.getAbsolutePath());
+            if (cb != null) cb.onSuccess(assetId, finalFile.getAbsolutePath());
+            if (onAssetReadyListener != null) {
+                try { onAssetReadyListener.onAssetReady(url, finalFile.getAbsolutePath()); } catch (Exception ex) {
+                    Log.w(TAG, "onAssetReadyListener threw: ", ex);
+                }
+            }
 
         } catch (Exception e) {
-            Log.e(TAG, "[error] " + assetId + ": " + e.getMessage());
-            repo.markAssetFailed(assetId, e.getMessage() != null ? e.getMessage() : "unknown");
-            cb.onFailure(assetId, e.getMessage() != null ? e.getMessage() : "unknown");
+            Log.e(TAG, "[error] " + assetId + ": ", e);
+            String err = e.getMessage() != null ? e.getMessage() : "unknown";
+            try {
+                repo.markAssetFailed(assetId, err);
+            } catch (Exception ex) {
+                Log.w(TAG, "markAssetFailed() threw: ", ex);
+            }
+            if (cb != null) {
+                try { cb.onFailure(assetId, err); } catch (Exception ex) {
+                    Log.w(TAG, "DownloadCallback.onFailure threw: ", ex);
+                }
+            }
         }
     }
 
@@ -181,9 +258,10 @@ public class AssetCacheManager {
             long weekAgo = now - 7L * 86400 * 1000;
             java.util.List<PlaylistDatabase.AssetEntity> prunable =
                 repo.getDb().assetDao().findPrunable(weekAgo, now);
+            File mediaDir = getMediaDir();
             for (PlaylistDatabase.AssetEntity a : prunable) {
                 if (a.localPath != null && !a.localPath.isEmpty()) {
-                    new File(a.localPath).delete();
+                    SafeFiles.deleteFileInside(mediaDir, a.localPath);
                 }
             }
             Log.d(TAG, "[cleanup] Pruned " + prunable.size() + " stale assets");
@@ -203,7 +281,7 @@ public class AssetCacheManager {
 
     private static String bytesToHex(byte[] bytes) {
         StringBuilder sb = new StringBuilder(bytes.length * 2);
-        for (byte b : bytes) sb.append(String.format("%02x", b));
+        for (byte b : bytes) sb.append(String.format(Locale.ROOT, "%02x", b));
         return sb.toString();
     }
 
@@ -215,14 +293,10 @@ public class AssetCacheManager {
     public synchronized void setMaxConcurrency(int max) {
         if (max < 1) max = 1;
         if (max > MAX_CONCURRENT) max = MAX_CONCURRENT;
-        if (max == configuredMax) return;
-        if (max > configuredMax) {
-            sem.release(max - configuredMax);
-        } else {
-            sem.drainPermits();
-            sem.release(max);
+        synchronized (concurrencyLock) {
+            configuredMax = max;
+            concurrencyLock.notifyAll();
         }
-        configuredMax = max;
         Log.d(TAG, "[concurrency] Download concurrency set to " + max);
     }
 

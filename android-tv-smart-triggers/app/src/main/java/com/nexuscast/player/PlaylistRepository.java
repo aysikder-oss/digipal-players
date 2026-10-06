@@ -10,6 +10,7 @@ package com.nexuscast.player;
   import java.io.File;
   import java.util.ArrayList;
   import java.util.List;
+  import java.util.Locale;
   import java.util.concurrent.ConcurrentHashMap;
   import java.util.concurrent.atomic.AtomicInteger;
 
@@ -40,8 +41,24 @@ package com.nexuscast.player;
           void onFailed(long revisionDbId, String reason);
       }
 
-      private final PlaylistDatabase db;
+            /** Task #1891 fix: fired when a WEBVIEW_PDF asset finishes native page prerendering
+         *  so PlaylistScheduler can reload the active revision and expand the slide without
+         *  waiting for the next full playlist refresh or a reboot. */
+        public interface PdfPrerenderReadyListener {
+            void onPdfPrerenderReady(String assetId);
+        }
+
+        private final PlaylistDatabase db;
       private final Handler mainHandler = new Handler(Looper.getMainLooper());
+      private PdfPrerenderer pdfPrerenderer;
+        private PdfPrerenderReadyListener pdfPrerenderReadyListener;
+
+        /** Task #1891: wired from MainActivity after both collaborators are constructed. */
+        public void setPdfPrerenderer(PdfPrerenderer p) { this.pdfPrerenderer = p; }
+
+        /** Wired from PlaylistScheduler's constructor so it can reload the active
+         *  revision from Room the moment a PDF's pages become ready. */
+        public void setPdfPrerenderReadyListener(PdfPrerenderReadyListener l) { this.pdfPrerenderReadyListener = l; }
 
       // Per-revision pipeline state (keyed by Room row id)
       private final ConcurrentHashMap<Long, AtomicInteger> pendingDownloads  = new ConcurrentHashMap<>();
@@ -53,6 +70,7 @@ package com.nexuscast.player;
       // Optional collaborators set after construction
       private MediaDownloadManager mediaDownloadManager;
       private WebView webView;
+      private final Context appContext;
 
         // Off-main-thread executor for deferred DB maintenance (e.g. the
         // ROLLED_BACK cleanup sweep scheduled after the rollback grace period).
@@ -63,6 +81,7 @@ package com.nexuscast.player;
 
       public PlaylistRepository(Context ctx) {
           this.db = PlaylistDatabase.getInstance(ctx);
+          this.appContext = ctx.getApplicationContext();
       }
 
       public void setMediaDownloadManager(MediaDownloadManager mdm) { this.mediaDownloadManager = mdm; }
@@ -133,16 +152,38 @@ package com.nexuscast.player;
       // ─────────────────────────────────────────────────────────────────────────
 
       private void handleAssetDownloaded(long revId, String objectPath, String localPath) {
-          ConcurrentHashMap<String, String> paths = assetLocalPaths.get(revId);
-          if (paths == null) return; // revision was cancelled / already finalised
-          paths.put(objectPath, localPath);
+            ConcurrentHashMap<String, String> paths = assetLocalPaths.get(revId);
+            if (paths == null) return; // revision was cancelled / already finalised
+            paths.put(objectPath, localPath);
 
-          AtomicInteger pending = pendingDownloads.get(revId);
-          if (pending == null) return;
-          int remaining = pending.decrementAndGet();
-          Log.d(TAG, "[pipeline] revId=" + revId + " asset OK key=" + objectPath + " remaining=" + remaining);
-          if (remaining <= 0) finalizePipeline(revId);
-      }
+            // Task #1891: kick off native PDF-to-JPEG prerendering as soon as a PDF asset
+            // finishes downloading. Runs on PdfPrerenderer's own executor and writes page
+            // paths to Room asynchronously -- does NOT block pipeline finalization, so the
+            // very first activation of a brand-new PDF still falls back to the WEBVIEW_PDF
+            // viewer; subsequent activations pick up the prerendered pages via Room.
+            if (objectPath.endsWith("_pdf") && pdfPrerenderer != null) {
+                PlaylistDatabase.AssetEntity existing = db.assetDao().findById(objectPath);
+                if (existing == null || existing.prerenderedPages == null || existing.prerenderedPages.isEmpty()) {
+                    pdfPrerenderer.prerender(objectPath, localPath, new PdfPrerenderer.Callback() {
+                        @Override public void onPagesReady(String assetId, List<String> pageLocalPaths) {
+                            Log.i(TAG, "[pdf-prerender] " + assetId + " ready, " + pageLocalPaths.size() + " pages");
+                              if (pdfPrerenderReadyListener != null) {
+                                  pdfPrerenderReadyListener.onPdfPrerenderReady(assetId);
+                              }
+                        }
+                        @Override public void onFailed(String assetId, String error) {
+                            Log.w(TAG, "[pdf-prerender] " + assetId + " failed: " + error + " -- keeping WEBVIEW_PDF fallback");
+                        }
+                    });
+                }
+            }
+
+            AtomicInteger pending = pendingDownloads.get(revId);
+            if (pending == null) return;
+            int remaining = pending.decrementAndGet();
+            Log.d(TAG, "[pipeline] revId=" + revId + " asset OK key=" + objectPath + " remaining=" + remaining);
+            if (remaining <= 0) finalizePipeline(revId);
+        }
 
       private void handleAssetFailed(long revId, String objectPath, String error) {
           AtomicInteger failed = failedDownloads.get(revId);
@@ -182,9 +223,16 @@ package com.nexuscast.player;
           }
 
           if (!verifyErrors.isEmpty()) {
-              String reason = "verify: " + verifyErrors.get(0)
+              // Log every failed slide individually so operators can pinpoint the broken asset.
+              for (String err : verifyErrors) {
+                  Log.e("DigipalPipeline", "[verify] revId=" + revId + " SLIDE_FAILED " + err);
+              }
+              String reason = "verify:" + verifyErrors.get(0)
                       + (verifyErrors.size() > 1 ? " (+" + (verifyErrors.size()-1) + " more)" : "");
-              Log.e(TAG, "[pipeline] revId=" + revId + " FAILED " + reason);
+              Log.e("DigipalPipeline", "[pipeline] revId=" + revId
+                      + " status=FAILED reason=" + reason
+                      + " assets_total=" + paths.size()
+                      + " assets_failed=" + verifyErrors.size());
               markRevisionFailed(revId, reason);
               cb.onFailed(revId, reason);
               return;
@@ -195,6 +243,10 @@ package com.nexuscast.player;
           db.revisionDao().setLocalManifest(revId, localManifest);
           db.revisionDao().setStatus(revId, "READY");
           Log.i(TAG, "[pipeline] revId=" + revId + " READY failCount=" + failCount);
+          Log.i("DigipalPipeline", "[pipeline] revId=" + revId
+                  + " status=READY assets_total=" + paths.size()
+                  + " assets_verified=" + (paths.size() - failCount)
+                  + " assets_downloaded_failed=" + failCount);
 
           // 7. Fire callback
           cb.onReady(revId, localManifest);
@@ -217,6 +269,8 @@ package com.nexuscast.player;
           // Prune legacy SUPERSEDED rows older than 7 days
           db.revisionDao().pruneOld(System.currentTimeMillis() - 7L * 86400 * 1000);
           Log.i(TAG, "[pipeline] promoted revisionDbId=" + revisionDbId + " → ACTIVE");
+          Log.i("DigipalPipeline", "[pipeline] revId=" + revisionDbId
+                  + " status=ACTIVE promoted=true");
 
           // Schedule ROLLED_BACK cleanup after grace period. Dispatch onto
           // dbExec (not directly onto the main-thread Handler) since the
@@ -264,6 +318,25 @@ package com.nexuscast.player;
           }
       }
 
+      private List<File> mediaRoots() {
+          List<File> roots = new ArrayList<>();
+          File ext = appContext.getExternalFilesDir("media");
+          if (ext != null) roots.add(ext);
+          roots.add(new File(appContext.getFilesDir(), "media"));
+          return roots;
+      }
+
+      private void deleteLocalMediaPath(String url) {
+          if (url == null || !url.startsWith("file://")) return;
+          String path;
+          try { path = android.net.Uri.parse(url).getPath(); }
+          catch (Throwable ignored) { path = url.substring(7); }
+
+          for (File root : mediaRoots()) {
+              if (SafeFiles.deleteFileInside(root, path)) return;
+          }
+      }
+
       private void deleteLocalMediaFiles(String localManifestJson) {
           try {
               JSONArray arr = new JSONArray(localManifestJson);
@@ -271,10 +344,7 @@ package com.nexuscast.player;
                   JSONObject obj = arr.optJSONObject(i);
                   if (obj == null) continue;
                   String url = obj.optString("url", "");
-                  if (url.startsWith("file://")) {
-                      File f = new File(url.substring(7));
-                      if (f.exists()) { f.delete(); }
-                  }
+                  deleteLocalMediaPath(url);
               }
           } catch (Exception ignored) {}
       }
@@ -282,6 +352,12 @@ package com.nexuscast.player;
       // ─────────────────────────────────────────────────────────────────────────
       // Helpers
       // ─────────────────────────────────────────────────────────────────────────
+
+      private static String safeAssetKey(String contentId, String suffix) {
+          String id = contentId == null ? "" : contentId.replaceAll("[^a-zA-Z0-9._-]", "_");
+          if (id.length() > 120) id = id.substring(id.length() - 120);
+          return "native_asset_" + id + "_" + suffix;
+      }
 
       /** Extract VIDEO/IMAGE slides with http asset URLs from a playlist JSON array. */
       private List<AssetDescriptor> extractMediaAssets(String json) {
@@ -291,12 +367,16 @@ package com.nexuscast.player;
               for (int i = 0; i < arr.length(); i++) {
                   JSONObject obj = arr.getJSONObject(i);
                   String type = obj.optString("type", "");
-                  if (!"VIDEO".equals(type) && !"IMAGE".equals(type)) continue;
+                  boolean isPdf = "WEBVIEW_PDF".equals(type);
+                  if (!"VIDEO".equals(type) && !"IMAGE".equals(type) && !isPdf) continue;
                   String url = obj.optString("url", "");
-                  if (url.isEmpty() || !url.startsWith("http")) continue;
-                  // Stable key: contentId + type (survives signed-URL rotation)
+                  if (!UrlPolicy.isAllowedServerUrl(url)) continue;
+                  // Stable key: contentId + type (survives signed-URL rotation).
+                  // PDFs use a fixed "_pdf" suffix (task #1891) so PlaylistScheduler's
+                  // expandPdfIfPrerendered() can compute the same key independently.
                   String contentId = obj.optString("contentId", String.valueOf(i));
-                  String objectPath = "native_asset_" + contentId + "_" + type.toLowerCase();
+                  String suffix = isPdf ? "pdf" : type.toLowerCase(Locale.ROOT);
+                  String objectPath = safeAssetKey(contentId, suffix);
                   result.add(new AssetDescriptor(objectPath, url));
               }
           } catch (Exception ex) {
@@ -310,27 +390,40 @@ package com.nexuscast.player;
        * Adds a boolean isLocal=true flag so the scheduler knows the URL is already cached.
        */
       private String rewriteManifestUrls(String json, ConcurrentHashMap<String, String> paths) {
-          try {
-              JSONArray arr = new JSONArray(json);
-              for (int i = 0; i < arr.length(); i++) {
-                  JSONObject obj = arr.getJSONObject(i);
-                  String type = obj.optString("type", "");
-                  if (!"VIDEO".equals(type) && !"IMAGE".equals(type)) continue;
-                  String contentId = obj.optString("contentId", String.valueOf(i));
-                  String objectPath = "native_asset_" + contentId + "_" + type.toLowerCase();
-                  String localPath = paths.get(objectPath);
-                  if (localPath != null && !localPath.isEmpty()) {
-                      obj.put("url", localPath);
-                      obj.put("localUrl", localPath);
-                      obj.put("isLocal", true);
-                  }
-              }
-              return arr.toString();
-          } catch (Exception ex) {
-              Log.e(TAG, "rewriteManifestUrls: " + ex.getMessage());
-              return json;
-          }
-      }
+            try {
+                JSONArray arr = new JSONArray(json);
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject obj = arr.getJSONObject(i);
+                    String type = obj.optString("type", "");
+                    boolean isPdf = "WEBVIEW_PDF".equals(type);
+                    if (!"VIDEO".equals(type) && !"IMAGE".equals(type) && !isPdf) continue;
+                    String contentId = obj.optString("contentId", String.valueOf(i));
+                    // PDFs are downloaded under a fixed "_pdf" suffix key (task #1891, mirrors
+                    // extractMediaAssets()) so the isolated-WebView PDF fallback still opens the
+                    // locally-cached file (task P4) instead of a possibly-expired/offline-
+                    // unreachable remote signed URL when native prerendering hasn't completed yet.
+                    String objectPath = safeAssetKey(contentId, isPdf ? "pdf" : type.toLowerCase(Locale.ROOT));
+                    String localPath = paths.get(objectPath);
+                    if (localPath != null && !localPath.isEmpty()) {
+                        // Fix #4: preserve the original remote URL as sourceUrl before overwriting
+                        // "url" with the local file path -- downstream fingerprinting (isSameStructure)
+                        // and cache-freshness checks (MediaDownloadManager) need the real source, not
+                        // the local file:// path, to detect that the underlying media changed.
+                        if (!obj.has("sourceUrl") || obj.optString("sourceUrl", "").isEmpty()) {
+                            String originalUrl = obj.optString("url", "");
+                            if (!originalUrl.isEmpty()) obj.put("sourceUrl", originalUrl);
+                        }
+                        obj.put("url", localPath);
+                        obj.put("localUrl", localPath);
+                        obj.put("isLocal", true);
+                    }
+                }
+                return arr.toString();
+            } catch (Exception ex) {
+                Log.e(TAG, "rewriteManifestUrls: " + ex.getMessage());
+                return json;
+            }
+        }
 
       private static String escapeJson(String s) {
           if (s == null) return "";
@@ -376,8 +469,9 @@ package com.nexuscast.player;
       }
 
       public PlaylistDatabase.PlaylistRevisionEntity getLastKnownGood() {
-          List<PlaylistDatabase.PlaylistRevisionEntity> list = db.revisionDao().getLastTwo();
-          return list.isEmpty() ? null : list.get(0);
+          PlaylistDatabase.PlaylistRevisionEntity active = db.revisionDao().getActive();
+          long currentId = active != null ? active.id : -1L;
+          return db.revisionDao().getPreviousKnownGood(currentId);
       }
 
       public void clearActiveRevision() {
@@ -394,32 +488,40 @@ package com.nexuscast.player;
           return db.slideDao().forRevision(revisionId);
       }
 
-      public void saveSlidesFromJson(long revisionId, String json) {
-          try {
-              JSONArray arr = new JSONArray(json);
-              List<PlaylistDatabase.SlideEntity> entities = new ArrayList<>();
-              for (int i = 0; i < arr.length(); i++) {
-                  JSONObject obj = arr.getJSONObject(i);
-                  PlaylistDatabase.SlideEntity s = new PlaylistDatabase.SlideEntity();
-                  s.revisionId = revisionId;
-                  s.slideId = obj.optString("slideId", String.valueOf(obj.optInt("contentId", i)));
-                  String type = obj.optString("type", "WEBVIEW_URL");
-                  s.type = "VIDEO".equals(type) ? "VIDEO"
-                         : "IMAGE".equals(type) ? "IMAGE"
-                         : "WEBVIEW_DESIGN".equals(type) ? "WEBVIEW_DESIGN"
-                         : "WEBVIEW_KIOSK".equals(type) ? "WEBVIEW_KIOSK"
-                         : "WEBVIEW_URL";
-                  s.durationMs = (long)(obj.optDouble("duration", 10) * 1000);
-                  s.orderIndex = i;
-                  s.configJson = obj.toString();
-                  entities.add(s);
-              }
-              saveSlides(revisionId, entities);
-              Log.d(TAG, "Saved " + entities.size() + " slides for revisionId=" + revisionId);
-          } catch (Exception ex) {
-              Log.e(TAG, "saveSlidesFromJson error: " + ex.getMessage());
-          }
-      }
+      private static String normalizeSlideType(String rawType) {
+            if (rawType == null || rawType.trim().isEmpty()) return "WEBVIEW_URL";
+            String t = rawType.trim();
+            if ("image_url".equalsIgnoreCase(t) || "IMAGE".equalsIgnoreCase(t)) return "IMAGE";
+            if ("video".equalsIgnoreCase(t) || "VIDEO".equalsIgnoreCase(t)) return "VIDEO";
+            try {
+                PlaylistScheduler.SlideType.valueOf(t);
+                return t;
+            } catch (IllegalArgumentException ignored) {
+                return "WEBVIEW_URL";
+            }
+        }
+
+        public void saveSlidesFromJson(long revisionId, String json) {
+            try {
+                JSONArray arr = new JSONArray(json);
+                List<PlaylistDatabase.SlideEntity> entities = new ArrayList<>();
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject obj = arr.getJSONObject(i);
+                    PlaylistDatabase.SlideEntity s = new PlaylistDatabase.SlideEntity();
+                    s.revisionId = revisionId;
+                    s.slideId = obj.optString("slideId", String.valueOf(obj.optInt("contentId", i)));
+                    s.type = normalizeSlideType(obj.optString("type", "WEBVIEW_URL"));
+                    s.durationMs = (long)(obj.optDouble("duration", 10) * 1000);
+                    s.orderIndex = i;
+                    s.configJson = obj.toString();
+                    entities.add(s);
+                }
+                saveSlides(revisionId, entities);
+                Log.d(TAG, "Saved " + entities.size() + " slides for revisionId=" + revisionId);
+            } catch (Exception ex) {
+                Log.e(TAG, "saveSlidesFromJson error: " + ex.getMessage());
+            }
+        }
 
       public PlaylistDatabase.AssetEntity getAsset(String assetId) {
           return db.assetDao().findById(assetId);
@@ -439,4 +541,3 @@ package com.nexuscast.player;
 
       public PlaylistDatabase getDb() { return db; }
   }
-  

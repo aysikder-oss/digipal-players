@@ -2,6 +2,7 @@ package com.nexuscast.player;
 
 import android.app.ActivityManager;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -29,13 +30,31 @@ public class TelemetryManager {
     private volatile long currentHeartbeatIntervalMs = HEARTBEAT_INTERVAL_MS;
     private static final int MAX_BATCH = 50;
     private static final int MAX_QUEUED_EVENTS = 5000;
+    private volatile boolean stopped = false;
 
     private final Context ctx;
     private final PlaylistRepository repo;
     private final String serverUrl;
     private final String deviceId;
+    private volatile String pairingCode = "";
     private final String appVersion;
     private final ExecutorService exec = Executors.newSingleThreadExecutor();
+
+    /**
+     * Fired whenever a heartbeat response carries a contentRevision string, on
+     * every tick (dedup is left to the JS side). This is the fix for content
+     * changes not reaching a device whose WebView is frozen under
+     * WebView.pauseTimers(): sendHeartbeat() runs entirely off the WebView (plain
+     * HttpURLConnection on a background thread), so it keeps working even when
+     * the WebView's own fetch()/WS/timers are paused. Previously the heartbeat
+     * response BODY was discarded entirely (postJson only returned the HTTP
+     * status code) even though the server has always echoed contentRevision
+     * back — MainActivity now forwards it into the WebView via
+     * evaluateJavascript, which (like the existing 25s __digipalHeartbeat call)
+     * still executes under pauseTimers.
+     */
+    public interface RevisionListener { void onContentRevision(String revision); }
+    private final RevisionListener revisionListener;
 
     // Runtime state reported in heartbeat
     private volatile String currentRevisionId = "";
@@ -45,25 +64,42 @@ public class TelemetryManager {
     private volatile int cacheReadyPercent = 100;
     private final AtomicLong transitionGapMs = new AtomicLong(0);
     private long lastSlideHideMs = 0;
-  
+
       // Renderer state — updated by MainActivity via setters below
       private volatile int     activeRendererCount = 0;
       private volatile boolean webViewActive       = false;
-  
+      // Renderer observability (full telemetry task): which player shell is currently
+      // active ("local" vs "remote") — set once at boot from PlayerShellManager.
+      private volatile String  shellSource         = "unknown";
+      private volatile String  shellVersion        = "";
+      private volatile String  shellContentHash    = "";
+
 
     // Heartbeat scheduling — Handler on the main Looper (no extra OS thread).
     private final Handler heartbeatHandler = new Handler(Looper.getMainLooper());
     private Runnable heartbeatRunnable;
 
+    private static String getOrCreateInstallId(Context ctx) {
+        SharedPreferences prefs = ctx.getSharedPreferences("DigipalPrefs", Context.MODE_PRIVATE);
+        String id = prefs.getString("install_id", null);
+        if (id == null || id.isEmpty()) {
+            id = java.util.UUID.randomUUID().toString();
+            prefs.edit().putString("install_id", id).apply();
+        }
+        return id;
+    }
+
     public TelemetryManager(Context ctx, PlaylistRepository repo, String serverUrl) {
+        this(ctx, repo, serverUrl, null);
+    }
+
+    public TelemetryManager(Context ctx, PlaylistRepository repo, String serverUrl, RevisionListener revisionListener) {
         this.ctx = ctx;
         this.repo = repo;
         this.serverUrl = serverUrl;
-        this.deviceId = Build.SERIAL.equals(Build.UNKNOWN)
-                ? android.provider.Settings.Secure.getString(ctx.getContentResolver(),
-                    android.provider.Settings.Secure.ANDROID_ID)
-                : Build.SERIAL;
+        this.deviceId = getOrCreateInstallId(ctx);
         this.appVersion = BuildConfig.VERSION_NAME;
+        this.revisionListener = revisionListener;
     }
 
     public void start() {
@@ -94,6 +130,7 @@ public class TelemetryManager {
     }
 
     public void stop() {
+        stopped = true;
         if (heartbeatRunnable != null) {
             heartbeatHandler.removeCallbacks(heartbeatRunnable);
             heartbeatRunnable = null;
@@ -103,6 +140,7 @@ public class TelemetryManager {
 
     /** Log a playback event — persisted to Room, batched to server on next heartbeat. */
     public void logEvent(String eventType, String slideId, String detailsJson) {
+        if (stopped) return;
         final long ts = System.currentTimeMillis();
         exec.execute(() -> {
             PlaylistDatabase.PlaybackEventEntity e = new PlaylistDatabase.PlaybackEventEntity();
@@ -127,64 +165,101 @@ public class TelemetryManager {
 
     public void onSlideHidden() { lastSlideHideMs = System.currentTimeMillis(); }
     public void setLastError(String err) { lastError = err; }
+    public void setPairingCode(String code) { pairingCode = code == null ? "" : code; }
       public void setActiveRendererCount(int count) { activeRendererCount = count; }
       public void setWebViewActive(boolean active) { webViewActive = active; }
+      public void setShellSource(String source) { shellSource = source; }
+      public String getShellSource() { return shellSource; }
+      /** Shell staleness telemetry task: report which build the device is actually
+       *  executing right now, so "audit says fixed but device still broken" can be
+       *  diagnosed remotely instead of guessed at. version is PlayerShellManager's local
+       *  download timestamp; contentHash is the SHA-256 of the shell HTML (the real
+       *  server-comparable build id). */
+      public void setShellBuild(String version, String contentHash) {
+          shellVersion = version == null ? "" : version;
+          shellContentHash = contentHash == null ? "" : contentHash;
+      }
     public void setCacheReadyPercent(int pct) { cacheReadyPercent = pct; }
+
+    /** Current process memory usage in MB (ActivityManager.MemoryInfo). Used to bracket
+     *  slide dispatches with before/after snapshots (renderer observability task). Returns
+     *  -1 if unavailable rather than throwing, since this is purely diagnostic. */
+    public long currentMemMb() {
+        try {
+            ActivityManager am = (ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
+            if (am == null) return -1;
+            ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
+            am.getMemoryInfo(mi);
+            return (mi.totalMem - mi.availMem) / (1024L * 1024L);
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
 
     private void sendHeartbeat() {
         try {
             JSONObject payload = buildHeartbeat();
-            postJson(serverUrl + "/api/tv/telemetry/heartbeat", payload.toString());
+            String respBody = postJsonWithResponse(serverUrl + "/api/tv/telemetry/heartbeat", payload.toString());
+            if (respBody != null && revisionListener != null) {
+                try {
+                    JSONObject resp = new JSONObject(respBody);
+                    String remoteRevision = resp.optString("contentRevision", "");
+                    if (!remoteRevision.isEmpty()) {
+                        revisionListener.onContentRevision(remoteRevision);
+                    }
+                } catch (JSONException je) {
+                    Log.w(TAG, "heartbeat response parse failed: " + je.getMessage());
+                }
+            }
         } catch (Exception e) {
             Log.w(TAG, "heartbeat failed: " + e.getMessage());
         }
     }
 
     private void syncEvents() {
-          exec.execute(() -> {
-              try {
-                  List<PlaylistDatabase.PlaybackEventEntity> events = repo.getDb().eventDao().getUnsynced();
-                  if (!events.isEmpty()) {
-                      JSONArray arr = new JSONArray();
-                      List<Long> ids = new ArrayList<>();
-                      for (PlaylistDatabase.PlaybackEventEntity ev : events) {
-                          JSONObject o = new JSONObject();
-                          o.put("timestamp", ev.timestamp); o.put("eventType", ev.eventType);
-                          o.put("slideId", ev.slideId); o.put("revisionId", ev.revisionId);
-                          o.put("rendererType", ev.rendererType);
-                          try { o.put("details", new JSONObject(ev.detailsJson)); } catch (Exception ex) {}
-                          arr.put(o); ids.add(ev.id);
-                          if (ids.size() >= MAX_BATCH) break;
-                      }
-                      JSONObject body = new JSONObject();
-                      body.put("deviceId", deviceId);
-                      body.put("events", arr);
-                      // Only mark these events synced if the server actually persisted them
-                      // (2xx). A 4xx/5xx (e.g. screen not found, DB failure) must leave them
-                      // unsynced so they're retried on the next heartbeat tick.
-                      int code = postJson(serverUrl + "/api/tv/telemetry/events", body.toString());
-                      if (code >= 200 && code < 300) {
-                          repo.getDb().eventDao().markSynced(ids);
-                      } else {
-                          Log.w(TAG, "syncEvents: server rejected batch (" + code + "), leaving " + ids.size() + " unsynced for retry");
-                      }
+          try {
+              List<PlaylistDatabase.PlaybackEventEntity> events = repo.getDb().eventDao().getUnsynced();
+              if (!events.isEmpty()) {
+                  JSONArray arr = new JSONArray();
+                  List<Long> ids = new ArrayList<>();
+                  for (PlaylistDatabase.PlaybackEventEntity ev : events) {
+                      JSONObject o = new JSONObject();
+                      o.put("timestamp", ev.timestamp); o.put("eventType", ev.eventType);
+                      o.put("slideId", ev.slideId); o.put("revisionId", ev.revisionId);
+                      o.put("rendererType", ev.rendererType);
+                      try { o.put("details", new JSONObject(ev.detailsJson)); } catch (Exception ex) {}
+                      arr.put(o); ids.add(ev.id);
+                      if (ids.size() >= MAX_BATCH) break;
                   }
-                  // Bounded local queue: even if the server keeps rejecting/unreachable, cap
-                  // storage growth. Synced events are pruned after 3 days; ALL events
-                  // (synced or not) are hard-pruned after 14 days, and the table is capped
-                  // at MAX_QUEUED_EVENTS rows so a persistent outage can't grow it forever.
-                  long now = System.currentTimeMillis();
-                  repo.getDb().eventDao().pruneOld(now - 3L * 86400 * 1000);
-                  repo.getDb().eventDao().pruneAllOlderThan(now - 14L * 86400 * 1000);
-                  int total = repo.getDb().eventDao().countAll();
-                  if (total > MAX_QUEUED_EVENTS) {
-                      repo.getDb().eventDao().deleteOldest(total - MAX_QUEUED_EVENTS);
-                      Log.w(TAG, "syncEvents: queue exceeded " + MAX_QUEUED_EVENTS + " rows, trimmed oldest " + (total - MAX_QUEUED_EVENTS));
+                  JSONObject body = new JSONObject();
+                  body.put("deviceId", deviceId);
+                  body.put("pairingCode", pairingCode);
+                  body.put("events", arr);
+                  // Only mark these events synced if the server actually persisted them
+                  // (2xx). A 4xx/5xx (e.g. no pairingCode, screen not found, DB failure)
+                  // must leave them unsynced so they're retried on the next heartbeat tick.
+                  int code = postJson(serverUrl + "/api/tv/telemetry/events", body.toString());
+                  if (code >= 200 && code < 300) {
+                      repo.getDb().eventDao().markSynced(ids);
+                  } else {
+                      Log.w(TAG, "syncEvents: server rejected batch (" + code + "), leaving " + ids.size() + " unsynced for retry");
                   }
-              } catch (Exception e) {
-                  Log.w(TAG, "syncEvents failed: " + e.getMessage());
               }
-          });
+              // Bounded local queue: even if the server keeps rejecting/unreachable, cap
+              // storage growth. Synced events are pruned after 3 days; ALL events
+              // (synced or not) are hard-pruned after 14 days, and the table is capped
+              // at MAX_QUEUED_EVENTS rows so a persistent outage can't grow it forever.
+              long now = System.currentTimeMillis();
+              repo.getDb().eventDao().pruneOld(now - 3L * 86400 * 1000);
+              repo.getDb().eventDao().pruneAllOlderThan(now - 14L * 86400 * 1000);
+              int total = repo.getDb().eventDao().countAll();
+              if (total > MAX_QUEUED_EVENTS) {
+                  repo.getDb().eventDao().deleteOldest(total - MAX_QUEUED_EVENTS);
+                  Log.w(TAG, "syncEvents: queue exceeded " + MAX_QUEUED_EVENTS + " rows, trimmed oldest " + (total - MAX_QUEUED_EVENTS));
+              }
+          } catch (Exception e) {
+              Log.w(TAG, "syncEvents failed: " + e.getMessage());
+          }
       }
 
     private JSONObject buildHeartbeat() throws JSONException {
@@ -197,6 +272,7 @@ public class TelemetryManager {
 
         JSONObject o = new JSONObject();
         o.put("deviceId", deviceId);
+        o.put("pairingCode", pairingCode);
         o.put("appVersion", appVersion);
         o.put("uptimeMs", android.os.SystemClock.elapsedRealtime());
         o.put("playlistRevision", currentRevisionId);
@@ -206,25 +282,77 @@ public class TelemetryManager {
         o.put("freeStorageBytes", freeStorage);
         o.put("memoryPressure", memPressure);
         o.put("lastError", lastError);
+        // RAM: total and used bytes so the dashboard can render a real usage bar
+        // instead of just the binary HIGH/NORMAL pressure flag.
+        o.put("memTotalBytes", mi.totalMem);
+        o.put("memUsedBytes", mi.totalMem - mi.availMem);
+        // Storage total bytes (paired with existing freeStorageBytes for the bar)
+        try { o.put("storageTotalBytes", new StatFs(ctx.getFilesDir().getPath()).getTotalBytes()); } catch (Exception ignored2) {}
         o.put("transitionGapMs", transitionGapMs.get());
         o.put("heartbeatIntervalMs", currentHeartbeatIntervalMs);
+        o.put("shellSource", shellSource);
+        o.put("shellVersion", shellVersion);
+        o.put("shellContentHash", shellContentHash);
         return o;
     }
 
     private int postJson(String urlStr, String body) throws Exception {
-          URL url = new URL(urlStr);
-          HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-          conn.setRequestMethod("POST");
-          conn.setRequestProperty("Content-Type", "application/json");
-          conn.setDoOutput(true);
-          conn.setConnectTimeout(10000);
-          conn.setReadTimeout(10000);
-          try (OutputStream os = conn.getOutputStream()) {
-              os.write(body.getBytes("UTF-8"));
+          HttpURLConnection conn = null;
+          try {
+              URL url = new URL(urlStr);
+              conn = (HttpURLConnection) url.openConnection();
+              conn.setRequestMethod("POST");
+              conn.setRequestProperty("Content-Type", "application/json");
+              conn.setDoOutput(true);
+              conn.setConnectTimeout(10000);
+              conn.setReadTimeout(10000);
+              try (OutputStream os = conn.getOutputStream()) {
+                  os.write(body.getBytes("UTF-8"));
+              }
+              int code = conn.getResponseCode();
+              if (code >= 400) Log.w(TAG, "POST " + urlStr + " returned " + code);
+              return code;
+          } finally {
+              if (conn != null) conn.disconnect();
           }
-          int code = conn.getResponseCode();
-          if (code >= 400) Log.w(TAG, "POST " + urlStr + " returned " + code);
-          conn.disconnect();
-          return code;
+      }
+
+    /**
+     * Same as postJson but also reads and returns the response body (needed to
+     * pick up contentRevision from the heartbeat response). Returns null on any
+     * failure or non-2xx status rather than throwing, since this is best-effort —
+     * the heartbeat itself must not be considered failed just because the body
+     * couldn't be read.
+     */
+    private String postJsonWithResponse(String urlStr, String body) throws Exception {
+          HttpURLConnection conn = null;
+          try {
+              URL url = new URL(urlStr);
+              conn = (HttpURLConnection) url.openConnection();
+              conn.setRequestMethod("POST");
+              conn.setRequestProperty("Content-Type", "application/json");
+              conn.setDoOutput(true);
+              conn.setConnectTimeout(10000);
+              conn.setReadTimeout(10000);
+              try (OutputStream os = conn.getOutputStream()) {
+                  os.write(body.getBytes("UTF-8"));
+              }
+              int code = conn.getResponseCode();
+              if (code >= 400) {
+                  Log.w(TAG, "POST " + urlStr + " returned " + code);
+                  return null;
+              }
+              InputStream is = conn.getInputStream();
+              ByteArrayOutputStream baos = new ByteArrayOutputStream();
+              byte[] buf = new byte[512];
+              int n;
+              while ((n = is.read(buf)) != -1) baos.write(buf, 0, n);
+              return baos.toString("UTF-8");
+          } catch (Exception e) {
+              Log.w(TAG, "postJsonWithResponse failed: " + e.getMessage());
+              return null;
+          } finally {
+              if (conn != null) conn.disconnect();
+          }
       }
 }
