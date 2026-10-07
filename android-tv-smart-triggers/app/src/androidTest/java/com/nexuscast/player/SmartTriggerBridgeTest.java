@@ -90,6 +90,20 @@ public class SmartTriggerBridgeTest {
                 } catch (Exception e) { throw new AssertionError(e); }
             });
             assertTrue(loaded.await(15, TimeUnit.SECONDS));
+            CountDownLatch probed = new CountDownLatch(1);
+            final String[] support = new String[1];
+            scenario.onActivity(activity -> {
+                try {
+                    webView(activity).evaluateJavascript(
+                            "(function(){try{new Function('let x; x ??= 1; x ||= 2;');"
+                            + "return 'supported';}catch(e){return navigator.userAgent+' / '+String(e)}})()",
+                            response -> { support[0] = response; probed.countDown(); });
+                } catch (Exception e) { throw new AssertionError(e); }
+            });
+            assertTrue(probed.await(5, TimeUnit.SECONDS));
+            android.util.Log.i("STGestureRuntimeTest", "WebView syntax probe: " + support[0]);
+            org.junit.Assume.assumeTrue("MediaPipe 0.10.32 requires logical-assignment syntax; emulator WebView: "
+                    + support[0], "\"supported\"".equals(support[0]));
             scenario.onActivity(activity -> {
                 try {
                     webView(activity).evaluateJavascript(
@@ -98,6 +112,8 @@ public class SmartTriggerBridgeTest {
                             + "for(const variant of ['wasm','wasm_nosimd']){"
                             + "const base='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm/vision_'+variant+'_internal';"
                             + "await new Promise((resolve,reject)=>{const s=document.createElement('script');"
+                            + "const syntaxError=e=>reject(new Error('runtime script: '+e.message+' / '+navigator.userAgent));"
+                            + "window.addEventListener('error',syntaxError,{once:true});"
                             + "s.src=base+'.js';s.onload=resolve;s.onerror=()=>reject(new Error('loader failed '+variant));"
                             + "document.head.appendChild(s)});"
                             + "const r=await fetch(base+'.wasm');"
@@ -126,6 +142,61 @@ public class SmartTriggerBridgeTest {
                 Thread.sleep(500);
             }
             assertEquals("Real ST WebView runtime initialization: " + value, "\"passed\"", value);
+        }
+    }
+
+    @Test public void packagedGestureFilesAreServedThroughTheRealSTRequestPath() throws Exception {
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            CountDownLatch loaded = new CountDownLatch(1);
+            scenario.onActivity(activity -> {
+                try {
+                    WebView view = webView(activity);
+                    view.loadUrl(backend.origin() + "/tv/TESTST");
+                    view.postDelayed(loaded::countDown, 2000);
+                } catch (Exception e) { throw new AssertionError(e); }
+            });
+            assertTrue(loaded.await(15, TimeUnit.SECONDS));
+            scenario.onActivity(activity -> {
+                try {
+                    webView(activity).evaluateJavascript(
+                            "window.__stResourceResult='pending';"
+                            + "(async function(){try{"
+                            + "for(const variant of ['wasm','wasm_nosimd']){"
+                            + "for(const ext of ['js','wasm']){"
+                            + "const url='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm/vision_'+variant+'_internal.'+ext;"
+                            + "const r=await fetch(url);"
+                            + "if(!r.ok||r.headers.get('X-Digipal-Gesture-Runtime')!=='0.10.32')"
+                            + "throw new Error('not packaged: '+url+' / '+r.status);"
+                            + "const mime=ext==='wasm'?'application/wasm':'application/javascript';"
+                            + "if(!r.headers.get('Content-Type').startsWith(mime))throw new Error('wrong MIME');"
+                            + "const bytes=new Uint8Array(await r.arrayBuffer());"
+                            + "if(ext==='wasm'){"
+                            + "if(bytes[0]!==0||bytes[1]!==97||bytes[2]!==115||bytes[3]!==109)throw new Error('invalid WASM');"
+                            + "}else if(new TextDecoder().decode(bytes).indexOf('var ModuleFactory=')!==0)throw new Error('invalid loader');"
+                            + "}}"
+                            + "const unrelated=await fetch('/models/test-unrelated-resource');"
+                            + "if(unrelated.headers.get('X-Digipal-Gesture-Runtime'))throw new Error('unrelated request intercepted');"
+                            + "window.__stResourceResult='passed';"
+                            + "}catch(e){window.__stResourceResult='failed: '+String(e)}})();", null);
+                } catch (Exception e) { throw new AssertionError(e); }
+            });
+            String value = "";
+            long deadline = System.currentTimeMillis() + 60000;
+            while (System.currentTimeMillis() < deadline) {
+                CountDownLatch checked = new CountDownLatch(1);
+                final String[] result = new String[1];
+                scenario.onActivity(activity -> {
+                    try {
+                        webView(activity).evaluateJavascript("window.__stResourceResult",
+                                response -> { result[0] = response; checked.countDown(); });
+                    } catch (Exception e) { throw new AssertionError(e); }
+                });
+                assertTrue(checked.await(5, TimeUnit.SECONDS));
+                value = result[0];
+                if ("\"passed\"".equals(value) || (value != null && value.contains("failed:"))) break;
+                Thread.sleep(500);
+            }
+            assertEquals("Real ST WebView resource routing: " + value, "\"passed\"", value);
         }
     }
 

@@ -35,6 +35,15 @@ No physical ST hardware or customer camera access is available in this workspace
 Release delivery therefore does **not** claim recognizer startup or trigger
 activation has been verified on a physical Android ST device.
 
+The upstream loader uses logical assignment (`??=`, `||=`), requiring Chromium
+85+ syntax support. The API 30 emulator's older stock WebView cannot exercise
+loader startup. The instrumented suite probes that syntax and explicitly skips
+runtime initialization on unsupported WebViews, while still verifying delivery
+of all four resources through the real ST request path. Both loader/binary pairs
+are initialized in Node. On physical hardware with an outdated WebView, update
+the WebView through its supported system/provider update path; this repair does
+not transpile upstream code or change camera/recognizer behavior.
+
 On an authorized ST test device with a camera and configured thumbs-up/peace
 trigger, install the production ST APK without uninstalling or clearing data:
 
