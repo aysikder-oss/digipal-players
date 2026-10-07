@@ -54,6 +54,7 @@ public class MainActivity extends Activity {
     private WebView webView;
     private SmartTriggerController smartTriggerController;
     private String smartTriggerScript = "";
+    private volatile boolean gestureRuntimeTrustedDocument;
 
     private boolean isTrustedTriggerOrigin(String url) {
         if (url == null) return false;
@@ -667,8 +668,13 @@ public class MainActivity extends Activity {
           }
 
         webView.setWebViewClient(new WebViewClient() {
+            private final GestureRuntimeAssets gestureRuntime = new GestureRuntimeAssets(getAssets());
+
             @Override
             public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                android.webkit.WebResourceResponse gestureResponse = gestureRuntime.intercept(
+                        request, gestureRuntimeTrustedDocument, MainActivity.this::isTrustedTriggerOrigin);
+                if (gestureResponse != null) return gestureResponse;
                 // Serve virtual https://appassets.androidplatform.net/media/<objectPath>
                 // URLs (handed out by getLocalMediaWebUrl below) from the local media
                 // cache, so the main WebView can play cached media while offline
@@ -697,6 +703,7 @@ public class MainActivity extends Activity {
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 super.onPageStarted(view, url, favicon);
+                gestureRuntimeTrustedDocument = isTrustedTriggerOrigin(url);
                 if (smartTriggerController != null) smartTriggerController.navigationStarted();
                 hasHttpError = false;
                 appMountConfirmed = false;

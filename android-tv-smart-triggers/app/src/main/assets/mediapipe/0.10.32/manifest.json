@@ -1,0 +1,23 @@
+{
+  "version": "0.10.32",
+  "source": "https://registry.npmjs.org/@mediapipe/tasks-vision/-/tasks-vision-0.10.32.tgz",
+  "integrity": "sha512-3tiAZnmKloYnRXYoO3dKltTUGnqeCwzC4lV03uY0vCsE+aveJTyEVQyZHOlQGQNsjK+gRHzkf9q08C99Qm2K0Q==",
+  "files": {
+    "vision_wasm_internal.js": {
+      "sha256": "6f6b86509cf9e163ea1cfec7edc8cf53732699c04781e4c21c557c1ba402310e",
+      "bytes": 204816
+    },
+    "vision_wasm_internal.wasm": {
+      "sha256": "cb3ec20026a9aecc2a81a93c25630ceb5389297ddb7a5f0bd61dd09cde606b9b",
+      "bytes": 11453626
+    },
+    "vision_wasm_nosimd_internal.js": {
+      "sha256": "9f8fc960e363f0fb2f42f7937b97ae9cf9a5630490f71031fa90caa9bb121938",
+      "bytes": 204669
+    },
+    "vision_wasm_nosimd_internal.wasm": {
+      "sha256": "924274fcd5ac8985f6570a8573e7971b7bd2d580ba1b8f3beb0ba8f95db6347c",
+      "bytes": 10647962
+    }
+  }
+}

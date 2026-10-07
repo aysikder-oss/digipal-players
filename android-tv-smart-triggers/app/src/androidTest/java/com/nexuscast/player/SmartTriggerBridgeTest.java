@@ -79,6 +79,56 @@ public class SmartTriggerBridgeTest {
         }
     }
 
+    @Test public void packagedGestureRuntimeInitializesBothVariantsInRealSTWebView() throws Exception {
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            CountDownLatch loaded = new CountDownLatch(1);
+            scenario.onActivity(activity -> {
+                try {
+                    WebView view = webView(activity);
+                    view.loadUrl(backend.origin() + "/tv/TESTST");
+                    view.postDelayed(loaded::countDown, 2000);
+                } catch (Exception e) { throw new AssertionError(e); }
+            });
+            assertTrue(loaded.await(15, TimeUnit.SECONDS));
+            scenario.onActivity(activity -> {
+                try {
+                    webView(activity).evaluateJavascript(
+                            "window.__stRuntimeResult='pending';"
+                            + "(async function(){try{"
+                            + "for(const variant of ['wasm','wasm_nosimd']){"
+                            + "const base='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm/vision_'+variant+'_internal';"
+                            + "await new Promise((resolve,reject)=>{const s=document.createElement('script');"
+                            + "s.src=base+'.js';s.onload=resolve;s.onerror=()=>reject(new Error('loader failed '+variant));"
+                            + "document.head.appendChild(s)});"
+                            + "const r=await fetch(base+'.wasm');"
+                            + "if(!r.ok||r.headers.get('X-Digipal-Gesture-Runtime')!=='0.10.32')"
+                            + "throw new Error('not packaged runtime: '+r.status);"
+                            + "const module=await ModuleFactory({wasmBinary:new Uint8Array(await r.arrayBuffer())});"
+                            + "if(!module.calledRun||typeof module._malloc!=='function')throw new Error('runtime not ready');"
+                            + "}window.__stRuntimeResult='passed';"
+                            + "}catch(e){window.__stRuntimeResult='failed: '+String(e)}})();", null);
+                } catch (Exception e) { throw new AssertionError(e); }
+            });
+            String value = "";
+            long deadline = System.currentTimeMillis() + 90000;
+            while (System.currentTimeMillis() < deadline) {
+                CountDownLatch checked = new CountDownLatch(1);
+                final String[] result = new String[1];
+                scenario.onActivity(activity -> {
+                    try {
+                        webView(activity).evaluateJavascript("window.__stRuntimeResult",
+                                response -> { result[0] = response; checked.countDown(); });
+                    } catch (Exception e) { throw new AssertionError(e); }
+                });
+                assertTrue(checked.await(5, TimeUnit.SECONDS));
+                value = result[0];
+                if ("\"passed\"".equals(value) || (value != null && value.contains("failed:"))) break;
+                Thread.sleep(500);
+            }
+            assertEquals("Real ST WebView runtime initialization: " + value, "\"passed\"", value);
+        }
+    }
+
     @Test public void nativeImageVideoImageKeepsTriggerTimersAndLearnResponsive() throws Exception {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             final java.io.File[] image = new java.io.File[1], video = new java.io.File[1];

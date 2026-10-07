@@ -38,13 +38,22 @@ def verify(apk, tools, version, certificate):
     badging = subprocess.check_output([f"{tools}/aapt", "dump", "badging", apk], text=True)
     if "package: name='com.nexuscast.player'" not in badging:
         raise ValueError("Wrong production package")
-    if f"versionName='{version}'" not in badging or "versionCode='42'" not in badging:
+    if f"versionName='{version}'" not in badging or "versionCode='43'" not in badging:
         raise ValueError("Version fields do not match the ST release")
     if "targetSdkVersion:'36'" not in badging or "application-debuggable" in badging:
         raise ValueError("Requires SDK 36, non-debuggable production build")
     subprocess.check_call([f"{tools}/zipalign", "-c", "-P", "16", "4", apk])
     libraries = []
     with zipfile.ZipFile(apk) as archive:
+        from pathlib import Path
+        import json
+        import hashlib
+        root = Path(__file__).resolve().parents[1]
+        manifest = json.loads((root / "app/src/main/assets/mediapipe/0.10.32/manifest.json").read_text())
+        for name, expected in manifest["files"].items():
+            data = archive.read("assets/mediapipe/0.10.32/" + name)
+            if len(data) != expected["bytes"] or hashlib.sha256(data).hexdigest() != expected["sha256"]:
+                raise ValueError(f"Packaged gesture runtime corrupted: {name}")
         for name in archive.namelist():
             if name.startswith("lib/") and name.endswith(".so"):
                 verify_elf(archive.read(name), name)
