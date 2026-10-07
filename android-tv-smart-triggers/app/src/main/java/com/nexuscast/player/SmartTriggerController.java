@@ -10,6 +10,13 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.ArrayDeque;
+import java.util.IdentityHashMap;
+import java.util.HashMap;
+import java.util.Map;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
 
 /**
  * ST-only lifecycle. No automatic camera, microphone or BLE activation:
@@ -34,6 +41,24 @@ final class SmartTriggerController implements HardwareManager.HardwareListener {
     private String[] pendingResources;
     private boolean bleRequested;
     private boolean destroyed;
+    private boolean cameraConfigured;
+    private boolean soundConfigured;
+    private final Handler permissionHandler = new Handler(Looper.getMainLooper());
+    private final ArrayDeque<PermissionRequest> webQueue = new ArrayDeque<>();
+    private final IdentityHashMap<PermissionRequest, Runnable> deadlines = new IdentityHashMap<>();
+    private final IdentityHashMap<PermissionRequest, List<String>> queuedResources = new IdentityHashMap<>();
+    private final Map<String, Runnable> startupDeadlines = new HashMap<>();
+    private int activeDialog;
+    private boolean bleQueued;
+    private int navigationGeneration;
+    private int bleGeneration;
+    private final Runnable bleDeadline = () -> {
+        if (!bleRequested && !bleQueued) return;
+        bleQueued = false;
+        bleGeneration = -1;
+        Log.w("STPermissions", "Hardware permission timed out");
+        emit("hw:permissionDenied", new JSONObject());
+    };
 
     SmartTriggerController(Activity activity, Host host) {
         this.activity = activity;
@@ -49,17 +74,58 @@ final class SmartTriggerController implements HardwareManager.HardwareListener {
     // exist even after a config update removes the trigger that created them.
     boolean requiresActiveWebView() { return !destroyed; }
 
+    // JavaScript cannot enforce a timeout while synchronous GPU/WASM work
+    // blocks its event loop. This ST-native diagnostic does not reload/retry.
+    void recordStartupStage(String stage, String state, String reason) {
+        if (destroyed || stage == null || state == null) return;
+        if (!java.util.Arrays.asList("camera_acquisition", "camera_play", "camera_frame_readiness",
+                "gesture_runtime_resolution", "gesture_model_delivery", "gesture_runtime_delivery",
+                "gesture_model_initialization", "gesture_previous_initialization", "face_model_initialization",
+                "first_inference", "microphone_acquisition", "microphone_analyser_readiness",
+                "camera_model_startup").contains(stage)) return;
+        if (!"pending".equals(state) && !"ready".equals(state) && !"failed".equals(state)) return;
+        String safeReason = reason != null && reason.matches("[A-Za-z0-9_]{1,64}") ? reason : "";
+        Log.i("STStartup", stage + ": " + state + (safeReason.isEmpty() ? "" : " (" + safeReason + ")"));
+        if (!"pending".equals(state)) {
+            Runnable timer = startupDeadlines.remove(stage);
+            if (timer != null) permissionHandler.removeCallbacks(timer);
+            return;
+        }
+        if (startupDeadlines.containsKey(stage)) return;
+        long timeout = stage.endsWith("initialization") ? 45000
+                : stage.endsWith("acquisition") ? 20000
+                : "first_inference".equals(stage) ? 15000
+                : stage.startsWith("camera_") || "microphone_analyser_readiness".equals(stage) ? 10000 : 30000;
+        Runnable deadline = () -> {
+            startupDeadlines.remove(stage);
+            Log.w("STStartup", stage + ": failed (NativeTimeoutError; JavaScript may be blocked)");
+        };
+        startupDeadlines.put(stage, deadline);
+        permissionHandler.postDelayed(deadline, timeout);
+    }
+
     void setConfig(String json) {
         if (destroyed || json == null || json.length() > 262144) return;
         try {
             JSONArray triggers = new JSONArray(json);
             boolean hasSensor = false;
+            boolean hasCamera = false;
+            boolean hasSound = false;
             for (int i = 0; i < triggers.length(); i++) {
                 JSONObject trigger = triggers.optJSONObject(i);
                 if (trigger != null && "sensor".equals(trigger.optString("triggerType"))) {
                     hasSensor = true;
                 }
+                if (trigger != null) {
+                    String type = trigger.optString("triggerType");
+                    if ("gesture".equals(type) || "audience".equals(type) || "motion".equals(type)) hasCamera = true;
+                    if ("sound".equals(type)) hasSound = true;
+                }
             }
+            if (cameraConfigured && !hasCamera) cancelInput(PermissionRequest.RESOURCE_VIDEO_CAPTURE);
+            if (soundConfigured && !hasSound) cancelInput(PermissionRequest.RESOURCE_AUDIO_CAPTURE);
+            cameraConfigured = hasCamera;
+            soundConfigured = hasSound;
             configured = hasSensor;
             updateHardware();
         } catch (org.json.JSONException ignored) {
@@ -96,11 +162,16 @@ final class SmartTriggerController implements HardwareManager.HardwareListener {
     private void updateHardware() {
         if (destroyed) return;
         if (configured || learning || explicitlyEnabled) hardware.start();
-        else hardware.stop();
+        else {
+            bleQueued = false;
+            if (bleRequested) bleGeneration = -1;
+            permissionHandler.removeCallbacks(bleDeadline);
+            hardware.stop();
+        }
     }
 
     void startBleScan() {
-        if (destroyed) return;
+        if (destroyed || bleRequested || bleQueued) return;
         List<String> missing = new ArrayList<>();
         if (Build.VERSION.SDK_INT >= 31) {
             for (String p : new String[]{Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT}) {
@@ -111,12 +182,10 @@ final class SmartTriggerController implements HardwareManager.HardwareListener {
             missing.add(Manifest.permission.ACCESS_FINE_LOCATION);
         }
         if (!missing.isEmpty()) {
-            if (bleRequested || pendingWebPermission != null) {
-                emit("hw:permissionDenied", new JSONObject());
-                return;
-            }
-            bleRequested = true;
-            activity.requestPermissions(missing.toArray(new String[0]), BLE_PERMISSION_REQUEST);
+            bleQueued = true;
+            permissionHandler.removeCallbacks(bleDeadline);
+            permissionHandler.postDelayed(bleDeadline, 30000);
+            pumpPermissions();
             return;
         }
         enable(true);
@@ -124,8 +193,7 @@ final class SmartTriggerController implements HardwareManager.HardwareListener {
     }
 
     void requestWebPermission(PermissionRequest request) {
-        if (destroyed || request == null || !host.trustedOrigin(request.getOrigin().toString())
-                || pendingWebPermission != null || bleRequested) {
+        if (destroyed || request == null || !host.trustedOrigin(request.getOrigin().toString())) {
             if (request != null) request.deny();
             return;
         }
@@ -141,33 +209,158 @@ final class SmartTriggerController implements HardwareManager.HardwareListener {
             }
         }
         if (resources.isEmpty()) { request.deny(); return; }
-        pendingWebPermission = request;
-        pendingResources = resources.toArray(new String[0]);
-        if (permissions.isEmpty()) finishWebPermission();
-        else activity.requestPermissions(permissions.toArray(new String[0]), WEB_PERMISSION_REQUEST);
+        // Already-authorized capture must not depend on an unrelated camera,
+        // microphone or Bluetooth dialog completing.
+        if (permissions.isEmpty()) {
+            request.grant(resources.toArray(new String[0]));
+            Log.i("STPermissions", "Authorized media capture granted");
+            return;
+        }
+        if (deadlines.size() >= 8) {
+            request.deny();
+            Log.w("STPermissions", "Media permission queue full");
+            return;
+        }
+        webQueue.add(request);
+        queuedResources.put(request, resources);
+        Runnable deadline = () -> {
+            if (!deadlines.containsKey(request)) return;
+            webQueue.remove(request);
+            if (pendingWebPermission == request) {
+                pendingWebPermission = null;
+                pendingResources = null;
+            }
+            removeDeadline(request);
+            request.deny();
+            Log.w("STPermissions", "Media permission timed out");
+            // The Android dialog remains in flight until its matching result.
+            // Do not open another dialog or apply its result to a newer request.
+            pumpPermissions();
+        };
+        deadlines.put(request, deadline);
+        permissionHandler.postDelayed(deadline, 30000);
+        Log.i("STPermissions", "Media permission queued");
+        pumpPermissions();
+    }
+
+    private void removeDeadline(PermissionRequest request) {
+        queuedResources.remove(request);
+        Runnable timer = deadlines.remove(request);
+        if (timer != null) permissionHandler.removeCallbacks(timer);
+    }
+
+    private void cancelInput(String resource) {
+        for (PermissionRequest request : new ArrayList<>(webQueue)) {
+            List<String> resources = queuedResources.get(request);
+            if (resources != null) resources.remove(resource);
+            if (resources == null || resources.isEmpty()) {
+                webQueue.remove(request);
+                removeDeadline(request);
+                request.deny();
+            }
+        }
+        if (pendingWebPermission != null) {
+            List<String> resources = new ArrayList<>(java.util.Arrays.asList(pendingResources));
+            resources.remove(resource);
+            pendingResources = resources.toArray(new String[0]);
+            if (resources.isEmpty()) {
+                PermissionRequest request = pendingWebPermission;
+                pendingWebPermission = null;
+                pendingResources = null;
+                removeDeadline(request);
+                request.deny();
+            }
+        }
+        // Keep activeDialog until Android acknowledges the original dialog;
+        // its result must not be mistaken for a new permission operation.
+        Log.i("STPermissions", "Disabled input permission cancelled");
+        pumpPermissions();
+    }
+
+    private void pumpPermissions() {
+        if (destroyed || activeDialog != 0) return;
+        PermissionRequest request = webQueue.poll();
+        if (request != null) {
+            if (!host.trustedOrigin(request.getOrigin().toString())) {
+                removeDeadline(request);
+                request.deny();
+                pumpPermissions();
+                return;
+            }
+            List<String> resources = new ArrayList<>();
+            List<String> missing = new ArrayList<>();
+            for (String resource : queuedResources.get(request)) {
+                String permission = PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource) ? Manifest.permission.CAMERA
+                        : PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource) ? Manifest.permission.RECORD_AUDIO : null;
+                if (permission == null) continue;
+                resources.add(resource);
+                if (Build.VERSION.SDK_INT >= 23 && activity.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
+                    missing.add(permission);
+                }
+            }
+            pendingWebPermission = request;
+            pendingResources = resources.toArray(new String[0]);
+            if (missing.isEmpty()) { finishWebPermission(); pumpPermissions(); return; }
+            activeDialog = WEB_PERMISSION_REQUEST;
+            Log.i("STPermissions", "Media permission dialog started");
+            activity.requestPermissions(missing.toArray(new String[0]), WEB_PERMISSION_REQUEST);
+            return;
+        }
+        if (bleQueued) {
+            bleQueued = false;
+            bleRequested = true;
+            bleGeneration = navigationGeneration;
+            List<String> missing = new ArrayList<>();
+            if (Build.VERSION.SDK_INT >= 31) {
+                for (String permission : new String[]{Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT}) {
+                    if (activity.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) missing.add(permission);
+                }
+            } else if (Build.VERSION.SDK_INT >= 23
+                    && activity.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                missing.add(Manifest.permission.ACCESS_FINE_LOCATION);
+            }
+            if (missing.isEmpty()) { permissionsResult(BLE_PERMISSION_REQUEST); return; }
+            activeDialog = BLE_PERMISSION_REQUEST;
+            Log.i("STPermissions", "Hardware permission dialog started");
+            activity.requestPermissions(missing.toArray(new String[0]), BLE_PERMISSION_REQUEST);
+        }
     }
 
     void cancelWebPermission(PermissionRequest request) {
+        webQueue.remove(request);
+        removeDeadline(request);
         if (request == pendingWebPermission) {
             pendingWebPermission = null;
             pendingResources = null;
         }
+        pumpPermissions();
     }
 
     void navigationStarted() {
+        for (Runnable timer : startupDeadlines.values()) permissionHandler.removeCallbacks(timer);
+        startupDeadlines.clear();
+        ++navigationGeneration;
+        bleQueued = false;
+        permissionHandler.removeCallbacks(bleDeadline);
         stopLearn();
         if (pendingWebPermission != null) {
             pendingWebPermission.deny();
             pendingWebPermission = null;
             pendingResources = null;
         }
+        for (PermissionRequest request : webQueue) request.deny();
+        webQueue.clear();
+        for (Runnable timer : deadlines.values()) permissionHandler.removeCallbacks(timer);
+        deadlines.clear();
+        queuedResources.clear();
     }
 
     private void finishWebPermission() {
         PermissionRequest request = pendingWebPermission;
         if (request == null) return;
+        removeDeadline(request);
         List<String> granted = new ArrayList<>();
-        if (host.trustedOrigin(request.getOrigin().toString())) {
+        if (!destroyed && host.trustedOrigin(request.getOrigin().toString())) {
             for (String r : pendingResources) {
                 String p = PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(r) ? Manifest.permission.CAMERA : Manifest.permission.RECORD_AUDIO;
                 if (Build.VERSION.SDK_INT < 23 || activity.checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED) granted.add(r);
@@ -180,22 +373,30 @@ final class SmartTriggerController implements HardwareManager.HardwareListener {
     }
 
     void permissionsResult(int code) {
+        if (code != WEB_PERMISSION_REQUEST && code != BLE_PERMISSION_REQUEST) return;
+        if (activeDialog != code && !(code == BLE_PERMISSION_REQUEST && bleRequested)) return;
+        activeDialog = 0;
+        Log.i("STPermissions", "Permission dialog completed");
         if (code == WEB_PERMISSION_REQUEST) finishWebPermission();
         if (code == BLE_PERMISSION_REQUEST) {
+            permissionHandler.removeCallbacks(bleDeadline);
             bleRequested = false;
             if (destroyed) return;
             boolean granted = Build.VERSION.SDK_INT >= 31
                     ? activity.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
                     && activity.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
                     : Build.VERSION.SDK_INT < 23 || activity.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
-            if (granted) { enable(true); hardware.startBleScan(); }
-            else emit("hw:permissionDenied", new JSONObject());
+            if (bleGeneration == navigationGeneration) {
+                if (granted) { enable(true); hardware.startBleScan(); }
+                else emit("hw:permissionDenied", new JSONObject());
+            }
         }
+        pumpPermissions();
     }
 
     void destroy() {
-        navigationStarted();
         destroyed = true;
+        navigationStarted();
         hardware.stop();
     }
 
