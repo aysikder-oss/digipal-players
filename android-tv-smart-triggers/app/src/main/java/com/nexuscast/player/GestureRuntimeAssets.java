@@ -71,6 +71,7 @@ final class GestureRuntimeAssets {
         Map<String, String> result = new HashMap<>();
         // Same CORS behavior as the CDN; initiator authorization is enforced above.
         result.put("Access-Control-Allow-Origin", "*");
+        result.put("Access-Control-Expose-Headers", "X-Digipal-Gesture-Runtime");
         result.put("Cache-Control", "no-store");
         result.put("X-Content-Type-Options", "nosniff");
         result.put("X-Digipal-Gesture-Runtime", VERSION);
