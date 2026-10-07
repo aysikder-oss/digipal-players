@@ -159,4 +159,31 @@ public class SmartTriggerPermissionsTest {
         assertTrue(mic.denied);
         controller.destroy();
     }
+
+    @Test public void disablingSoundCancelsQueuedAndActiveMicrophoneRequestsWithoutCancellingCamera() {
+        Activity activity = Robolectric.buildActivity(Activity.class).setup().get();
+        SmartTriggerController controller = controller(activity);
+        controller.setConfig("[{\"triggerType\":\"gesture\"},{\"triggerType\":\"sound\"}]");
+        Request camera = new Request("https://www.digipalsignage.com", PermissionRequest.RESOURCE_VIDEO_CAPTURE);
+        Request mic = new Request("https://www.digipalsignage.com", PermissionRequest.RESOURCE_AUDIO_CAPTURE);
+        controller.requestWebPermission(camera);
+        controller.requestWebPermission(mic);
+        controller.setConfig("[{\"triggerType\":\"gesture\"}]");
+        assertTrue(mic.denied);
+        assertFalse(camera.denied);
+        Shadows.shadowOf(activity.getApplication()).grantPermissions(Manifest.permission.CAMERA);
+        controller.permissionsResult(SmartTriggerController.WEB_PERMISSION_REQUEST);
+        assertArrayEquals(new String[]{PermissionRequest.RESOURCE_VIDEO_CAPTURE}, camera.granted);
+        assertNull(mic.granted);
+
+        controller.setConfig("[{\"triggerType\":\"gesture\"},{\"triggerType\":\"sound\"}]");
+        Request active = new Request("https://www.digipalsignage.com", PermissionRequest.RESOURCE_AUDIO_CAPTURE);
+        controller.requestWebPermission(active);
+        controller.setConfig("[{\"triggerType\":\"gesture\"}]");
+        assertTrue(active.denied);
+        Shadows.shadowOf(activity.getApplication()).grantPermissions(Manifest.permission.RECORD_AUDIO);
+        controller.permissionsResult(SmartTriggerController.WEB_PERMISSION_REQUEST);
+        assertNull(active.granted);
+        controller.destroy();
+    }
 }

@@ -14,6 +14,7 @@ function setup() {
   const window = {
     Android: native, __digipalBridgeToken: 'page-token',
     addEventListener(name, cb) { listeners.set(name, [...(listeners.get(name) || []), cb]); },
+    removeEventListener(name, cb) { listeners.set(name, (listeners.get(name) || []).filter(x => x !== cb)); },
     dispatchEvent(event) {
       events.push(event);
       for (const cb of listeners.get(event.type) || []) cb(event);
@@ -75,4 +76,17 @@ test('adapter waits for the injected token instead of requesting a native token'
   x.window.__digipalBridgeToken = '';
   x.timers[0]();
   assert.equal(x.calls.length, before);
+});
+test('input removal synchronizes native config immediately, without waiting for polling', () => {
+  const x = setup();
+  x.storage.set('tv_trigger_config:ABCD12', '[{"triggerType":"sound"}]');
+  x.window.dispatchEvent({ type: 'st:configChanged' });
+  assert.deepEqual(x.calls.at(-1), ['setSmartTriggerConfig', 'page-token', '[{"triggerType":"sound"}]']);
+  x.storage.set('tv_trigger_config:ABCD12', '[]');
+  x.window.dispatchEvent({ type: 'st:configChanged' });
+  assert.deepEqual(x.calls.at(-1), ['setSmartTriggerConfig', 'page-token', '[]']);
+  x.window.dispatchEvent({ type: 'pagehide' });
+  const count = x.calls.length;
+  x.window.dispatchEvent({ type: 'st:configChanged' });
+  assert.equal(x.calls.length, count);
 });

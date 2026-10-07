@@ -39,9 +39,12 @@ final class SmartTriggerController implements HardwareManager.HardwareListener {
     private String[] pendingResources;
     private boolean bleRequested;
     private boolean destroyed;
+    private boolean cameraConfigured;
+    private boolean soundConfigured;
     private final Handler permissionHandler = new Handler(Looper.getMainLooper());
     private final ArrayDeque<PermissionRequest> webQueue = new ArrayDeque<>();
     private final IdentityHashMap<PermissionRequest, Runnable> deadlines = new IdentityHashMap<>();
+    private final IdentityHashMap<PermissionRequest, List<String>> queuedResources = new IdentityHashMap<>();
     private int activeDialog;
     private boolean bleQueued;
     private int navigationGeneration;
@@ -73,12 +76,23 @@ final class SmartTriggerController implements HardwareManager.HardwareListener {
         try {
             JSONArray triggers = new JSONArray(json);
             boolean hasSensor = false;
+            boolean hasCamera = false;
+            boolean hasSound = false;
             for (int i = 0; i < triggers.length(); i++) {
                 JSONObject trigger = triggers.optJSONObject(i);
                 if (trigger != null && "sensor".equals(trigger.optString("triggerType"))) {
                     hasSensor = true;
                 }
+                if (trigger != null) {
+                    String type = trigger.optString("triggerType");
+                    if ("gesture".equals(type) || "audience".equals(type) || "motion".equals(type)) hasCamera = true;
+                    if ("sound".equals(type)) hasSound = true;
+                }
             }
+            if (cameraConfigured && !hasCamera) cancelInput(PermissionRequest.RESOURCE_VIDEO_CAPTURE);
+            if (soundConfigured && !hasSound) cancelInput(PermissionRequest.RESOURCE_AUDIO_CAPTURE);
+            cameraConfigured = hasCamera;
+            soundConfigured = hasSound;
             configured = hasSensor;
             updateHardware();
         } catch (org.json.JSONException ignored) {
@@ -175,6 +189,7 @@ final class SmartTriggerController implements HardwareManager.HardwareListener {
             return;
         }
         webQueue.add(request);
+        queuedResources.put(request, resources);
         Runnable deadline = () -> {
             if (!deadlines.containsKey(request)) return;
             webQueue.remove(request);
@@ -196,8 +211,37 @@ final class SmartTriggerController implements HardwareManager.HardwareListener {
     }
 
     private void removeDeadline(PermissionRequest request) {
+        queuedResources.remove(request);
         Runnable timer = deadlines.remove(request);
         if (timer != null) permissionHandler.removeCallbacks(timer);
+    }
+
+    private void cancelInput(String resource) {
+        for (PermissionRequest request : new ArrayList<>(webQueue)) {
+            List<String> resources = queuedResources.get(request);
+            if (resources != null) resources.remove(resource);
+            if (resources == null || resources.isEmpty()) {
+                webQueue.remove(request);
+                removeDeadline(request);
+                request.deny();
+            }
+        }
+        if (pendingWebPermission != null) {
+            List<String> resources = new ArrayList<>(java.util.Arrays.asList(pendingResources));
+            resources.remove(resource);
+            pendingResources = resources.toArray(new String[0]);
+            if (resources.isEmpty()) {
+                PermissionRequest request = pendingWebPermission;
+                pendingWebPermission = null;
+                pendingResources = null;
+                removeDeadline(request);
+                request.deny();
+            }
+        }
+        // Keep activeDialog until Android acknowledges the original dialog;
+        // its result must not be mistaken for a new permission operation.
+        Log.i("STPermissions", "Disabled input permission cancelled");
+        pumpPermissions();
     }
 
     private void pumpPermissions() {
@@ -212,7 +256,7 @@ final class SmartTriggerController implements HardwareManager.HardwareListener {
             }
             List<String> resources = new ArrayList<>();
             List<String> missing = new ArrayList<>();
-            for (String resource : request.getResources()) {
+            for (String resource : queuedResources.get(request)) {
                 String permission = PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource) ? Manifest.permission.CAMERA
                         : PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource) ? Manifest.permission.RECORD_AUDIO : null;
                 if (permission == null) continue;
@@ -273,6 +317,7 @@ final class SmartTriggerController implements HardwareManager.HardwareListener {
         webQueue.clear();
         for (Runnable timer : deadlines.values()) permissionHandler.removeCallbacks(timer);
         deadlines.clear();
+        queuedResources.clear();
     }
 
     private void finishWebPermission() {
