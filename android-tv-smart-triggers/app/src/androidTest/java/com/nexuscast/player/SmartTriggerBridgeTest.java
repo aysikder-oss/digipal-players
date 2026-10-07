@@ -200,6 +200,59 @@ public class SmartTriggerBridgeTest {
         }
     }
 
+    @Test public void packagedGestureFilesAlsoUseTheRealServiceWorkerRequestPath() throws Exception {
+        org.junit.Assume.assumeTrue(androidx.webkit.WebViewFeature.isFeatureSupported(
+                androidx.webkit.WebViewFeature.SERVICE_WORKER_SHOULD_INTERCEPT_REQUEST));
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            CountDownLatch loaded = new CountDownLatch(1);
+            scenario.onActivity(activity -> {
+                try {
+                    WebView view = webView(activity);
+                    view.loadUrl(backend.origin() + "/tv/TESTST");
+                    view.postDelayed(loaded::countDown, 2000);
+                } catch (Exception e) { throw new AssertionError(e); }
+            });
+            assertTrue(loaded.await(15, TimeUnit.SECONDS));
+            scenario.onActivity(activity -> {
+                try {
+                    webView(activity).evaluateJavascript(
+                            "window.__stWorkerResult='pending';"
+                            + "(async function(){try{"
+                            + "await navigator.serviceWorker.register('/st-runtime-test-sw.js',{scope:'/'});"
+                            + "await navigator.serviceWorker.ready;"
+                            + "if(!navigator.serviceWorker.controller)await new Promise(r=>"
+                            + "navigator.serviceWorker.addEventListener('controllerchange',r,{once:true}));"
+                            + "for(const variant of ['wasm','wasm_nosimd']){"
+                            + "for(const ext of ['js','wasm']){"
+                            + "const url='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm/vision_'+variant+'_internal.'+ext;"
+                            + "const r=await fetch(url,{cache:'no-store'});"
+                            + "if(r.status!==200||r.headers.get('X-Digipal-Gesture-Runtime')!=='0.10.32')"
+                            + "throw new Error('worker did not receive packaged runtime: '+r.status);"
+                            + "const bytes=new Uint8Array(await r.arrayBuffer());"
+                            + "if(!bytes.length)throw new Error('empty runtime');"
+                            + "if(ext==='wasm'&&(bytes[0]!==0||bytes[1]!==97||bytes[2]!==115||bytes[3]!==109))"
+                            + "throw new Error('invalid WASM');}}"
+                            + "window.__stWorkerResult='passed';"
+                            + "}catch(e){window.__stWorkerResult='failed: '+e.message}"
+                            + "finally{const regs=await navigator.serviceWorker.getRegistrations();"
+                            + "await Promise.all(regs.map(r=>r.unregister()))}})()", null);
+                } catch (Exception e) { throw new AssertionError(e); }
+            });
+            String value = null;
+            for (int i = 0; i < 60; i++) {
+                CountDownLatch checked = new CountDownLatch(1);
+                final String[] result = {null};
+                evaluate(scenario, "window.__stWorkerResult",
+                        v -> { result[0] = v; checked.countDown(); });
+                assertTrue(checked.await(5, TimeUnit.SECONDS));
+                value = result[0];
+                if ("\"passed\"".equals(value) || (value != null && value.contains("failed:"))) break;
+                Thread.sleep(500);
+            }
+            assertEquals("Real ST service-worker runtime request path: " + value, "\"passed\"", value);
+        }
+    }
+
     @Test public void nativeImageVideoImageKeepsTriggerTimersAndLearnResponsive() throws Exception {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             final java.io.File[] image = new java.io.File[1], video = new java.io.File[1];

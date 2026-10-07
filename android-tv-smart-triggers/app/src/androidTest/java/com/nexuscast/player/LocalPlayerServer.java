@@ -31,11 +31,17 @@ final class LocalPlayerServer implements AutoCloseable {
                     }
                     while (length-- > 0 && reader.read() != -1) {}
                     boolean json = request.contains(" /api/");
-                    byte[] body = (json ? "{}" : "<html><body>Local ST test shell<script>"
+                    boolean serviceWorker = request.startsWith("GET /st-runtime-test-sw.js ");
+                    byte[] body = (serviceWorker
+                            ? "self.addEventListener('install',function(e){self.skipWaiting()});"
+                              + "self.addEventListener('activate',function(e){e.waitUntil(self.clients.claim())});"
+                              + "self.addEventListener('fetch',function(e){e.respondWith(fetch(e.request))});"
+                            : json ? "{}" : "<html><body>Local ST test shell<script>"
                             + "setTimeout(function(){if(window.Android)Android.reportAppMounted()},0)"
                             + "</script></body></html>").getBytes(StandardCharsets.UTF_8);
                     String headers = "HTTP/1.1 200 OK\r\nContent-Type: "
-                            + (json ? "application/json" : "text/html") + "\r\nContent-Length: "
+                            + (serviceWorker ? "application/javascript" : json ? "application/json" : "text/html")
+                            + "\r\nService-Worker-Allowed: /\r\nContent-Length: "
                             + body.length + "\r\nConnection: close\r\n\r\n";
                     socket.getOutputStream().write(headers.getBytes(StandardCharsets.UTF_8));
                     socket.getOutputStream().write(body);

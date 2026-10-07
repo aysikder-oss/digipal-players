@@ -55,6 +55,7 @@ public class MainActivity extends Activity {
     private SmartTriggerController smartTriggerController;
     private String smartTriggerScript = "";
     private volatile boolean gestureRuntimeTrustedDocument;
+    private GestureRuntimeServiceWorker gestureRuntimeServiceWorker;
 
     private boolean isTrustedTriggerOrigin(String url) {
         if (url == null) return false;
@@ -666,6 +667,12 @@ public class MainActivity extends Activity {
               origins.add("https://appassets.androidplatform.net");
               androidx.webkit.WebViewCompat.addDocumentStartJavaScript(webView, smartTriggerScript, origins);
           }
+
+        if (gestureRuntimeServiceWorker != null) gestureRuntimeServiceWorker.close();
+        gestureRuntimeServiceWorker = new GestureRuntimeServiceWorker(
+                new GestureRuntimeAssets(getAssets()), () -> gestureRuntimeTrustedDocument,
+                this::isTrustedTriggerOrigin);
+        gestureRuntimeServiceWorker.install();
 
         webView.setWebViewClient(new WebViewClient() {
             private final GestureRuntimeAssets gestureRuntime = new GestureRuntimeAssets(getAssets());
@@ -5100,6 +5107,11 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        gestureRuntimeTrustedDocument = false;
+        if (gestureRuntimeServiceWorker != null) {
+            gestureRuntimeServiceWorker.close();
+            gestureRuntimeServiceWorker = null;
+        }
         if (smartTriggerController != null) smartTriggerController.destroy();
         if (debugHudManager != null) { debugHudManager.stop(); debugHudManager = null; }
         stopAnrWatchdog();
