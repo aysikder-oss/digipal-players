@@ -6,6 +6,7 @@ import re
 import struct
 import subprocess
 import zipfile
+from pathlib import Path
 
 
 def verify_elf(data, name):
@@ -30,7 +31,20 @@ def verify_elf(data, name):
                 raise ValueError(f"{name}: PT_LOAD alignment {alignment}, requires >=16384")
 
 
-def verify(apk, tools, version, certificate):
+def verify_version_fields(badging, version, version_code):
+    if f"versionName='{version}'" not in badging or f"versionCode='{version_code}'" not in badging:
+        raise ValueError("Version fields do not match the ST release")
+
+
+def build_version_code(path=None):
+    path = path or Path(__file__).resolve().parents[1] / "app/build.gradle"
+    matches = re.findall(r"^\s*versionCode\s+(\d+)\s*$", Path(path).read_text(), re.MULTILINE)
+    if len(matches) != 1 or int(matches[0]) <= 0:
+        raise ValueError("Expected exactly one positive ST versionCode")
+    return int(matches[0])
+
+
+def verify(apk, tools, version, version_code, certificate):
     signing = subprocess.check_output([f"{tools}/apksigner", "verify", "--verbose", "--print-certs", apk], text=True)
     match = re.search(r"Signer #1 certificate SHA-256 digest:\s*([a-fA-F0-9:]+)", signing)
     if not match or match[1].replace(":", "").lower() != certificate.replace(":", "").lower():
@@ -38,8 +52,7 @@ def verify(apk, tools, version, certificate):
     badging = subprocess.check_output([f"{tools}/aapt", "dump", "badging", apk], text=True)
     if "package: name='com.nexuscast.player'" not in badging:
         raise ValueError("Wrong production package")
-    if f"versionName='{version}'" not in badging or "versionCode='43'" not in badging:
-        raise ValueError("Version fields do not match the ST release")
+    verify_version_fields(badging, version, version_code)
     if "targetSdkVersion:'36'" not in badging or "application-debuggable" in badging:
         raise ValueError("Requires SDK 36, non-debuggable production build")
     subprocess.check_call([f"{tools}/zipalign", "-c", "-P", "16", "4", apk])
@@ -66,8 +79,10 @@ if __name__ == "__main__":
     parser.add_argument("apk")
     parser.add_argument("--tools", required=True)
     parser.add_argument("--version", required=True)
+    parser.add_argument("--version-code", type=int)
     args = parser.parse_args()
     fingerprint = os.environ.get("ST_SIGNING_CERT_SHA256")
     if not fingerprint:
         raise SystemExit("ST_SIGNING_CERT_SHA256 required; never accept an arbitrary signing certificate")
-    verify(args.apk, args.tools, args.version, fingerprint)
+    version_code = args.version_code if args.version_code is not None else build_version_code()
+    verify(args.apk, args.tools, args.version, version_code, fingerprint)
