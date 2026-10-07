@@ -7,6 +7,28 @@ web microphone lifecycle.
 
 ## Automated evidence
 
+### Separate physical-test installer
+
+The branch-local `startup-test.properties` enables an opt-in `startupTest`
+variant. Its package is `com.nexuscast.player.startuptest`, its launcher label is
+`Digipal ST Startup Test`, and its server URL points to the verified task preview.
+The normal release URL and package remain unchanged. The test APK uses the
+established ST certificate but cannot replace the production package. Its boot
+and package-update receivers and boot service are disabled: launch it manually.
+No release tag is created by preparing this installer.
+
+The existing ST build stages the signed test APK alongside its production
+candidate. Artifact verification checks its independent package, label, version,
+certificate, SDK, native-library alignment, and disabled auto-start components.
+Do not distribute either candidate as a production repair before physical checks.
+
+Close the production ST app before launching this separate test app so they do
+not compete for camera/microphone resources. Pair only with the development
+preview, not production. No production assignments, permissions or cache should
+be reset. The preview must stay running during the test; this is not a permanent
+customer installer. Remove the branch-local preview configuration before a
+production release.
+
 - Native media permissions serialize missing camera/microphone permissions and
   hardware requests, while already-authorized media capture remains available.
 - Cancellation, navigation, destruction and permission timeouts do not grant

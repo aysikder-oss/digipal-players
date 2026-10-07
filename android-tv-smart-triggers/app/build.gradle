@@ -27,6 +27,21 @@ def hasInjectedSigning =
 
 def hasReleaseSigning = hasEnvSigning || hasInjectedSigning
 
+// Branch-local, opt-in installer for physical startup validation. Release URL,
+// package, signing and auto-start behavior remain unchanged.
+def startupConfigFile = rootProject.file('startup-test.properties')
+def startupTestUrl = null
+if (startupConfigFile.exists()) {
+    def startupConfig = new Properties()
+    startupConfigFile.withInputStream { startupConfig.load(it) }
+    startupTestUrl = startupConfig.getProperty('serverUrl')
+    def uri = new URI(startupTestUrl ?: '')
+    if (uri.scheme != 'https' || !uri.host || uri.rawUserInfo ||
+        uri.rawQuery || uri.rawFragment || (uri.path && uri.path != '/')) {
+        throw new GradleException('Startup test requires a root HTTPS URL without credentials, query or fragment')
+    }
+}
+
 android {
     namespace 'com.nexuscast.player'
     compileSdk 36
@@ -80,6 +95,16 @@ android {
             debuggable true
             minifyEnabled false
         }
+        if (startupTestUrl) {
+            startupTest {
+                initWith release
+                applicationIdSuffix ".startuptest"
+                versionNameSuffix "-startup-test"
+                resValue "string", "app_name", "Digipal ST Startup Test"
+                buildConfigField "String", "SERVER_URL", "\"${startupTestUrl}\""
+                matchingFallbacks = ['release']
+            }
+        }
     }
 
     compileOptions {
@@ -108,12 +133,35 @@ android {
     }
 }
 
+if (startupTestUrl) {
+    // Existing ST CI uploads release/*; no workflow or other variant edits.
+    tasks.register('stageStartupTestApk', Copy) {
+        dependsOn 'assembleStartupTest'
+        from layout.buildDirectory.file('outputs/apk/startupTest/app-startupTest.apk')
+        into rootProject.file('release')
+        rename { 'Digipal-ST-Startup-Test-v4.0.7.apk' }
+        doLast {
+            exec {
+                workingDir rootProject.projectDir
+                commandLine 'python3', 'scripts/verify-artifact.py',
+                    'release/Digipal-ST-Startup-Test-v4.0.7.apk',
+                    '--tools', "${android.sdkDirectory}/build-tools/36.0.0",
+                    '--version', '4.0.7-startup-test', '--startup-test'
+            }
+        }
+    }
+    tasks.matching { it.name == 'assembleRelease' }.configureEach {
+        finalizedBy 'stageStartupTestApk'
+    }
+}
+
 gradle.taskGraph.whenReady { graph ->
     // Guard BOTH release output tasks (APK and AAB) — previously only
     // assembleRelease was checked, so `./gradlew bundleRelease` could silently
     // produce an unsigned release AAB when no signing config was supplied.
     def buildingUnguardedRelease =
-            (graph.hasTask(':app:assembleRelease') || graph.hasTask(':app:bundleRelease')) &&
+            (graph.hasTask(':app:assembleRelease') || graph.hasTask(':app:bundleRelease') ||
+             graph.hasTask(':app:assembleStartupTest') || graph.hasTask(':app:bundleStartupTest')) &&
             !hasReleaseSigning
     if (buildingUnguardedRelease) {
         throw new GradleException("Release signing env vars are required: KEYSTORE_FILE, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD (or the equivalent android.injected.signing.* -P properties)")
