@@ -242,8 +242,12 @@ public class SmartTriggerBridgeTest {
             for (int i = 0; i < 60; i++) {
                 CountDownLatch checked = new CountDownLatch(1);
                 final String[] result = {null};
-                evaluate(scenario, "window.__stWorkerResult",
-                        v -> { result[0] = v; checked.countDown(); });
+                scenario.onActivity(activity -> {
+                    try {
+                        webView(activity).evaluateJavascript("window.__stWorkerResult",
+                                v -> { result[0] = v; checked.countDown(); });
+                    } catch (Exception e) { throw new AssertionError(e); }
+                });
                 assertTrue(checked.await(5, TimeUnit.SECONDS));
                 value = result[0];
                 if ("\"passed\"".equals(value) || (value != null && value.contains("failed:"))) break;
