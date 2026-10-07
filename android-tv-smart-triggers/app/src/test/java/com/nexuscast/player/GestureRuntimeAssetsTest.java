@@ -1,7 +1,6 @@
 package com.nexuscast.player;
 
 import android.app.Application;
-import android.content.res.AssetManager;
 import android.net.Uri;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -98,8 +97,8 @@ public class GestureRuntimeAssetsTest {
     }
 
     @Test public void missingPackagedFileFailsExplicitlyInsteadOfFetchingLatest() {
-        // A standalone AssetManager has no application assets attached.
-        GestureRuntimeAssets missing = new GestureRuntimeAssets(new AssetManager());
+        GestureRuntimeAssets missing = new GestureRuntimeAssets(
+                (GestureRuntimeAssets.AssetSource) path -> { throw new java.io.IOException("missing test asset"); });
         WebResourceResponse response = missing.intercept(request(ROOT + "latest/wasm/" + NAMES[0]), true, policy);
         assertEquals(503, response.getStatusCode());
         assertNotNull(response.getData());

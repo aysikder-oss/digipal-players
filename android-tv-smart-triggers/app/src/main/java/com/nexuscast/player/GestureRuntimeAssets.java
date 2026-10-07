@@ -6,6 +6,7 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -23,9 +24,11 @@ final class GestureRuntimeAssets {
     };
 
     interface OriginPolicy { boolean trusted(String url); }
-    private final AssetManager assets;
+    interface AssetSource { InputStream open(String path) throws IOException; }
+    private final AssetSource assets;
 
-    GestureRuntimeAssets(AssetManager assets) { this.assets = assets; }
+    GestureRuntimeAssets(AssetManager assets) { this(assets::open); }
+    GestureRuntimeAssets(AssetSource assets) { this.assets = assets; }
 
     // Compare the complete URL, not decoded paths, suffixes or host substrings.
     static String resourceName(String url) {
