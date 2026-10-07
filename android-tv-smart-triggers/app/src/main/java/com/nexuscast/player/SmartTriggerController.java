@@ -12,6 +12,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.ArrayDeque;
 import java.util.IdentityHashMap;
+import java.util.HashMap;
+import java.util.Map;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -45,6 +47,7 @@ final class SmartTriggerController implements HardwareManager.HardwareListener {
     private final ArrayDeque<PermissionRequest> webQueue = new ArrayDeque<>();
     private final IdentityHashMap<PermissionRequest, Runnable> deadlines = new IdentityHashMap<>();
     private final IdentityHashMap<PermissionRequest, List<String>> queuedResources = new IdentityHashMap<>();
+    private final Map<String, Runnable> startupDeadlines = new HashMap<>();
     private int activeDialog;
     private boolean bleQueued;
     private int navigationGeneration;
@@ -70,6 +73,36 @@ final class SmartTriggerController implements HardwareManager.HardwareListener {
     // audio analysis, hardware input and pending JS revert/cooldown timers may
     // exist even after a config update removes the trigger that created them.
     boolean requiresActiveWebView() { return !destroyed; }
+
+    // JavaScript cannot enforce a timeout while synchronous GPU/WASM work
+    // blocks its event loop. This ST-native diagnostic does not reload/retry.
+    void recordStartupStage(String stage, String state, String reason) {
+        if (destroyed || stage == null || state == null) return;
+        if (!java.util.Arrays.asList("camera_acquisition", "camera_play", "camera_frame_readiness",
+                "gesture_runtime_resolution", "gesture_model_delivery", "gesture_runtime_delivery",
+                "gesture_model_initialization", "gesture_previous_initialization", "face_model_initialization",
+                "first_inference", "microphone_acquisition", "microphone_analyser_readiness",
+                "camera_model_startup").contains(stage)) return;
+        if (!"pending".equals(state) && !"ready".equals(state) && !"failed".equals(state)) return;
+        String safeReason = reason != null && reason.matches("[A-Za-z0-9_]{1,64}") ? reason : "";
+        Log.i("STStartup", stage + ": " + state + (safeReason.isEmpty() ? "" : " (" + safeReason + ")"));
+        if (!"pending".equals(state)) {
+            Runnable timer = startupDeadlines.remove(stage);
+            if (timer != null) permissionHandler.removeCallbacks(timer);
+            return;
+        }
+        if (startupDeadlines.containsKey(stage)) return;
+        long timeout = stage.endsWith("initialization") ? 45000
+                : stage.endsWith("acquisition") ? 20000
+                : "first_inference".equals(stage) ? 15000
+                : stage.startsWith("camera_") || "microphone_analyser_readiness".equals(stage) ? 10000 : 30000;
+        Runnable deadline = () -> {
+            startupDeadlines.remove(stage);
+            Log.w("STStartup", stage + ": failed (NativeTimeoutError; JavaScript may be blocked)");
+        };
+        startupDeadlines.put(stage, deadline);
+        permissionHandler.postDelayed(deadline, timeout);
+    }
 
     void setConfig(String json) {
         if (destroyed || json == null || json.length() > 262144) return;
@@ -304,6 +337,8 @@ final class SmartTriggerController implements HardwareManager.HardwareListener {
     }
 
     void navigationStarted() {
+        for (Runnable timer : startupDeadlines.values()) permissionHandler.removeCallbacks(timer);
+        startupDeadlines.clear();
         ++navigationGeneration;
         bleQueued = false;
         permissionHandler.removeCallbacks(bleDeadline);

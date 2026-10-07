@@ -14,6 +14,7 @@ import android.Manifest;
 import android.os.Looper;
 import org.robolectric.Shadows;
 import java.time.Duration;
+import org.robolectric.shadows.ShadowLog;
 
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 28)
@@ -184,6 +185,31 @@ public class SmartTriggerPermissionsTest {
         Shadows.shadowOf(activity.getApplication()).grantPermissions(Manifest.permission.RECORD_AUDIO);
         controller.permissionsResult(SmartTriggerController.WEB_PERMISSION_REQUEST);
         assertNull(active.granted);
+        controller.destroy();
+    }
+
+    @Test public void aNativeDeadlineNamesThePendingStageWithoutJavascriptProgress() {
+        Activity activity = Robolectric.buildActivity(Activity.class).setup().get();
+        SmartTriggerController controller = controller(activity);
+        controller.recordStartupStage("gesture_model_initialization", "pending", "");
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(46));
+        assertTrue(ShadowLog.getLogsForTag("STStartup").stream().anyMatch(item ->
+                item.msg.contains("gesture_model_initialization: failed (NativeTimeoutError")));
+        controller.destroy();
+    }
+
+    @Test public void readyCancelledAndNavigatedStagesDoNotProduceNativeTimeouts() {
+        Activity activity = Robolectric.buildActivity(Activity.class).setup().get();
+        SmartTriggerController controller = controller(activity);
+        controller.recordStartupStage("camera_acquisition", "pending", "");
+        controller.recordStartupStage("camera_acquisition", "failed", "AbortError");
+        controller.recordStartupStage("gesture_model_initialization", "pending", "");
+        controller.recordStartupStage("gesture_model_initialization", "ready", "");
+        controller.recordStartupStage("microphone_acquisition", "pending", "");
+        controller.navigationStarted();
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(46));
+        assertFalse(ShadowLog.getLogsForTag("STStartup").stream().anyMatch(item ->
+                item.msg.contains("NativeTimeoutError")));
         controller.destroy();
     }
 }

@@ -13,6 +13,9 @@ web microphone lifecycle.
   old web requests or start an old Bluetooth scan.
 - The web startup checks independently cover delivery, model initialization,
   acquisition, non-zero camera frames and first inference.
+- `STStartup` native log deadlines still name the pending stage when synchronous
+  JavaScript/GPU initialization blocks browser timers. These are local diagnostic
+  logs, not a new server telemetry type or a recovery/reload mechanism.
 - Late microphone streams are stopped after cancellation; old contexts and
   detection results cannot replace the current session.
 - SDK/runtime resource checks, production signing/lint/artifact validation and
@@ -47,3 +50,6 @@ status and whether content activation occurred. Do not collect imagery,
 recordings, device labels, biometric details or secrets. A healthy heartbeat,
 model download, empty inference or successful build is not physical proof of
 working gesture activation.
+
+For an unresolved startup, collect narrowly scoped native logs with
+`adb logcat -s STStartup STPermissions`, alongside the web startup diagnostics.
