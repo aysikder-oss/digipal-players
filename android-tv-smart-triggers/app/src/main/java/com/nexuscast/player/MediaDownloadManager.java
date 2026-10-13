@@ -537,9 +537,7 @@ package com.nexuscast.player;
       }
 
       private static boolean verifiedMediaSource(String a, String b) {
-          String ca = canonicalMediaSource(a);
-          String cb = canonicalMediaSource(b);
-          return !ca.isEmpty() && !cb.isEmpty() && ca.equals(cb);
+          return com.digipal.offline.MediaSourceIdentity.matches(a, b);
       }
 
       private void removeFromManifest(String objectPath) {
