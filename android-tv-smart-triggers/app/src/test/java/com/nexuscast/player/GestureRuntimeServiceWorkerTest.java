@@ -43,6 +43,21 @@ public class GestureRuntimeServiceWorkerTest {
         return new GestureRuntimeServiceWorker(runtime, trusted::get, ORIGIN::equals, recorder);
     }
 
+    @Test public void candidateInterfaceComposesWithoutDiscardingGestureInterception() {
+        Recorder recorder = new Recorder();
+        AtomicBoolean trusted = new AtomicBoolean(true);
+        GestureRuntimeServiceWorker worker = handler(recorder, trusted);
+        WebResourceResponse local = new WebResourceResponse("text/html", "UTF-8",
+                new java.io.ByteArrayInputStream("interface".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        worker.setAdditionalInterceptor(req -> req.getUrl().getPath().equals("/player") ? local : null);
+        try {
+            assertTrue(worker.install());
+            assertSame(local, recorder.client.shouldInterceptRequest(request(ORIGIN + "/player", ORIGIN)));
+            assertNotNull(recorder.client.shouldInterceptRequest(request(ROOT + "vision_wasm_internal.js", ORIGIN)));
+            assertNull(recorder.client.shouldInterceptRequest(request("https://unrelated.example/file.js", ORIGIN)));
+        } finally { worker.close(); }
+    }
+
     @Test public void workerRequestsUseTheSamePackagedRuntimeAndSecurityChecks() throws Exception {
         Recorder recorder = new Recorder();
         AtomicBoolean trusted = new AtomicBoolean(true);

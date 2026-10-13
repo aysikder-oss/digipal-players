@@ -92,7 +92,7 @@ package com.nexuscast.player;
           if (!existing.isEmpty()) {
               JSONObject entry = getManifest().optJSONObject(objectPath);
               String cachedSource = entry != null ? entry.optString("sourceUrl", "") : "";
-              if (sameMediaSource(cachedSource, signedUrl)) {
+              if (BuildConfig.OFFLINE_CANDIDATE ? verifiedMediaSource(cachedSource, signedUrl) : sameMediaSource(cachedSource, signedUrl)) {
                   if (callback != null) {
                       long size = entry != null ? entry.optLong("size", 0) : 0;
                       callback.onSuccess(objectPath, existing, size);
@@ -100,9 +100,9 @@ package com.nexuscast.player;
                   return;
               }
               android.util.Log.i("MediaDownload", "[cache] source changed for obj=" + objectPath
-                      + " -- invalidating stale local copy and redownloading");
-              removeFromManifest(objectPath);
-              try { new File(existing).delete(); } catch (Exception ignored) {}
+                    + " -- staging replacement while retaining previous local copy");
+            // Retain the previous bytes/record until a complete staged
+            // replacement is promoted. A failed refresh is not removal.
           }
 
           // Queue callback; if another download is already in flight just wait.
@@ -185,7 +185,8 @@ package com.nexuscast.player;
                   return;
               }
 
-              long contentLength = conn.getContentLength();
+              long contentLength = com.digipal.offline.DownloadIntegrity.declaredLength(conn.getHeaderField("Content-Length"));
+              String contentType = conn.getContentType();
               // GCS signed URLs sometimes return -1 for Content-Length; in that case
               // assume up to 100 MB and check only that much headroom is available (Fix 3).
               long reserveBytes = contentLength > 0 ? contentLength : 100 * 1024 * 1024L;
@@ -208,38 +209,33 @@ package com.nexuscast.player;
                    FileOutputStream out = new FileOutputStream(tempFile)) {
                   byte[] buffer = new byte[BUFFER_SIZE];
                   int bytesRead;
+                  long deadline = android.os.SystemClock.elapsedRealtime() + 120000;
                   while ((bytesRead = in.read(buffer)) != -1) {
-                      out.write(buffer, 0, bytesRead);
                       totalRead += bytesRead;
+                      if (BuildConfig.OFFLINE_CANDIDATE && (totalRead > 1024L * 1024 * 1024
+                              || android.os.SystemClock.elapsedRealtime() > deadline
+                              || (contentLength >= 0 && totalRead > contentLength)))
+                          throw new java.io.IOException("Offline transfer exceeded its preparation limit");
+                      out.write(buffer, 0, bytesRead);
                   }
                   out.flush();
               } finally {
                   conn.disconnect();
               }
 
-              if (outputFile.exists()) outputFile.delete();
+              if (!com.digipal.offline.DownloadIntegrity.isComplete(tempFile, totalRead, contentLength, contentType)) {
+                  tempFile.delete();
+                  lastError = "Incomplete or invalid media transfer";
+                  android.util.Log.w("MediaDownload", "[integrity] rejected staged media transfer");
+                  continue;
+              }
+              // Keep the previous file until a validated same-directory rename succeeds.
               if (!tempFile.renameTo(outputFile)) {
                   tempFile.delete();
                   notifyDownloadFailed(objectPath, "Failed to move file");
                   return;
               }
 
-              // Fix 3: integrity check — verify file is non-empty and size approximates Content-Length.
-              if (totalRead == 0 || !outputFile.exists() || outputFile.length() == 0) {
-                  outputFile.delete();
-                  lastError = "Zero-byte file after download";
-                  android.util.Log.w("MediaDownload", "[integrity] zero-byte file: " + objectPath);
-                  continue; // retry
-              }
-              if (contentLength > 0) {
-                  double ratio = (double) outputFile.length() / contentLength;
-                  if (ratio < 0.95 || ratio > 1.05) {
-                      outputFile.delete();
-                      lastError = "File size mismatch: got " + outputFile.length() + " expected " + contentLength;
-                      android.util.Log.w("MediaDownload", "[integrity] size mismatch: " + lastError + " obj=" + objectPath);
-                      continue; // retry
-                  }
-              }
               addToManifest(objectPath, outputFile.getAbsolutePath(), totalRead, signedUrl);
               notifyDownloadComplete(objectPath, "file://" + outputFile.getAbsolutePath());
 
@@ -271,7 +267,7 @@ package com.nexuscast.player;
           if (localPath.isEmpty()) return "";
 
           File file = SafeFiles.existingFileInsideOrNull(getMediaDir(), localPath);
-            if (file == null) {
+            if (!com.digipal.offline.DownloadIntegrity.isAvailable(file, entry.has("size") ? entry.optLong("size", -2) : -1)) {
                 removeFromManifest(objectPath);
                 return "";
             }
@@ -299,7 +295,7 @@ package com.nexuscast.player;
             if (localPath.isEmpty()) return "";
 
             File file = SafeFiles.existingFileInsideOrNull(getMediaDir(), localPath);
-              if (file == null) {
+            if (!com.digipal.offline.DownloadIntegrity.isAvailable(file, entry.has("size") ? entry.optLong("size", -2) : -1)) {
                   removeFromManifest(objectPath);
                   return "";
               }
@@ -336,8 +332,14 @@ package com.nexuscast.player;
             if (localPath.isEmpty()) return null;
 
             File file = SafeFiles.existingFileInsideOrNull(getMediaDir(), localPath);
-            if (file == null) return null;
+            if (!com.digipal.offline.DownloadIntegrity.isAvailable(file, entry.has("size") ? entry.optLong("size", -2) : -1)) return null;
             return file;
+        }
+
+        public String getPreparedMediaWebUrl(String objectPath, String sourceUrl) {
+            JSONObject entry = getManifest().optJSONObject(objectPath);
+            if (entry == null || !verifiedMediaSource(entry.optString("sourceUrl", ""), sourceUrl)) return "";
+            return getLocalMediaWebUrl(objectPath);
         }
 
         /** Best-effort MIME type for a cached media file, used when serving it through
@@ -356,6 +358,13 @@ package com.nexuscast.player;
             if (name.endsWith(".mp3")) return "audio/mpeg";
             if (name.endsWith(".wav")) return "audio/wav";
             if (name.endsWith(".ogg")) return "audio/ogg";
+            if (name.endsWith(".json")) return "application/json";
+            if (name.endsWith(".js")) return "application/javascript";
+            if (name.endsWith(".wasm")) return "application/wasm";
+            if (name.endsWith(".woff2")) return "font/woff2";
+            if (name.endsWith(".woff")) return "font/woff";
+            if (name.endsWith(".ttf")) return "font/ttf";
+            if (name.endsWith(".otf")) return "font/otf";
             return "application/octet-stream";
         }
 
@@ -525,6 +534,12 @@ package com.nexuscast.player;
           String cb = canonicalMediaSource(b);
           if (ca.isEmpty() || cb.isEmpty()) return true; // unknown -- don't force a redownload
           return ca.equals(cb);
+      }
+
+      private static boolean verifiedMediaSource(String a, String b) {
+          String ca = canonicalMediaSource(a);
+          String cb = canonicalMediaSource(b);
+          return !ca.isEmpty() && !cb.isEmpty() && ca.equals(cb);
       }
 
       private void removeFromManifest(String objectPath) {

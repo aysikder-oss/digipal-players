@@ -10,6 +10,7 @@ import androidx.webkit.WebViewFeature;
 /** ST-only counterpart to WebViewClient interception for service-worker fetches. */
 final class GestureRuntimeServiceWorker implements AutoCloseable {
     interface TrustState { boolean trusted(); }
+    interface AdditionalInterceptor { WebResourceResponse intercept(WebResourceRequest request); }
     interface Transport {
         boolean supported();
         void setClient(ServiceWorkerClientCompat client);
@@ -20,6 +21,11 @@ final class GestureRuntimeServiceWorker implements AutoCloseable {
     private final TrustState trustedDocument;
     private final GestureRuntimeAssets.OriginPolicy policy;
     private final Transport transport;
+    private AdditionalInterceptor additionalInterceptor;
+
+    void setAdditionalInterceptor(AdditionalInterceptor interceptor) {
+        additionalInterceptor = interceptor;
+    }
 
     GestureRuntimeServiceWorker(GestureRuntimeAssets runtime, TrustState trustedDocument,
             GestureRuntimeAssets.OriginPolicy policy) {
@@ -50,6 +56,10 @@ final class GestureRuntimeServiceWorker implements AutoCloseable {
         synchronized (GestureRuntimeServiceWorker.class) {
             transport.setClient(new ServiceWorkerClientCompat() {
                 @Override public WebResourceResponse shouldInterceptRequest(WebResourceRequest request) {
+                    if (additionalInterceptor != null) {
+                        WebResourceResponse response = additionalInterceptor.intercept(request);
+                        if (response != null) return response;
+                    }
                     // Reuse the exact URL allowlist and initiator checks. All unrelated
                     // requests retain the existing service worker's network behavior.
                     return runtime.intercept(request, trustedDocument.trusted(), policy);

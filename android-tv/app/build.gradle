@@ -3,11 +3,22 @@ plugins {
     id 'io.sentry.android.gradle'
 }
 
-def gitSha = 'unknown'
+def gitSha = providers.gradleProperty("nativeSourceRevision").orElse('unknown').get()
+if (!(gitSha == 'unknown' || gitSha ==~ /[0-9a-f]{7,40}/))
+    throw new GradleException("nativeSourceRevision must be a Git commit hash")
 try {
-    def proc = 'git rev-parse --short HEAD'.execute([], projectDir)
-    proc.waitForOrKill(1000)
-    gitSha = proc.text.trim()
+    if (gitSha == 'unknown') {
+        def rootProc = 'git rev-parse --show-toplevel'.execute([], projectDir)
+        rootProc.waitForOrKill(1000)
+        def rootPath = rootProc.text.trim()
+        // An extracted archive may be nested in another Git repository.
+        if (rootPath && new File(rootPath, 'android-tv/app/build.gradle').isFile()
+                && new File(rootPath, 'android-tv-smart-triggers/app/build.gradle').isFile()) {
+            def proc = 'git rev-parse --short HEAD'.execute([], projectDir)
+            proc.waitForOrKill(1000)
+            gitSha = proc.text.trim()
+        }
+    }
 } catch (Exception ignored) {}
 
 def hasEnvSigning =
@@ -28,6 +39,10 @@ def hasInjectedSigning =
 def hasReleaseSigning = hasEnvSigning || hasInjectedSigning
 
 android {
+    sourceSets {
+        main.java.srcDir '../../android-offline-core/src/main/java'
+        test.java.srcDir '../../android-offline-core/src/test/java'
+    }
     namespace 'com.digipal.signage'
     compileSdk 36
 
@@ -56,6 +71,7 @@ android {
         buildConfigField "String", "SENTRY_DSN", "\"${System.getenv('SENTRY_DSN') ?: ''}\""
         buildConfigField "String", "GIT_SHA", "\"${gitSha}\""
         buildConfigField "String", "BUILD_FLAVOR", "\"android-tv\""
+        buildConfigField "boolean", "OFFLINE_CANDIDATE", "false"
 
         javaCompileOptions {
             annotationProcessorOptions {
@@ -73,6 +89,7 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         debug {
+            buildConfigField "boolean", "OFFLINE_CANDIDATE", "true"
             applicationIdSuffix ".debug"
             versionNameSuffix "-debug"
             resValue "string", "app_name", "Digipal TV (Debug)"
@@ -81,6 +98,23 @@ android {
             // Point debug builds at the Replit dev server — web changes
             // are visible immediately without a production publish.
             buildConfigField "String", "SERVER_URL", "\"https://3922e89f-d02d-4a8b-add9-9f42fce9e5ea-00-sisthqoc0pvv.worf.replit.dev:5000\""
+        }
+        offlineTest {
+            initWith debug
+            applicationIdSuffix ".offlinetest"
+            versionNameSuffix "-offline-test"
+            resValue "string", "app_name", "Digipal TV (Offline Test)"
+            matchingFallbacks = ['debug']
+            buildConfigField "boolean", "OFFLINE_CANDIDATE", "true"
+            def testServer = providers.gradleProperty("offlineTestServer").orNull
+            if (testServer) {
+                def uri = new URI(testServer)
+                if (uri.scheme != 'https' || !uri.host || uri.userInfo || uri.query || uri.fragment || (uri.path && uri.path != '/'))
+                    throw new GradleException("offlineTestServer must be an HTTPS origin without credentials or a path")
+                buildConfigField "String", "SERVER_URL", "\"${testServer.replaceAll('/$', '')}\""
+            } else {
+                buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
+            }
         }
     }
 
@@ -103,6 +137,15 @@ android {
     packagingOptions {
         resources {
             excludes += ['META-INF/INDEX.LIST', 'META-INF/io.netty.versions.properties']
+        }
+    }
+}
+
+androidComponents {
+    onVariants(selector().withBuildType("offlineTest")) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(144)
+            output.versionName.set("4.0.2-offline-test")
         }
     }
 }

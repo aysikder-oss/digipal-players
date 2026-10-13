@@ -16,6 +16,7 @@ import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.json.JSONObject;
+import com.digipal.offline.OfflineSnapshotStore;
 
 /**
  * PlayerShellManager — local versioned copy of the player shell (task local
@@ -66,6 +67,7 @@ public class PlayerShellManager {
 
     private final Context ctx;
     private final File rootDir;
+    private final OfflineSnapshotStore offlineV1;
 
     /** "local" or "remote" — updated by getBootUrl()/rollbackToLastGood() so callers
      *  (telemetry, renderer observability task) can report which shell is currently
@@ -80,22 +82,32 @@ public class PlayerShellManager {
 
     public PlayerShellManager(Context ctx) {
         this.ctx = ctx.getApplicationContext();
+        this.offlineV1 = BuildConfig.OFFLINE_CANDIDATE ? new OfflineSnapshotStore(this.ctx) : null;
         this.rootDir = new File(this.ctx.getFilesDir(), ROOT_DIR_NAME);
         if (!rootDir.exists()) rootDir.mkdirs();
     }
 
     /** "local" if the app most recently booted (or rolled back) into a locally cached
      *  shell snapshot, "remote" if it loaded serverUrl directly over the network. */
-    public String getLastBootSource() { return lastBootSource; }
+    public String getLastBootSource() { return offlineV1 != null ? (offlineV1.hasExecutedSnapshot() ? "local" : "remote") : lastBootSource; }
 
     /** version (download timestamp) of the shell the app most recently booted from, or
      *  "" if the last boot was remote/none. Purely diagnostic (telemetry task). */
-    public String getLastBootVersion() { return lastBootVersion; }
+    public String getLastBootVersion() { return offlineV1 != null ? offlineV1.getBootVersion() : lastBootVersion; }
 
     /** SHA-256 content hash of the shell the app most recently booted from, or "" if the
      *  last boot was remote, none, or the cached record predates this field (upgrade from
      *  an older APK — self-heal simply skips comparison for that one boot). */
-    public String getLastBootContentHash() { return lastBootContentHash; }
+    public String getLastBootContentHash() { return offlineV1 != null ? offlineV1.getBootHash() : lastBootContentHash; }
+
+    public boolean isOfflineCandidate() { return offlineV1 != null; }
+    public String getSelectedOfflineBuildId() { return offlineV1 != null ? offlineV1.getBootVersion() : ""; }
+    public String getUnfailedBootUrl(String server, java.util.Set<String> failed) {
+        return offlineV1 != null ? offlineV1.beginUnfailedBoot(server, failed) : null;
+    }
+    public android.webkit.WebResourceResponse interceptOfflineRequest(android.webkit.WebResourceRequest request) {
+        return offlineV1 != null ? offlineV1.intercept(request) : null;
+    }
 
     /** Returns the WebViewAssetLoader wired to serve /player_shell/** from local storage. */
     public WebViewAssetLoader buildAssetLoader() {
@@ -112,6 +124,7 @@ public class PlayerShellManager {
      * cached version belongs to a different configured server).
      */
     public String getBootUrl(String serverUrl) {
+        if (offlineV1 != null) return offlineV1.beginBoot(serverUrl);
         JsonRecord current = readRecord(CURRENT_JSON);
         if (current == null) { lastBootSource = "remote"; lastBootVersion = ""; lastBootContentHash = ""; return null; }
         if (!serverUrl.equals(current.serverUrl)) { lastBootSource = "remote"; lastBootVersion = ""; lastBootContentHash = ""; return null; }
@@ -125,10 +138,19 @@ public class PlayerShellManager {
 
     /** Call once the shell has actually rendered successfully (e.g. first WS connect / heartbeat). */
     public void markCurrentAsGood() {
+        if (offlineV1 != null) return;
         JsonRecord current = readRecord(CURRENT_JSON);
         if (current == null) return;
         writeRecord(LAST_GOOD_JSON, current);
         Log.i(TAG, "[markCurrentAsGood] version=" + current.version + " promoted to last_good");
+    }
+
+    public boolean acknowledgeOfflineInterface(String buildId) {
+        return offlineV1 != null && offlineV1.acknowledgeExecuted(buildId);
+    }
+
+    public void suspendOfflineInterception() {
+        if (offlineV1 != null) offlineV1.suspendInterception();
     }
 
     /**
@@ -139,6 +161,7 @@ public class PlayerShellManager {
      * network until a fresh, validated shell is downloaded again.
      */
     public void invalidateCurrent() {
+        if (offlineV1 != null) return;
         File f = new File(rootDir, CURRENT_JSON);
         if (f.exists() && !f.delete()) {
             Log.w(TAG, "[invalidateCurrent] failed to delete " + CURRENT_JSON);
@@ -149,6 +172,7 @@ public class PlayerShellManager {
 
     /** If the currently active shell turns out to be broken at runtime, roll back and report which URL to reload. */
     public String rollbackToLastGood(String serverUrl) {
+        if (offlineV1 != null) return offlineV1.rollback(serverUrl);
         JsonRecord lastGood = readRecord(LAST_GOOD_JSON);
         JsonRecord current = readRecord(CURRENT_JSON);
         if (lastGood == null || (current != null && lastGood.version.equals(current.version))) {
@@ -176,6 +200,17 @@ public class PlayerShellManager {
      * whatever shell (local or server) it already booted with.
      */
     public void downloadShellAsync(String serverUrl, DownloadCallback callback) {
+        if (offlineV1 != null) {
+            new Thread(() -> {
+                try {
+                    JSONObject prepared = offlineV1.prepare(serverUrl);
+                    if (callback != null) callback.onSuccess(prepared.optString("buildId"), prepared.optString("websiteBuildVersion"));
+                } catch (Exception failure) {
+                    if (callback != null) callback.onFailure("offline-preparation-" + failure.getClass().getSimpleName());
+                }
+            }, "offline-prepare-v1").start();
+            return;
+        }
         new Thread(() -> {
             try {
                 String version = String.valueOf(System.currentTimeMillis());

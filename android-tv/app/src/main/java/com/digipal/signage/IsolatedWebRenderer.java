@@ -304,13 +304,23 @@ public class IsolatedWebRenderer {
                 // isn't a recognized/cached virtual media URL falls through to normal
                 // network loading (returns null).
                 @Override public android.webkit.WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
+                    if (BuildConfig.DEBUG) {
+                        android.webkit.WebResourceResponse offline = new PlayerShellManager(ctx).interceptOfflineRequest(req);
+                        if (offline != null) return offline;
+                    }
                     try {
                           android.net.Uri uri = req != null ? req.getUrl() : null;
                           if (uri != null && "appassets.androidplatform.net".equals(uri.getHost())
                                   && mediaDownloadManager != null) {
-                              File cached = mediaDownloadManager.resolveLocalMediaFile(uri.getPath());
+                              File cached = mediaDownloadManager.resolveLocalMediaFile(uri.getEncodedPath());
                               if (cached != null) {
                                   String mime = MediaDownloadManager.guessMimeType(cached);
+                                  if (BuildConfig.DEBUG) {
+                                      String server = ctx.getSharedPreferences("digipal_prefs", Context.MODE_PRIVATE)
+                                              .getString("server_url", BuildConfig.SERVER_URL);
+                                      return com.digipal.offline.LocalMediaResponse.create(req, cached, mime,
+                                              com.digipal.offline.LocalMediaResponse.originOf(server));
+                                  }
                                   return new android.webkit.WebResourceResponse(mime, null,
                                           new java.io.FileInputStream(cached));
                               }
