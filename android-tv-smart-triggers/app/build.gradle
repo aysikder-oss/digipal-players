@@ -100,8 +100,8 @@ android {
         offlineTest {
             initWith debug
             applicationIdSuffix ".offlinetest"
-            versionNameSuffix "-offline-test"
-            resValue "string", "app_name", "Digipal Smart Triggers (Offline Test)"
+            versionNameSuffix "-dev-test"
+            resValue "string", "app_name", "Digipal Smart Triggers (DEV)"
             matchingFallbacks = ['debug']
             buildConfigField "boolean", "OFFLINE_CANDIDATE", "true"
             def testServer = providers.gradleProperty("offlineTestServer").orNull
@@ -111,7 +111,26 @@ android {
                     throw new GradleException("offlineTestServer must be an HTTPS origin without credentials or a path")
                 buildConfigField "String", "SERVER_URL", "\"${testServer.replaceAll('/$', '')}\""
             } else {
-                buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
+                // Only configuration/lint may proceed without an explicit DEV
+                // origin. The output-task guard below rejects such installers.
+                buildConfigField "String", "SERVER_URL", "\"https://invalid.invalid\""
+            }
+        }
+        offlineProductionTest {
+            initWith offlineTest
+            applicationIdSuffix ".productiontest"
+            versionNameSuffix "-production-test"
+            resValue "string", "app_name", "Digipal Smart Triggers (PRODUCTION TEST)"
+            matchingFallbacks = ['debug']
+            def productionServer = providers.gradleProperty("productionTestServer").orNull
+            if (productionServer) {
+                def uri = new URI(productionServer)
+                if (uri.scheme != 'https' || !uri.host || uri.userInfo || uri.query || uri.fragment ||
+                        (uri.path && uri.path != '/') || uri.host.toLowerCase().endsWith('.replit.dev'))
+                    throw new GradleException("productionTestServer must be a verified published HTTPS origin, not a DEV server")
+                buildConfigField "String", "SERVER_URL", "\"${productionServer.replaceAll('/$', '')}\""
+            } else {
+                buildConfigField "String", "SERVER_URL", "\"https://invalid.invalid\""
             }
         }
     }
@@ -145,13 +164,23 @@ android {
 androidComponents {
     onVariants(selector().withBuildType("offlineTest")) { variant ->
         variant.outputs.each { output ->
-            output.versionCode.set(47)
-            output.versionName.set("4.0.7-offline-test")
+            output.versionCode.set(48)
+            output.versionName.set("4.0.7-dev-test")
+        }
+    }
+    onVariants(selector().withBuildType("offlineProductionTest")) { variant ->
+        variant.outputs.each { output ->
+            output.versionCode.set(48)
+            output.versionName.set("4.0.7-production-test")
         }
     }
 }
 
 gradle.taskGraph.whenReady { graph ->
+    if (graph.hasTask(':app:generateOfflineTestBuildConfig') && !project.hasProperty('offlineTestServer'))
+        throw new GradleException("DEV test outputs require -PofflineTestServer with a verified DEV HTTPS origin")
+    if (graph.hasTask(':app:generateOfflineProductionTestBuildConfig') && !project.hasProperty('productionTestServer'))
+        throw new GradleException("PRODUCTION TEST outputs require -PproductionTestServer with a verified published HTTPS origin")
     // Guard BOTH release output tasks (APK and AAB) — previously only
     // assembleRelease was checked, so `./gradlew bundleRelease` could silently
     // produce an unsigned release AAB when no signing config was supplied.
