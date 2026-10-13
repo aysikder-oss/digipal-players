@@ -1055,6 +1055,9 @@ public class MainActivity extends Activity {
             });
         }
 
+        // This optional reflected system service has no public SDK constant.
+        // Ordinary installations already catch denied/unsupported access.
+        @SuppressLint("WrongConstant")
         @JavascriptInterface
         public void wakeDisplay() {
             // Attempt HDMI-CEC "One Touch Play" to wake the connected TV and
@@ -1146,6 +1149,9 @@ public class MainActivity extends Activity {
             }
         }
 
+        // Serial access is optional; SecurityException is caught below.
+        // Do not add a privileged permission to make diagnostics mandatory.
+        @SuppressLint("MissingPermission")
         @JavascriptInterface
         public String getDeviceDiagnostics() {
             // Returns a JSON string with device-level diagnostics.
@@ -2405,7 +2411,9 @@ public class MainActivity extends Activity {
 
               @android.webkit.JavascriptInterface
               public void setWebViewDormant(boolean dormant) {
-                if (BuildConfig.DEBUG) DebugTools.logBridgeCall("setWebViewDormant", "dormant=" + dormant);
+                if (BuildConfig.DEBUG) {
+                    DebugTools.logBridgeCall("setWebViewDormant", "dormant=" + dormant);
+                }
                   runOnUiThread(() -> {
                       try {
                           if (dormant && hasBroadcastActive) {
@@ -2823,7 +2831,9 @@ public class MainActivity extends Activity {
                     // JS will call setNativePlaylist again with refreshed slide data
                     android.util.Log.i("DigipalNative", "[nativeLoop] reloadNativePlaylist signal received");
                     android.util.Log.d(BRIDGE_TAG, "[" + android.os.SystemClock.elapsedRealtime() + "ms] reloadNativePlaylist");
-                    if (__testBridgeRecorder != null) __testBridgeRecorder.record("reloadNativePlaylist", "{}");
+                    if (__testBridgeRecorder != null) {
+                        __testBridgeRecorder.record("reloadNativePlaylist", "{}");
+                    }
                       if (playlistScheduler != null) {
                           playlistScheduler.reloadActiveRevisionFromRoom();
                       }

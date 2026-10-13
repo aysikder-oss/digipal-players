@@ -116,7 +116,8 @@ final class SmartTriggerController implements HardwareManager.HardwareListener {
                 return;
             }
             bleRequested = true;
-            activity.requestPermissions(missing.toArray(new String[0]), BLE_PERMISSION_REQUEST);
+            if (Build.VERSION.SDK_INT >= 23)
+                activity.requestPermissions(missing.toArray(new String[0]), BLE_PERMISSION_REQUEST);
             return;
         }
         enable(true);
@@ -144,7 +145,8 @@ final class SmartTriggerController implements HardwareManager.HardwareListener {
         pendingWebPermission = request;
         pendingResources = resources.toArray(new String[0]);
         if (permissions.isEmpty()) finishWebPermission();
-        else activity.requestPermissions(permissions.toArray(new String[0]), WEB_PERMISSION_REQUEST);
+        else if (Build.VERSION.SDK_INT >= 23)
+            activity.requestPermissions(permissions.toArray(new String[0]), WEB_PERMISSION_REQUEST);
     }
 
     void cancelWebPermission(PermissionRequest request) {

@@ -39,7 +39,9 @@
     <!-- REBOOT: privileged permission for OS-level reboot/shutdown via PowerManager.
          Only grantable to system/signed APKs; standard user-space installs will
          receive "unsupported" from the bridge — never silently ignored. -->
-    <uses-permission android:name="android.permission.REBOOT" />
+    <!-- Keep the existing system-install integration; this is not grantable
+         to ordinary apps and still requires a separate Play policy review. -->
+    <uses-permission android:name="android.permission.REBOOT" tools:ignore="ProtectedPermissions" />
 
     <!-- Android TV feature declarations -->
     <uses-feature
@@ -166,6 +168,7 @@
              in release builds where the activity does not exist. -->
         <activity
             android:name="leakcanary.internal.activity.LeakLauncherActivity"
+            tools:ignore="MissingClass"
             tools:node="remove" />
 
 

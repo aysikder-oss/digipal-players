@@ -140,13 +140,10 @@ public class HardwareManager {
         systemFilter.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
         systemFilter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
         IntentFilter permFilter = new IntentFilter(ACTION_USB_PERMISSION);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(usbReceiver, systemFilter, Context.RECEIVER_EXPORTED);
-            context.registerReceiver(usbReceiver, permFilter, Context.RECEIVER_NOT_EXPORTED);
-        } else {
-            context.registerReceiver(usbReceiver, systemFilter);
-            context.registerReceiver(usbReceiver, permFilter);
-        }
+        androidx.core.content.ContextCompat.registerReceiver(context, usbReceiver, systemFilter,
+                androidx.core.content.ContextCompat.RECEIVER_EXPORTED);
+        androidx.core.content.ContextCompat.registerReceiver(context, usbReceiver, permFilter,
+                androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED);
 
         scanExistingUsbDevices();
         Log.i(TAG, "Hardware manager started");
