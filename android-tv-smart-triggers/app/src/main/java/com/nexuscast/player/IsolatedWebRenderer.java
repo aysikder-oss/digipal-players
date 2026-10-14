@@ -318,6 +318,10 @@ public class IsolatedWebRenderer {
                                   if (BuildConfig.DEBUG) {
                                       String server = ctx.getSharedPreferences("digipal_prefs", Context.MODE_PRIVATE)
                                               .getString("server_url", BuildConfig.SERVER_URL);
+                                      if ("offlineTest".equals(BuildConfig.BUILD_TYPE)) {
+                                          return DevLocalMediaResponse.create(req, cached, mime,
+                                                  com.digipal.offline.LocalMediaResponse.originOf(server));
+                                      }
                                       return com.digipal.offline.LocalMediaResponse.create(req, cached, mime,
                                               com.digipal.offline.LocalMediaResponse.originOf(server));
                                   }

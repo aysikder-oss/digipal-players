@@ -716,6 +716,10 @@ public class MainActivity extends Activity {
                         if (cached != null) {
                             String mime = MediaDownloadManager.guessMimeType(cached);
                             if (playerShellManager != null && playerShellManager.isOfflineCandidate()) {
+                                if ("offlineTest".equals(BuildConfig.BUILD_TYPE)) {
+                                    return DevLocalMediaResponse.create(request, cached, mime,
+                                            com.digipal.offline.LocalMediaResponse.originOf(getServerUrl()));
+                                }
                                 return com.digipal.offline.LocalMediaResponse.create(request, cached, mime,
                                         com.digipal.offline.LocalMediaResponse.originOf(getServerUrl()));
                             }
