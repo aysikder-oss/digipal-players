@@ -32,8 +32,8 @@ final class DevMediaTrace {
         }
         // No query strings, object paths, auth headers or filesystem paths.
         event("request renderer=" + renderer + " method=" + safe(request.getMethod())
-                + " url=https://appassets.androidplatform.net/media/<" + fingerprint(path)
-                + "> range=" + safe(range), false);
+                + " host=" + safe(request.getUrl().getHost()) + " pathId=" + fingerprint(path)
+                + " range=" + safe(range), false);
     }
 
     static String fingerprint(String path) {

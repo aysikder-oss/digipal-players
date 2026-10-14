@@ -101,7 +101,7 @@ android {
             initWith debug
             applicationIdSuffix ".offlinetest"
             versionNameSuffix "-dev-test"
-            resValue "string", "app_name", "Digipal Smart Triggers DEV 52"
+            resValue "string", "app_name", "Digipal Smart Triggers DEV 53"
             matchingFallbacks = ['debug']
             buildConfigField "boolean", "OFFLINE_CANDIDATE", "true"
             def testServer = providers.gradleProperty("offlineTestServer").orNull
@@ -164,8 +164,8 @@ android {
 androidComponents {
     onVariants(selector().withBuildType("offlineTest")) { variant ->
         variant.outputs.each { output ->
-            output.versionCode.set(52)
-            output.versionName.set("4.0.11-dev-test")
+            output.versionCode.set(53)
+            output.versionName.set("4.0.12-dev-test")
         }
     }
     onVariants(selector().withBuildType("offlineProductionTest")) { variant ->

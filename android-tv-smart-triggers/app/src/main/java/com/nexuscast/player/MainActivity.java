@@ -686,7 +686,11 @@ public class MainActivity extends Activity {
                 this::isTrustedTriggerOrigin);
         if (playerShellManager != null && playerShellManager.isOfflineCandidate()) {
             gestureRuntimeServiceWorker.setAdditionalInterceptor(
-                    this::interceptOfflineCandidateRequest);
+                    request -> interceptOfflineCandidateRequest(request, "service-worker"));
+        }
+        if ("offlineTest".equals(BuildConfig.BUILD_TYPE)) {
+            Log.i(DevMediaTrace.TAG, "ready build=" + BuildConfig.VERSION_CODE
+                    + " candidate-media=dev-range traced=true");
         }
         gestureRuntimeServiceWorker.install();
 
@@ -695,7 +699,7 @@ public class MainActivity extends Activity {
 
             @Override
             public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-                android.webkit.WebResourceResponse candidate = interceptOfflineCandidateRequest(request);
+                android.webkit.WebResourceResponse candidate = interceptOfflineCandidateRequest(request, "main-candidate");
                 if (candidate != null) return candidate;
                 if (playerShellManager != null) {
                     android.webkit.WebResourceResponse offline = playerShellManager.interceptOfflineRequest(request);
@@ -4633,7 +4637,24 @@ public class MainActivity extends Activity {
     private int offlineNetworkAttempts = 0;
     private final java.util.Set<String> failedOfflineInterfaces = new java.util.LinkedHashSet<>();
 
-    private android.webkit.WebResourceResponse interceptOfflineCandidateRequest(WebResourceRequest request) {
+    static android.webkit.WebResourceResponse createOfflineCandidateMediaResponse(
+            WebResourceRequest request, java.io.File file, String mime, String origin,
+            String renderer) throws java.io.IOException {
+        if ("offlineTest".equals(BuildConfig.BUILD_TYPE)) {
+            DevMediaTrace trace = new DevMediaTrace(request, renderer);
+            try {
+                return trace.response("dev-range-candidate",
+                        DevLocalMediaResponse.create(request, file, mime, origin), file);
+            } catch (java.io.IOException | RuntimeException error) {
+                trace.failure("candidate-response", error);
+                throw error;
+            }
+        }
+        return com.digipal.offline.LocalMediaResponse.create(request, file, mime, origin);
+    }
+
+    private android.webkit.WebResourceResponse interceptOfflineCandidateRequest(WebResourceRequest request,
+            String renderer) {
         if (playerShellManager == null || !playerShellManager.isOfflineCandidate() || request == null) return null;
         android.webkit.WebResourceResponse shell = playerShellManager.interceptOfflineRequest(request);
         if (shell != null) return shell;
@@ -4653,9 +4674,9 @@ public class MainActivity extends Activity {
                     path = mediaDownloadManager.getLocalMediaPath(uri.getEncodedPath());
                 file = path.isEmpty() ? null : new java.io.File(path);
             }
-            return file == null ? null : com.digipal.offline.LocalMediaResponse.create(request, file,
+            return file == null ? null : createOfflineCandidateMediaResponse(request, file,
                     MediaDownloadManager.guessMimeType(file),
-                    com.digipal.offline.LocalMediaResponse.originOf(getServerUrl()));
+                    com.digipal.offline.LocalMediaResponse.originOf(getServerUrl()), renderer);
         } catch (Exception ignored) { return null; }
     }
 

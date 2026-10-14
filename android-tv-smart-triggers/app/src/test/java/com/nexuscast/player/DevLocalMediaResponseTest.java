@@ -85,6 +85,23 @@ public class DevLocalMediaResponseTest {
         byte[] body = chromiumBody(r, LATER, 1024, false);
         assertArrayEquals(new byte[]{11, 22, 33, 44}, Arrays.copyOf(body, 4));
     }
+    @Test public void earlyCandidateProviderUsesCorrectedRangeForBothRequestEntrypoints() throws Exception {
+        for (String renderer : new String[]{"main-candidate", "service-worker"}) {
+            ShadowLog.clear();
+            WebResourceResponse r = MainActivity.createOfflineCandidateMediaResponse(
+                    request("bytes=37000000-37001023", "GET"), file,
+                    "video/mp4", "https://player.example", renderer);
+            assertEquals(206, r.getStatusCode());
+            assertEquals("bytes 37000000-37001023/" + LENGTH, r.getResponseHeaders().get("Content-Range"));
+            byte[] body = chromiumBody(r, LATER, 1024, false);
+            assertArrayEquals(new byte[]{11, 22, 33, 44}, Arrays.copyOf(body, 4));
+            StringBuilder log = new StringBuilder();
+            for (ShadowLog.LogItem line : ShadowLog.getLogsForTag(DevMediaTrace.TAG)) log.append(line.msg);
+            assertTrue(log.toString().contains("renderer=" + renderer));
+            assertTrue(log.toString().contains("handler=dev-range-candidate"));
+            assertTrue(log.toString().contains("delivered=1024"));
+        }
+    }
     @Test public void openEndedRangeIncludesOnlyTheRemainingFile() throws Exception {
         chromiumBody(response("bytes=37000000-", "GET"), LATER, LENGTH - LATER, false);
     }

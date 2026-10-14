@@ -26,6 +26,9 @@ public class GestureRuntimeServiceWorkerTest {
         public void setClient(ServiceWorkerClientCompat client) { this.client = client; }
     }
     private WebResourceRequest request(String url, String origin) {
+        return request(url, origin, null);
+    }
+    private WebResourceRequest request(String url, String origin, String range) {
         return new WebResourceRequest() {
             public Uri getUrl() { return Uri.parse(url); }
             public boolean isForMainFrame() { return false; }
@@ -33,7 +36,10 @@ public class GestureRuntimeServiceWorkerTest {
             public boolean hasGesture() { return false; }
             public String getMethod() { return "GET"; }
             public Map<String, String> getRequestHeaders() {
-                return Collections.singletonMap("Referer", origin);
+                Map<String, String> headers = new java.util.HashMap<>();
+                headers.put("Referer", origin);
+                if (range != null) headers.put("Range", range);
+                return headers;
             }
         };
     }
@@ -41,6 +47,38 @@ public class GestureRuntimeServiceWorkerTest {
         GestureRuntimeAssets runtime = new GestureRuntimeAssets(
                 ApplicationProvider.<android.content.Context>getApplicationContext().getAssets());
         return new GestureRuntimeServiceWorker(runtime, trusted::get, ORIGIN::equals, recorder);
+    }
+
+    @Test public void candidateMediaUsesCorrectedStreamThroughInstalledServiceWorkerClient() throws Exception {
+        Recorder recorder = new Recorder();
+        GestureRuntimeServiceWorker worker = handler(recorder, new AtomicBoolean(true));
+        java.io.File file = java.io.File.createTempFile("candidate-media", ".mp4");
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(file)) {
+            out.write(new byte[]{0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15});
+        }
+        worker.setAdditionalInterceptor(req -> {
+            if (!"appassets.androidplatform.net".equals(req.getUrl().getHost())) return null;
+            try {
+                return MainActivity.createOfflineCandidateMediaResponse(req, file,
+                        "video/mp4", ORIGIN, "service-worker");
+            } catch (java.io.IOException e) { throw new AssertionError(e); }
+        });
+        try {
+            assertTrue(worker.install());
+            WebResourceResponse response = recorder.client.shouldInterceptRequest(
+                    request("https://appassets.androidplatform.net/media/test", ORIGIN, "bytes=8-11"));
+            assertEquals(206, response.getStatusCode());
+            assertFalse(response.getResponseHeaders().containsKey("Content-Length"));
+            try (java.io.InputStream in = response.getData()) {
+                assertEquals(16, in.available());
+                assertEquals(8, in.skip(8));
+                assertEquals(8, in.read());
+                assertEquals(9, in.read());
+                assertEquals(10, in.read());
+                assertEquals(11, in.read());
+                assertEquals(-1, in.read());
+            }
+        } finally { worker.close(); file.delete(); }
     }
 
     @Test public void candidateInterfaceComposesWithoutDiscardingGestureInterception() {
