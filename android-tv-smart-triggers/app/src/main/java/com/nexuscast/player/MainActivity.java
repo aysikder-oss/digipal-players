@@ -291,6 +291,18 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        SharedPreferences devPrefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        if (shouldResetDevOrigin(BuildConfig.BUILD_TYPE,
+                devPrefs.getBoolean("cloud_pairing_pending", false),
+                devPrefs.getString(KEY_SERVER_MODE, "cloud"),
+                devPrefs.getString(KEY_SERVER_URL, null), BuildConfig.SERVER_URL)) {
+            devPrefs.edit().remove(KEY_SERVER_URL).apply();
+            Log.i("DigipalDev", "Removed obsolete unpaired DEV server override.");
+        }
+        if ("offlineTest".equals(BuildConfig.BUILD_TYPE)) {
+            Log.i("DigipalDev", "Build " + BuildConfig.VERSION_CODE
+                    + " configured server " + BuildConfig.SERVER_URL);
+        }
         smartTriggerController = new SmartTriggerController(this, new SmartTriggerController.Host() {
             @Override public WebView webView() { return MainActivity.this.webView; }
             @Override public boolean trustedOrigin(String origin) { return isTrustedTriggerOrigin(origin); }
@@ -4306,6 +4318,30 @@ public class MainActivity extends Activity {
         return BuildConfig.SERVER_URL;
     }
 
+    static boolean shouldResetDevOrigin(String variant, boolean pending, String mode,
+                                        String saved, String configured) {
+        if (!"offlineTest".equals(variant) || !pending || !"cloud".equals(mode)
+                || saved == null || configured == null) return false;
+        try {
+            java.net.URI old = new java.net.URI(saved);
+            java.net.URI target = new java.net.URI(configured);
+            if (!"https".equals(old.getScheme()) || !"https".equals(target.getScheme())
+                    || old.getHost() == null || target.getHost() == null
+                    || old.getUserInfo() != null || old.getQuery() != null
+                    || old.getFragment() != null
+                    || (old.getPath() != null && !old.getPath().isEmpty()
+                        && !"/".equals(old.getPath()))) return false;
+            boolean obsoleteTask = old.getHost().equals(
+                    "3922e89f-d02d-4a8b-add9-9f42fce9e5ea-00-sisthqoc0pvv-xrwo385d.worf.replit.dev")
+                    && (old.getPort() == -1 || old.getPort() == 5000);
+            boolean obsoletePort = old.getHost().equals(target.getHost())
+                    && old.getPort() == 5000 && target.getPort() == -1;
+            return obsoleteTask || obsoletePort;
+        } catch (java.net.URISyntaxException e) {
+            return false;
+        }
+    }
+
     // Fix 4: ExoPlayer stall watchdog — detects and recovers from position-stuck video after signed URL refresh.
     private void startStallWatchdog() {
         if (stallRunnable != null) { stallHandler.removeCallbacks(stallRunnable); stallRunnable = null; }
@@ -4488,6 +4524,10 @@ public class MainActivity extends Activity {
         layout.addView(titleView);
 
         TextView msgView = new TextView(this);
+        if ("offlineTest".equals(BuildConfig.BUILD_TYPE)) {
+            message += "\nDEV build " + BuildConfig.VERSION_CODE + " — "
+                    + BuildConfig.VERSION_NAME + "\nServer: " + getServerUrl();
+        }
         msgView.setText(message);
         msgView.setTextColor(Color.parseColor("#94a3b8"));
         msgView.setTextSize(16);
