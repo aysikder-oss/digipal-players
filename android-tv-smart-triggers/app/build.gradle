@@ -164,8 +164,8 @@ android {
 androidComponents {
     onVariants(selector().withBuildType("offlineTest")) { variant ->
         variant.outputs.each { output ->
-            output.versionCode.set(48)
-            output.versionName.set("4.0.7-dev-test")
+            output.versionCode.set(49)
+            output.versionName.set("4.0.8-dev-test")
         }
     }
     onVariants(selector().withBuildType("offlineProductionTest")) { variant ->
