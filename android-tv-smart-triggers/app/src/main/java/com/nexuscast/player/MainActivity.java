@@ -862,7 +862,13 @@ public class MainActivity extends Activity {
             public void onReceivedHttpError(WebView view, WebResourceRequest request, android.webkit.WebResourceResponse errorResponse) {
                 if (request.isForMainFrame()) {
                     int statusCode = errorResponse.getStatusCode();
-                    if (statusCode >= 500) {
+                    if (isDevServerHttpError(BuildConfig.BUILD_TYPE, statusCode)) {
+                        hasHttpError = true;
+                        if (maybeRollbackLocalShell()) return;
+                        showError("Development server unavailable",
+                                "HTTP " + statusCode + " from " + getServerUrl()
+                                + "\nCheck the development server address, then retry.");
+                    } else if (statusCode >= 500) {
                         hasHttpError = true;
                         if (maybeRollbackLocalShell()) return;
                         showError("Connecting...", "Server is starting up. Retrying...");
@@ -4463,6 +4469,10 @@ public class MainActivity extends Activity {
             return player;
         }
 
+    static boolean isDevServerHttpError(String buildType, int statusCode) {
+        return "offlineTest".equals(buildType) && statusCode >= 400;
+    }
+
       private void showError(String title, String message) {
         errorContainer.removeAllViews();
 
@@ -4490,16 +4500,32 @@ public class MainActivity extends Activity {
         msgView.setLayoutParams(params);
         layout.addView(msgView);
 
+        if ("offlineTest".equals(BuildConfig.BUILD_TYPE)) {
+            android.widget.Button retry = new android.widget.Button(this);
+            retry.setText("Retry connection");
+            retry.setOnClickListener(v -> {
+                if (!isFinishing() && webView != null) loadPlayerUrl(getServerUrl());
+            });
+            layout.addView(retry);
+            android.widget.Button settings = new android.widget.Button(this);
+            settings.setText("Server settings");
+            settings.setOnClickListener(v -> openSetupScreen());
+            layout.addView(settings);
+        }
+
         errorContainer.addView(layout, new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
         ));
 
         errorContainer.setVisibility(View.VISIBLE);
+        if ("offlineTest".equals(BuildConfig.BUILD_TYPE)) errorContainer.bringToFront();
     }
 
     private void retryConnection() {
         webView.postDelayed(() -> {
+            if ("offlineTest".equals(BuildConfig.BUILD_TYPE)
+                    && (isFinishing() || isDestroyed() || isUserClosing)) return;
             String serverUrl = getServerUrl();
             loadPlayerUrl(serverUrl);
         }, 5000);
