@@ -308,10 +308,12 @@ public class IsolatedWebRenderer {
                         android.webkit.WebResourceResponse offline = new PlayerShellManager(ctx).interceptOfflineRequest(req);
                         if (offline != null) return offline;
                     }
+                    DevMediaTrace mediaTrace = null;
                     try {
                           android.net.Uri uri = req != null ? req.getUrl() : null;
                           if (uri != null && "appassets.androidplatform.net".equals(uri.getHost())
                                   && mediaDownloadManager != null) {
+                              if ("offlineTest".equals(BuildConfig.BUILD_TYPE)) mediaTrace = new DevMediaTrace(req, "isolated");
                               File cached = mediaDownloadManager.resolveLocalMediaFile(uri.getEncodedPath());
                               if (cached != null) {
                                   String mime = MediaDownloadManager.guessMimeType(cached);
@@ -319,15 +321,17 @@ public class IsolatedWebRenderer {
                                       String server = ctx.getSharedPreferences("digipal_prefs", Context.MODE_PRIVATE)
                                               .getString("server_url", BuildConfig.SERVER_URL);
                                       if ("offlineTest".equals(BuildConfig.BUILD_TYPE)) {
-                                          return DevLocalMediaResponse.create(req, cached, mime,
-                                                  com.digipal.offline.LocalMediaResponse.originOf(server));
+                                          return mediaTrace.response("dev-range", DevLocalMediaResponse.create(req, cached, mime,
+                                                  com.digipal.offline.LocalMediaResponse.originOf(server)), cached);
                                       }
                                       return com.digipal.offline.LocalMediaResponse.create(req, cached, mime,
                                               com.digipal.offline.LocalMediaResponse.originOf(server));
                                   }
-                                  return new android.webkit.WebResourceResponse(mime, null,
+                                  android.webkit.WebResourceResponse response = new android.webkit.WebResourceResponse(mime, null,
                                           new java.io.FileInputStream(cached));
+                                  return mediaTrace == null ? response : mediaTrace.response("plain-file", response, cached);
                               }
+                              if (mediaTrace != null) mediaTrace.event("cache-miss falling-through=true", true);
                           }
                           if (uri != null && "http".equalsIgnoreCase(uri.getScheme())) {
                               String reqHost = uri.getHost();
@@ -338,7 +342,7 @@ public class IsolatedWebRenderer {
                                           new java.io.ByteArrayInputStream(new byte[0]));
                               }
                           }
-                      } catch (Throwable ignored) {}
+                      } catch (Throwable ignored) { if (mediaTrace != null) mediaTrace.failure("intercept-isolated", ignored); }
                       return null;
                 }
                 @Override public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError err) {

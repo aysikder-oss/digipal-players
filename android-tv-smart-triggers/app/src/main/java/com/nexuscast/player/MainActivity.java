@@ -708,26 +708,30 @@ public class MainActivity extends Activity {
                 // URLs (handed out by getLocalMediaWebUrl below) from the local media
                 // cache, so the main WebView can play cached media while offline
                 // without ever using a raw file:// URL.
+                DevMediaTrace mediaTrace = null;
                 try {
                     android.net.Uri mediaUri = request != null ? request.getUrl() : null;
                     if (mediaUri != null && "appassets.androidplatform.net".equals(mediaUri.getHost())
                             && mediaDownloadManager != null) {
+                        if ("offlineTest".equals(BuildConfig.BUILD_TYPE)) mediaTrace = new DevMediaTrace(request, "main");
                         java.io.File cached = mediaDownloadManager.resolveLocalMediaFile(mediaUri.getEncodedPath());
                         if (cached != null) {
                             String mime = MediaDownloadManager.guessMimeType(cached);
                             if (playerShellManager != null && playerShellManager.isOfflineCandidate()) {
                                 if ("offlineTest".equals(BuildConfig.BUILD_TYPE)) {
-                                    return DevLocalMediaResponse.create(request, cached, mime,
-                                            com.digipal.offline.LocalMediaResponse.originOf(getServerUrl()));
+                                    return mediaTrace.response("dev-range", DevLocalMediaResponse.create(request, cached, mime,
+                                            com.digipal.offline.LocalMediaResponse.originOf(getServerUrl())), cached);
                                 }
                                 return com.digipal.offline.LocalMediaResponse.create(request, cached, mime,
                                         com.digipal.offline.LocalMediaResponse.originOf(getServerUrl()));
                             }
-                            return new android.webkit.WebResourceResponse(mime, null,
+                            android.webkit.WebResourceResponse response = new android.webkit.WebResourceResponse(mime, null,
                                     new java.io.FileInputStream(cached));
+                            return mediaTrace == null ? response : mediaTrace.response("plain-file", response, cached);
                         }
+                        if (mediaTrace != null) mediaTrace.event("cache-miss falling-through=true", true);
                     }
-                } catch (Throwable ignored) {}
+                } catch (Throwable ignored) { if (mediaTrace != null) mediaTrace.failure("intercept-main", ignored); }
                 if (playerShellManager != null
                         && "appassets.androidplatform.net".equals(request.getUrl().getHost())) {
                     android.webkit.WebResourceResponse r =

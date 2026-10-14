@@ -9,6 +9,7 @@ import org.junit.*;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowLog;
 import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class)
@@ -41,8 +42,10 @@ public class DevLocalMediaResponseTest {
         };
     }
     private WebResourceResponse response(String range, String method) throws IOException {
-        return DevLocalMediaResponse.create(request(range, method), file,
-                "video/mp4", "https://player.example");
+        WebResourceRequest request = request(range, method);
+        return new DevMediaTrace(request, "test").response("dev-range",
+                DevLocalMediaResponse.create(request, file,
+                        "video/mp4", "https://player.example"), file);
     }
     // Emulate Chromium InputStreamReader: get full size, compute bounds, then
     // skip the absolute requested offset before reading the intercepted body.
@@ -149,6 +152,41 @@ public class DevLocalMediaResponseTest {
         try (InputStream in = response("bytes=0-1023", "GET").getData()) {
             try (RandomAccessFile out = new RandomAccessFile(file, "rw")) { out.setLength(0); }
             try { in.read(); fail("truncation must fail"); } catch (IOException expected) {}
+        }
+    }
+    @Test public void traceRecordsSelectionReadsSeekAndCloseWithoutPrivatePaths() throws Exception {
+        ShadowLog.clear();
+        chromiumBody(response("bytes=37000000-37001023", "GET"), LATER, 1024, false);
+        StringBuilder log = new StringBuilder();
+        for (ShadowLog.LogItem line : ShadowLog.getLogsForTag(DevMediaTrace.TAG)) log.append(line.msg).append('\n');
+        String text = log.toString();
+        assertTrue(text.contains("handler=dev-range status=206"));
+        assertTrue(text.contains("range=bytes=37000000-37001023"));
+        assertTrue(text.contains("skip offset=0 requested=37000000 actual=37000000"));
+        assertTrue(text.contains("read offset=37000000"));
+        assertTrue(text.contains("delivered=1024"));
+        assertTrue(text.contains("close offset=37001024"));
+        assertFalse(text.contains(file.getAbsolutePath()));
+        assertFalse(text.contains("/media/test"));
+        assertFalse(text.contains("Content-Length=1024"));
+    }
+    @Test public void traceRecordsReadFailureWithoutLeakingExceptionMessage() throws Exception {
+        ShadowLog.clear();
+        try (InputStream in = response("bytes=0-1023", "GET").getData()) {
+            try (RandomAccessFile out = new RandomAccessFile(file, "rw")) { out.setLength(0); }
+            try { in.read(); fail("must propagate the original read error"); }
+            catch (IOException expected) { assertEquals("local-media-truncated", expected.getMessage()); }
+        }
+        StringBuilder log = new StringBuilder();
+        for (ShadowLog.LogItem line : ShadowLog.getLogsForTag(DevMediaTrace.TAG)) log.append(line.msg).append('\n');
+        assertTrue(log.toString().contains("exception operation=read offset=0"));
+        assertTrue(log.toString().contains("fileSizeNow=0"));
+        assertFalse(log.toString().contains(file.getAbsolutePath()));
+        new DevMediaTrace(request(null, "GET"), "test").failure("test",
+                new IOException("/private/path?token=secret-test-token"));
+        for (ShadowLog.LogItem line : ShadowLog.getLogsForTag(DevMediaTrace.TAG)) {
+            assertFalse(line.msg.contains("secret-test-token"));
+            assertFalse(line.msg.contains("/private/path"));
         }
     }
 }
