@@ -17,7 +17,8 @@ With Android SDK 36 and Java 17:
   :app:assembleOfflineTest :app:testOfflineTestUnitTest :app:lintOfflineTest
 ```
 
-The DEV output is version 4.0.8-dev-test, code 49. No explicit port is
+The DEV output is version 4.0.9-dev-test, code 50, labelled
+`Digipal Smart Triggers DEV 50`. No explicit port is
 needed at the verified main development origin. Revalidate that origin
 before future builds: development addresses are not permanent hosting.
 
@@ -26,15 +27,26 @@ saved-shell recovery first. When recovery is unavailable it shows a native
 error with Retry connection and Server settings controls instead of the
 server error document. Other build variants retain their previous behavior.
 
+On startup, only an unpaired DEV cloud session can discard a saved override
+matching the known obsolete task origin, or port 5000 on the configured main
+origin. Custom local servers, other origins, paired sessions and other build
+variants are not migrated. No media or pairing data is deleted.
+Native startup logs and error messages identify the build number and server.
+
 ## Verification and limitations
 
-- APK build, all 75 native unit tests, and Android lint passed.
+- APK build, all 76 native unit tests, and Android lint passed.
+- The exact main origin returned Digipal HTML from GET /player?platform=android_tv,
+  HTTP 200 JSON with ok:true from POST /api/tv/telemetry/heartbeat, and a
+  WebSocket upgrade (HTTP 101) from /ws. GET is not the heartbeat API method.
 - Package/version, embedded server origin and APK signature were checked.
+- Compiled DEX BuildConfig, not only Gradle configuration, confirmed build 50
+  and the expected origin without an explicit port.
 - A fresh browser session reached an unpaired player screen and connected.
 - Fresh APK installation and native button interactions on Android are
   not yet verified. Browser verification is not a substitute for this.
-- This is a debug-signed DEV installer. Upgrade signature compatibility
-  with an earlier locally built DEV installer has not been established.
+- This is a debug-signed DEV installer. Its certificate matches build 49.
+  Upgrade signature compatibility with build 48 has not been established.
   If Android rejects the update, remove only the DEV app before installing.
   Removing it deletes that DEV app's local pairing/cache.
 - No claim of complete offline playback validation is made by this repair.
