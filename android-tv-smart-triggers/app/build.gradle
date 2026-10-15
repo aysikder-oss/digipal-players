@@ -64,15 +64,15 @@ android {
         applicationId "com.nexuscast.player"
         minSdk 21
         targetSdk 36
-        versionCode 46
-        versionName "4.0.6"
+        versionCode 54
+        versionName "4.0.13"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
-        buildConfigField "String", "SERVER_URL", "\"https://www.digipalsignage.com\""
+        buildConfigField "String", "SERVER_URL", "\"https://digipalsignage.com\""
         buildConfigField "String", "SENTRY_DSN", "\"${System.getenv('SENTRY_DSN') ?: ''}\""
         buildConfigField "String", "GIT_SHA", "\"${gitSha}\""
         buildConfigField "String", "BUILD_FLAVOR", "\"android-tv\""
-        buildConfigField "boolean", "OFFLINE_CANDIDATE", "false"
+        buildConfigField "boolean", "OFFLINE_CANDIDATE", "true"
 
         javaCompileOptions {
             annotationProcessorOptions {
@@ -91,6 +91,7 @@ android {
         }
         debug {
             buildConfigField "boolean", "OFFLINE_CANDIDATE", "true"
+            buildConfigField "String", "SERVER_URL", "\"https://3922e89f-d02d-4a8b-add9-9f42fce9e5ea-00-sisthqoc0pvv.worf.replit.dev\""
             applicationIdSuffix ".debug"
             versionNameSuffix "-debug"
             resValue "string", "app_name", "Digipal Smart Triggers (Debug)"
@@ -198,6 +199,20 @@ tasks.register("verifyGestureRuntimeAssets", Exec) {
     commandLine "python3", "scripts/check-gesture-runtime.py"
 }
 tasks.named("preBuild").configure { dependsOn("verifyGestureRuntimeAssets") }
+
+// The existing build-only workflow keeps the independent ST signer. Require
+// release checks in Gradle as well, without requesting broader CI credentials.
+tasks.register('verifyProductionArtifacts', Exec) {
+    dependsOn 'packageRelease', 'bundleRelease'
+    commandLine 'python3', '../../android-offline-core/scripts/verify-release.py',
+            '--project', '..', '--package', 'com.nexuscast.player',
+            '--version', '4.0.13', '--code', '54',
+            '--certificate', 'f2b9ca9d8e4129c4463054c26c0df4c3e227d5b1ae9afcf994760e267648f267'
+}
+tasks.matching { it.name == 'assembleRelease' }.configureEach {
+    dependsOn 'testDebugUnitTest', 'lintRelease', 'assembleDebugAndroidTest'
+    finalizedBy 'verifyProductionArtifacts'
+}
 
 dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'

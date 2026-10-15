@@ -34,6 +34,12 @@ public class LocalMediaResponseTest {
     }
     String body(WebResourceResponse response) throws Exception {
         try (InputStream in = response.getData(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            // Model Chromium's absolute range seek rather than pre-seeking twice.
+            String range = response.getResponseHeaders().get("Content-Range");
+            if (response.getStatusCode() == 206 && range != null) {
+                long offset = Long.parseLong(range.substring(6, range.indexOf('-')));
+                assertEquals(offset, in.skip(offset));
+            }
             int value; while ((value = in.read()) != -1) out.write(value);
             return out.toString("UTF-8");
         }
@@ -41,7 +47,8 @@ public class LocalMediaResponseTest {
     @Test public void returnsCompleteBodyWithLengthAndRestrictedCors() throws Exception {
         WebResourceResponse result = LocalMediaResponse.create(request(null,"GET"), file,"video/mp4","https://player.example");
         assertEquals(200,result.getStatusCode());
-        assertEquals("10",result.getResponseHeaders().get("Content-Length"));
+        assertFalse(result.getResponseHeaders().containsKey("Content-Length"));
+        assertEquals(10, result.getData().available());
         assertEquals("https://player.example",result.getResponseHeaders().get("Access-Control-Allow-Origin"));
         assertEquals("0123456789",body(result));
     }
@@ -62,8 +69,36 @@ public class LocalMediaResponseTest {
     }
     @Test public void headDoesNotReadBodyAndCorsRejectsCredentials() throws Exception {
         WebResourceResponse result = LocalMediaResponse.create(request(null,"HEAD"),file,"application/pdf","");
-        assertEquals("10",result.getResponseHeaders().get("Content-Length"));
+        assertFalse(result.getResponseHeaders().containsKey("Content-Length"));
         assertEquals("",body(result));
         assertEquals("",LocalMediaResponse.originOf("https://user:password@example.test"));
+    }
+    @Test public void laterRangesAndRepeatedRestartUseIndependentStreams() throws Exception {
+        try (RandomAccessFile out = new RandomAccessFile(file, "rw")) {
+            out.setLength(38_000_000);
+            out.seek(37_000_000);
+            out.write(new byte[]{11,22,33,44});
+        }
+        for (int loop = 0; loop < 4; loop++) {
+            WebResourceResponse result = LocalMediaResponse.create(
+                    request("bytes=37000000-37000003","GET"), file, "video/mp4", "");
+            assertEquals(206, result.getStatusCode());
+            assertFalse(result.getResponseHeaders().containsKey("Content-Length"));
+            try (InputStream in = result.getData()) {
+                assertEquals(38_000_000, in.available());
+                assertEquals(37_000_000, in.skip(37_000_000));
+                assertEquals(4, in.available());
+                assertEquals(11, in.read());
+                assertEquals(22, in.read());
+                assertEquals(33, in.read());
+                assertEquals(44, in.read());
+                assertEquals(-1, in.read());
+            }
+            try (InputStream in = LocalMediaResponse.create(
+                    request("bytes=0-1023","GET"),file,"video/mp4","").getData()) {
+                assertEquals(38_000_000, in.available());
+                assertEquals(0, in.read());
+            }
+        }
     }
 }

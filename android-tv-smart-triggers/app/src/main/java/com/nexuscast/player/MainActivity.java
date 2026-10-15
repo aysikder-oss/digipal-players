@@ -1536,6 +1536,7 @@ public class MainActivity extends Activity {
                   o.put("appVersion", BuildConfig.VERSION_NAME);
                   o.put("appVariant", "smart-triggers");
                   o.put("packageName", getPackageName());
+                  o.put("offlinePlaybackContract", BuildConfig.OFFLINE_CANDIDATE ? 1 : 0);
                   o.put("deviceId", getOrCreateInstallId());
                   return o.toString();
               } catch (Throwable e) {

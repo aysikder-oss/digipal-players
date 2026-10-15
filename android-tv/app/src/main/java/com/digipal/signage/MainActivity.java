@@ -1407,6 +1407,9 @@ public class MainActivity extends Activity {
                   o.put("manufacturer", android.os.Build.MANUFACTURER);
                   o.put("androidVersion", android.os.Build.VERSION.RELEASE);
                   o.put("appVersion", BuildConfig.VERSION_NAME);
+                  o.put("appVariant", "android-tv");
+                  o.put("packageName", getPackageName());
+                  o.put("offlinePlaybackContract", BuildConfig.OFFLINE_CANDIDATE ? 1 : 0);
                   o.put("deviceId", getOrCreateInstallId());
                   return o.toString();
               } catch (Throwable e) {
