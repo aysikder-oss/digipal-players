@@ -53,7 +53,7 @@ final class DevMediaTrace {
     }
 
     void event(String detail, boolean error) {
-        if (!"offlineTest".equals(BuildConfig.BUILD_TYPE)) return;
+        if (!BuildConfig.DEBUG) return;
         int count = (error ? ERRORS : LINES).incrementAndGet();
         int limit = error ? 200 : 2000;
         if (count > limit) return;

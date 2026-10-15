@@ -4641,7 +4641,7 @@ public class MainActivity extends Activity {
     static android.webkit.WebResourceResponse createOfflineCandidateMediaResponse(
             WebResourceRequest request, java.io.File file, String mime, String origin,
             String renderer) throws java.io.IOException {
-        if ("offlineTest".equals(BuildConfig.BUILD_TYPE)) {
+        if (BuildConfig.DEBUG) {
             DevMediaTrace trace = new DevMediaTrace(request, renderer);
             try {
                 return trace.response("dev-range-candidate",

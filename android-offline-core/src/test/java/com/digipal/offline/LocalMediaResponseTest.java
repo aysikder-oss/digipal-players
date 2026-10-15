@@ -97,7 +97,7 @@ public class LocalMediaResponseTest {
             try (InputStream in = LocalMediaResponse.create(
                     request("bytes=0-1023","GET"),file,"video/mp4","").getData()) {
                 assertEquals(38_000_000, in.available());
-                assertEquals(0, in.read());
+                assertEquals((int) '0', in.read());
             }
         }
     }
