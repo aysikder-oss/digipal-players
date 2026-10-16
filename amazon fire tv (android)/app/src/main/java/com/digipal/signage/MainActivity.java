@@ -327,6 +327,12 @@ public class MainActivity extends Activity {
                 .getString(KEY_PAIRING_CODE, null);
 
         if (playerShellManager == null) playerShellManager = new PlayerShellManager(this);
+        if (playerShellManager.isOfflineCandidate()) {
+            if (offlineInterfaceServiceWorker != null) offlineInterfaceServiceWorker.close();
+            offlineInterfaceServiceWorker = new com.digipal.offline.OfflineInterfaceServiceWorker(
+                    this::interceptOfflineCandidateRequest);
+            offlineInterfaceServiceWorker.install();
+        }
 
         try {
               webView = new WebView(this);
@@ -623,6 +629,12 @@ public class MainActivity extends Activity {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                android.webkit.WebResourceResponse candidate = interceptOfflineCandidateRequest(request);
+                if (candidate != null) return candidate;
+                if (playerShellManager != null) {
+                    android.webkit.WebResourceResponse offline = playerShellManager.interceptOfflineRequest(request);
+                    if (offline != null) return offline;
+                }
                 // Serve virtual https://appassets.androidplatform.net/media/<objectPath>
                 // URLs (handed out by getLocalMediaWebUrl below) from the local media
                 // cache, so the main WebView can play cached media while offline
@@ -631,9 +643,13 @@ public class MainActivity extends Activity {
                     android.net.Uri mediaUri = request != null ? request.getUrl() : null;
                     if (mediaUri != null && "appassets.androidplatform.net".equals(mediaUri.getHost())
                             && mediaDownloadManager != null) {
-                        java.io.File cached = mediaDownloadManager.resolveLocalMediaFile(mediaUri.getPath());
+                        java.io.File cached = mediaDownloadManager.resolveLocalMediaFile(mediaUri.getEncodedPath());
                         if (cached != null) {
                             String mime = MediaDownloadManager.guessMimeType(cached);
+                            if (playerShellManager != null && playerShellManager.isOfflineCandidate()) {
+                                return com.digipal.offline.LocalMediaResponse.create(request, cached, mime,
+                                        com.digipal.offline.LocalMediaResponse.originOf(getServerUrl()));
+                            }
                             return new android.webkit.WebResourceResponse(mime, null,
                                     new java.io.FileInputStream(cached));
                         }
@@ -900,6 +916,19 @@ public class MainActivity extends Activity {
     }
 
     private class WebAppInterface {
+        @JavascriptInterface
+        public int getOfflineContractVersion() { return BuildConfig.DEBUG ? 1 : 0; }
+        @JavascriptInterface
+        public boolean acknowledgeOfflineInterface(String token, String buildId) {
+            return isValidBridgeToken(token) && playerShellManager != null
+                    && playerShellManager.acknowledgeOfflineInterface(buildId);
+        }
+
+        @JavascriptInterface
+        public String getSavedPairingCode(String token) {
+            if (!isValidBridgeToken(token)) return "";
+            return getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(KEY_PAIRING_CODE, "");
+        }
 
         @JavascriptInterface
         public void setAutoRelaunch(boolean enabled) {
@@ -929,6 +958,9 @@ public class MainActivity extends Activity {
             });
         }
 
+        // This optional reflected system service has no public SDK constant.
+        // Ordinary installations already catch denied/unsupported access.
+        @SuppressLint("WrongConstant")
         @JavascriptInterface
         public void wakeDisplay() {
             // Attempt HDMI-CEC "One Touch Play" to wake the connected TV and
@@ -1020,6 +1052,9 @@ public class MainActivity extends Activity {
             }
         }
 
+        // Serial access is optional; SecurityException is caught below.
+        // Do not add a privileged permission to make diagnostics mandatory.
+        @SuppressLint("MissingPermission")
         @JavascriptInterface
         public String getDeviceDiagnostics() {
             // Returns a JSON string with device-level diagnostics.
@@ -1224,6 +1259,13 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public String getPreparedMediaWebUrl(String token, String objectPath, String sourceUrl) {
+            if (!isValidBridgeToken(token) || playerShellManager == null || !playerShellManager.isOfflineCandidate()
+                    || mediaDownloadManager == null) return "";
+            return mediaDownloadManager.getPreparedMediaWebUrl(objectPath, sourceUrl);
+        }
+
+        @JavascriptInterface
         public String getLocalMediaPath(String token, String objectPath) {
             if (!isValidBridgeToken(token)) return "";
             if (mediaDownloadManager != null) {
@@ -1365,6 +1407,9 @@ public class MainActivity extends Activity {
                   o.put("manufacturer", android.os.Build.MANUFACTURER);
                   o.put("androidVersion", android.os.Build.VERSION.RELEASE);
                   o.put("appVersion", BuildConfig.VERSION_NAME);
+                  o.put("appVariant", "amazon-fire-tv");
+                  o.put("packageName", getPackageName());
+                  o.put("offlinePlaybackContract", BuildConfig.OFFLINE_CANDIDATE ? 1 : 0);
                   o.put("deviceId", getOrCreateInstallId());
                   return o.toString();
               } catch (Throwable e) {
@@ -2270,7 +2315,9 @@ public class MainActivity extends Activity {
 
               @android.webkit.JavascriptInterface
               public void setWebViewDormant(boolean dormant) {
-                if (BuildConfig.DEBUG) DebugTools.logBridgeCall("setWebViewDormant", "dormant=" + dormant);
+                if (BuildConfig.DEBUG) {
+                    DebugTools.logBridgeCall("setWebViewDormant", "dormant=" + dormant);
+                }
                   runOnUiThread(() -> {
                       try {
                           if (dormant && hasBroadcastActive) {
@@ -2685,7 +2732,9 @@ public class MainActivity extends Activity {
                     // JS will call setNativePlaylist again with refreshed slide data
                     android.util.Log.i("DigipalNative", "[nativeLoop] reloadNativePlaylist signal received");
                     android.util.Log.d(BRIDGE_TAG, "[" + android.os.SystemClock.elapsedRealtime() + "ms] reloadNativePlaylist");
-                    if (__testBridgeRecorder != null) __testBridgeRecorder.record("reloadNativePlaylist", "{}");
+                    if (__testBridgeRecorder != null) {
+                        __testBridgeRecorder.record("reloadNativePlaylist", "{}");
+                    }
                       if (playlistScheduler != null) {
                           playlistScheduler.reloadActiveRevisionFromRoom();
                       }
@@ -4363,7 +4412,7 @@ public class MainActivity extends Activity {
      *  was issued (caller should skip its normal error/retry handling). */
     private boolean maybeRollbackLocalShell() {
         if (!bootedFromLocalShell || playerShellManager == null) return false;
-        bootedFromLocalShell = false;
+        if (!playerShellManager.isOfflineCandidate()) bootedFromLocalShell = false;
         try {
             String rollbackUrl = playerShellManager.rollbackToLastGood(getServerUrl());
             if (rollbackUrl != null) {
@@ -4386,6 +4435,16 @@ public class MainActivity extends Activity {
      *  the next attempt loads straight from the network instead of repeating the same failure. */
     private void onMountWatchdogTimeout() {
         if (appMountConfirmed) return;
+        if (playerShellManager != null && playerShellManager.isOfflineCandidate()) {
+            if (bootedFromLocalShell) {
+                failedOfflineInterfaces.add(playerShellManager.getSelectedOfflineBuildId());
+                if (failedOfflineInterfaces.size() > 16)
+                    failedOfflineInterfaces.remove(failedOfflineInterfaces.iterator().next());
+            }
+            if (maybeRollbackLocalShell()) return;
+            recoverOfflineInterface();
+            return;
+        }
         Log.w("Digipal", "[shell] app did not report mount within " + MOUNT_WATCHDOG_MS
                 + "ms of onPageFinished — treating shell as broken");
         if (maybeRollbackLocalShell()) return;
@@ -4395,6 +4454,69 @@ public class MainActivity extends Activity {
         bootedFromLocalShell = false;
         hasHttpError = false;
         webView.postDelayed(() -> loadPlayerUrl(getServerUrl()), 300);
+    }
+
+    private boolean offlineRecoveryPending = false;
+    private com.digipal.offline.OfflineInterfaceServiceWorker offlineInterfaceServiceWorker;
+    private int offlineNetworkAttempts = 0;
+    private final java.util.Set<String> failedOfflineInterfaces = new java.util.LinkedHashSet<>();
+
+    private android.webkit.WebResourceResponse interceptOfflineCandidateRequest(WebResourceRequest request) {
+        if (playerShellManager == null || !playerShellManager.isOfflineCandidate() || request == null) return null;
+        android.webkit.WebResourceResponse shell = playerShellManager.interceptOfflineRequest(request);
+        if (shell != null) return shell;
+        try {
+            android.net.Uri uri = request.getUrl();
+            if (mediaDownloadManager == null || !("GET".equals(request.getMethod()) || "HEAD".equals(request.getMethod()))) return null;
+            java.io.File file;
+            if ("https".equals(uri.getScheme()) && "appassets.androidplatform.net".equals(uri.getHost())) {
+                file = mediaDownloadManager.resolveLocalMediaFile(uri.getEncodedPath());
+            } else {
+                if (!("https".equals(uri.getScheme()) || "http".equals(uri.getScheme()))
+                        || uri.getUserInfo() != null || uri.getFragment() != null) return null;
+                String path = mediaDownloadManager.getLocalMediaPath(uri.toString());
+                if (path.isEmpty() && uri.getQuery() == null
+                        && com.digipal.offline.LocalMediaResponse.originOf(uri.toString()).equals(
+                                com.digipal.offline.LocalMediaResponse.originOf(getServerUrl())))
+                    path = mediaDownloadManager.getLocalMediaPath(uri.getEncodedPath());
+                file = path.isEmpty() ? null : new java.io.File(path);
+            }
+            return file == null ? null : com.digipal.offline.LocalMediaResponse.create(request, file,
+                    MediaDownloadManager.guessMimeType(file),
+                    com.digipal.offline.LocalMediaResponse.originOf(getServerUrl()));
+        } catch (Exception ignored) { return null; }
+    }
+
+    private void recoverOfflineInterface() {
+        if (offlineRecoveryPending || appMountConfirmed || isDestroyed() || playerShellManager == null || webView == null) return;
+        final PlayerShellManager shellManager = playerShellManager;
+        final WebView recoveryView = webView;
+        offlineRecoveryPending = true;
+        final String server = getServerUrl();
+        final java.util.Set<String> failed = new java.util.HashSet<>(failedOfflineInterfaces);
+        new Thread(() -> {
+            final String local = shellManager.getUnfailedBootUrl(server, failed);
+            final boolean reachable = local == null && com.digipal.offline.ServerReachability.canLoadPlayer(server);
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                offlineRecoveryPending = false;
+                if (appMountConfirmed || isDestroyed() || webView != recoveryView || !server.equals(getServerUrl())) return;
+                if (local != null) {
+                    bootedFromLocalShell = true;
+                    hasHttpError = false;
+                    currentPlayerUrl = local;
+                    webView.loadUrl(local);
+                } else if (reachable && offlineNetworkAttempts < 2) {
+                    offlineNetworkAttempts++;
+                    playerShellManager.suspendOfflineInterception();
+                    bootedFromLocalShell = false;
+                    hasHttpError = false;
+                    loadPlayerUrl(server);
+                } else {
+                    showError("Saved player could not start", "Saved pairing, assignments and media are retained. Waiting for a usable interface or server connection.");
+                    webView.postDelayed(this::recoverOfflineInterface, 15000);
+                }
+            });
+        }, "offline-interface-recovery").start();
     }
 
     // ---- Crash resilience: renderer recovery, memory pressure, ANR watchdog ----
@@ -5003,6 +5125,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (offlineInterfaceServiceWorker != null) {
+            offlineInterfaceServiceWorker.close();
+            offlineInterfaceServiceWorker = null;
+        }
         if (debugHudManager != null) { debugHudManager.stop(); debugHudManager = null; }
         stopAnrWatchdog();
         stopHeartbeatWatchdog();

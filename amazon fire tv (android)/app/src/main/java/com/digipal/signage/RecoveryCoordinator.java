@@ -82,7 +82,9 @@ package com.digipal.signage;
                                      String rendererType, MemoryBudgetManager.Tier memoryTier) {
           int slideFails = 1;
           if (slideId != null && !slideId.isEmpty()) {
-              slideFails = slideFailures.merge(slideId, 1, Integer::sum);
+              Integer previous = slideFailures.get(slideId);
+              slideFails = (previous != null ? previous : 0) + 1;
+              slideFailures.put(slideId, slideFails);
           }
           globalFailures++;
 
@@ -147,13 +149,18 @@ package com.digipal.signage;
           return Level.SLIDE_RETRY;
       }
 
+      private int failureCount(String slideId) {
+          Integer count = slideId != null ? slideFailures.get(slideId) : null;
+          return count != null ? count : 0;
+      }
+
       private void dispatchRecovery(Level level, String slideId, String assetId,
                                      String reason, String rendererType,
                                      MemoryBudgetManager.Tier memoryTier) {
           String tierName = memoryTier != null ? memoryTier.name() : "UNKNOWN";
           Log.w(TAG, "[" + level + "] slide=" + slideId + " reason=" + reason
               + " rendererType=" + rendererType + " memory=" + tierName
-              + " slideFails=" + (slideId != null ? slideFailures.getOrDefault(slideId, 0) : 0)
+              + " slideFails=" + failureCount(slideId)
               + " globalFails=" + globalFailures);
 
           // JS metrics event
@@ -164,7 +171,7 @@ package com.digipal.signage;
               + "\"reason\":\"" + escJson(reason) + "\","
               + "\"rendererType\":\"" + (rendererType != null ? rendererType : "") + "\","
               + "\"memoryTier\":\"" + tierName + "\","
-              + "\"slideFailures\":" + (slideId != null ? slideFailures.getOrDefault(slideId, 0) : 0) + ","
+              + "\"slideFailures\":" + failureCount(slideId) + ","
               + "\"globalFailures\":" + globalFailures + "}";
           fireMetrics(details);
 

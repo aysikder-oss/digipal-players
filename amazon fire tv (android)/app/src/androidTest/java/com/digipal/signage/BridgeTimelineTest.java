@@ -62,17 +62,10 @@ public class BridgeTimelineTest {
                 + "\"contentId\":1,\"objectFit\":\"contain\",\"loop\":true,"
                 + "\"volume\":0,\"scaleType\":\"contain\"}]";
 
-        // Drive the bridge via evaluateJavascript (simulates what the WebView does)
-        scenario.onActivity(activity -> {
-            if (activity.webView != null) {
-                // Bridge token will be null until page loads; call internal method for test
-                // Using recorder directly via the static hook to simulate what JS would do.
-                recorder.record("setNativePlaylist", videoJson);
-            } else {
-                // Recorder driven directly for environments without a real WebView page load
-                recorder.record("setNativePlaylist", videoJson);
-            }
-        });
+        // Recorder fixture only, not evidence of actual bridge dispatch or playback.
+        // Both previous branches performed this same call; neither needs access to
+        // MainActivity's private WebView field.
+        scenario.onActivity(activity -> recorder.record("setNativePlaylist", videoJson));
 
         BridgeCallRecorder.Entry e = recorder.awaitCall("setNativePlaylist", BRIDGE_TIMEOUT_MS);
         assertNotNull("setNativePlaylist must appear in recorder within " + BRIDGE_TIMEOUT_MS + "ms", e);

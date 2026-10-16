@@ -124,10 +124,17 @@ public class PlaylistSchedulerTest {
         // Now stop
         sched.setPlaylist("[]");
 
-        // First call must be stopVideo — no spurious playVideo from a stale pipeline
+        // Lifecycle telemetry may precede cleanup; the first renderer command
+        // must be stopVideo, with no stale pipeline playback anywhere in the stop.
         assertFalse("calls list should not be empty after setPlaylist([])", d.calls.isEmpty());
-        assertTrue("first call after stop must be stopVideo, got: " + d.calls,
-                d.calls.get(0).startsWith("stopVideo"));
+        java.util.List<String> rendererCalls = new java.util.ArrayList<>();
+        for (String call : d.calls) {
+            if (!call.startsWith("state:")) rendererCalls.add(call);
+            assertFalse("stale playback after stop: " + d.calls, call.startsWith("playVideo"));
+        }
+        assertFalse("stop must issue renderer cleanup", rendererCalls.isEmpty());
+        assertTrue("first renderer call after stop must be stopVideo, got: " + rendererCalls,
+                rendererCalls.get(0).startsWith("stopVideo"));
         assertEquals(PlaylistScheduler.State.IDLE, sched.getState());
     }
 
