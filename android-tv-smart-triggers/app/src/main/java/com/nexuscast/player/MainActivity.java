@@ -3625,6 +3625,7 @@ public class MainActivity extends Activity {
                           // (e.g. extensionless external URLs like placehold.co that return SVG/unknown MIME).
                           if (isUnsafeForGlide(_url)) {
                               android.util.Log.w("DigipalNative", "[native-image-skip] caller=schedulerShowImage unsafeForGlide contentId=" + s.contentId + " urlPath=" + sanitizedUrlPath(_url));
+                              if (playlistScheduler != null) playlistScheduler.onRendererError(_sid, "unsupported_image_url");
                               if (supRef[0] != null) supRef[0].reportSchedulerAdvance();
                               return;
                           }
@@ -5492,36 +5493,7 @@ public class MainActivity extends Activity {
      *     proper raster extensions baked into the object key.
      */
     private static boolean isUnsafeForGlide(String url) {
-        if (url == null) return false;
-        String path = url.indexOf('?') >= 0 ? url.substring(0, url.indexOf('?')) : url;
-        String lower = path.toLowerCase(java.util.Locale.ROOT);
-        // Always block video and SVG extensions
-        if (lower.endsWith(".mp4") || lower.endsWith(".mov") || lower.endsWith(".webm")
-            || lower.endsWith(".avi") || lower.endsWith(".m4v") || lower.endsWith(".mkv")
-            || lower.endsWith(".ts") || lower.endsWith(".svg")) {
-            return true;
-        }
-        // For external HTTP(S) URLs apply a raster-extension allowlist.
-        // Extensionless external URLs (e.g. placehold.co/…) often serve SVG or
-        // other non-raster MIME types that Glide cannot decode and falls through
-        // to Stagefright/MediaMetadataRetriever, causing a CPU burst.
-        // Internal /objects/ paths are excluded — they always have a raster extension.
-        if ((lower.startsWith("http://") || lower.startsWith("https://"))
-                && !lower.contains("/objects/")) {
-            int lastSlash = lower.lastIndexOf('/');
-            String lastSegment = lastSlash >= 0 ? lower.substring(lastSlash + 1) : lower;
-            int dot = lastSegment.lastIndexOf('.');
-            if (dot < 0) {
-                // No extension — external URL with unknown content type; block it
-                return true;
-            }
-            String ext = lastSegment.substring(dot);
-            boolean safeRaster = ext.equals(".jpg") || ext.equals(".jpeg")
-                || ext.equals(".png") || ext.equals(".webp") || ext.equals(".gif")
-                || ext.equals(".bmp") || ext.equals(".avif");
-            return !safeRaster;
-        }
-        return false;
+        return NativeImageUrlPolicy.isUnsafe(url);
     }
 
 
