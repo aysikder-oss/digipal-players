@@ -58,7 +58,7 @@ jobs:
           echo "=== Code signature verification ==="
           codesign -dv --verbose=4 "build/app/Digipal Player.app" 2>&1
           codesign --verify --deep --strict "build/app/Digipal Player.app"
-          lipo -verify_arch arm64 x86_64 "build/app/Digipal Player.app/Contents/MacOS/Digipal Player"
+          lipo "build/app/Digipal Player.app/Contents/MacOS/Digipal Player" -verify_arch arm64 x86_64
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "build/app/Digipal Player.app/Contents/Info.plist")" = "1.5.0"
       - name: Create DMG
         working-directory: macos/DigipalPlayer
