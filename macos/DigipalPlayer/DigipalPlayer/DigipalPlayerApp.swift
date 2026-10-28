@@ -16,7 +16,7 @@ struct DigipalPlayerApp: App {
             CommandGroup(replacing: .newItem) {}
             CommandGroup(after: .appInfo) {
                 Button("Setup Server...") {
-                    appState.showSetup = true
+                    appState.openServerSettings()
                 }
                 .keyboardShortcut("S", modifiers: [.command, .shift])
 
