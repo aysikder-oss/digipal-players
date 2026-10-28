@@ -16,6 +16,7 @@ class AppState: ObservableObject {
     @Published var kioskMode: Bool = false
     @Published var isConnected: Bool = false
     @Published var connectionMode: String = "CLOUD"
+    @Published var connectionError: String?
 
     @Published var manualOverride: Bool {
         didSet {
@@ -48,7 +49,8 @@ class AppState: ObservableObject {
     }
 
     private let defaultCloudUrl = "https://digipalsignage.com"
-    private let discoveryTimeoutSeconds: Double = 4.0
+    var discoveryTimeoutSeconds: Double = 4.0
+    var cloudTimeoutSeconds: Double = 6.0
     private let healthCheckIntervalSeconds: Double = 30.0
     private let reconnectBaseSeconds: Double = 5.0
     private let reconnectMaxSeconds: Double = 60.0
@@ -62,13 +64,23 @@ class AppState: ObservableObject {
     private var neitherReachableTimer: Timer?
     private var neitherReachableAttempts: Int = 0
     private var cancellables = Set<AnyCancellable>()
+    private let cloudSession: URLSession
+    private var startupGeneration = UUID()
+    private var startupActive = false
+    private var cloudTask: URLSessionDataTask?
+    private var startupDeadline: Timer?
 
-    private init() {
+    init(startAutomatically: Bool = true, cloudSession: URLSession = .shared) {
+        self.cloudSession = cloudSession
         self.serverUrl = UserDefaults.standard.string(forKey: "serverUrl") ?? ""
         self.manualOverride = UserDefaults.standard.bool(forKey: "manualOverride")
         self.autoStartOnLogin = UserDefaults.standard.bool(forKey: "autoStartOnLogin")
 
-        if self.manualOverride && !self.serverUrl.isEmpty {
+        guard startAutomatically else { return }
+
+        // Reopen the last working server, including automatic cloud connections.
+        // A health endpoint must not prevent an already paired player from loading.
+        if !self.serverUrl.isEmpty {
             self.showSetup = false
             self.isSearching = false
             self.connectionMode = isLocalUrl(serverUrl) ? "LOCAL" : "CLOUD"
@@ -81,18 +93,23 @@ class AppState: ObservableObject {
     }
 
     func startAutoDiscovery() {
+        stopDualMode()
+        startupActive = true
+        let generation = startupGeneration
         isSearching = true
         showSetup = false
+        connectionError = nil
+        isConnected = false
 
         bonjourBrowser = BonjourBrowser()
-        bonjourBrowser?.startBrowsing()
 
         bonjourBrowser?.$discoveredServers
             .filter { !$0.isEmpty }
             .first()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] servers in
-                guard let self = self, self.isSearching else { return }
+                guard let self = self, self.startupActive,
+                      self.startupGeneration == generation else { return }
                 if let server = servers.first {
                     self.discoveryTimer?.invalidate()
                     self.connectTo(url: server.url, mode: "LOCAL", manual: false)
@@ -100,8 +117,11 @@ class AppState: ObservableObject {
             }
             .store(in: &cancellables)
 
+        bonjourBrowser?.startBrowsing()
+
         discoveryTimer = Timer.scheduledTimer(withTimeInterval: discoveryTimeoutSeconds, repeats: false) { [weak self] _ in
-            guard let self = self, self.isSearching else { return }
+            guard let self = self, self.startupActive,
+                  self.startupGeneration == generation else { return }
 
             if let server = self.bonjourBrowser?.discoveredServers.first {
                 self.connectTo(url: server.url, mode: "LOCAL", manual: false)
@@ -109,34 +129,61 @@ class AppState: ObservableObject {
                 self.checkCloudAndConnect()
             }
         }
+
+        // Independent of URLSession/DNS timing: always reveal recovery controls.
+        startupDeadline = Timer.scheduledTimer(
+            withTimeInterval: discoveryTimeoutSeconds + cloudTimeoutSeconds + 2,
+            repeats: false
+        ) { [weak self] _ in
+            guard let self = self, self.startupActive,
+                  self.startupGeneration == generation else { return }
+            self.startNeitherReachableRetry()
+        }
     }
 
     private func checkCloudAndConnect() {
+        guard startupActive else { return }
+        let generation = startupGeneration
         guard let url = URL(string: "\(defaultCloudUrl)/api/health") else {
             startNeitherReachableRetry()
             return
         }
 
         var request = URLRequest(url: url)
-        request.timeoutInterval = 5
+        request.timeoutInterval = cloudTimeoutSeconds
+        request.cachePolicy = .reloadIgnoringLocalCacheData
 
-        URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
+        cloudTask?.cancel()
+        cloudTask = cloudSession.dataTask(with: request) { [weak self] _, response, error in
             DispatchQueue.main.async {
-                guard let self = self else { return }
-                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                guard let self = self, self.startupActive,
+                      self.startupGeneration == generation else { return }
+                if error == nil, let httpResponse = response as? HTTPURLResponse,
+                   httpResponse.statusCode == 200 {
                     self.neitherReachableAttempts = 0
                     self.connectTo(url: self.defaultCloudUrl, mode: "CLOUD", manual: false)
                 } else {
                     self.startNeitherReachableRetry()
                 }
             }
-        }.resume()
+        }
+        cloudTask?.resume()
     }
 
     private func startNeitherReachableRetry() {
+        guard startupActive else { return }
+        startupDeadline?.invalidate()
+        startupDeadline = nil
+        cloudTask?.cancel()
+        cloudTask = nil
+        // Retire late network callbacks while keeping this retry cycle active.
+        startupGeneration = UUID()
+        let generation = startupGeneration
+        isSearching = false
+        connectionError = "Could not connect to Digipal. Check your internet connection, retry, or enter your server address. A local Hub is optional."
         neitherReachableAttempts += 1
         let delay = min(
-            reconnectBaseSeconds * pow(2.0, Double(neitherReachableAttempts - 1)),
+            reconnectBaseSeconds * pow(2.0, Double(min(neitherReachableAttempts - 1, 4))),
             reconnectMaxSeconds
         )
 
@@ -144,7 +191,8 @@ class AppState: ObservableObject {
 
         neitherReachableTimer?.invalidate()
         neitherReachableTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
-            guard let self = self else { return }
+            guard let self = self, self.startupActive,
+                  self.startupGeneration == generation else { return }
 
             if let server = self.bonjourBrowser?.discoveredServers.first {
                 self.neitherReachableAttempts = 0
@@ -157,6 +205,8 @@ class AppState: ObservableObject {
     }
 
     func connectTo(url: String, mode: String, manual: Bool) {
+        stopDualMode()
+        connectionError = nil
         isSearching = false
         serverUrl = url
         connectionMode = mode
@@ -167,6 +217,17 @@ class AppState: ObservableObject {
         bonjourBrowser?.stopBrowsing()
 
         startDualMode()
+    }
+
+    func connectToCloud() {
+        connectTo(url: defaultCloudUrl, mode: "CLOUD", manual: true)
+    }
+
+    func openServerSettings() {
+        stopDualMode()
+        connectionError = nil
+        isSearching = false
+        showSetup = true
     }
 
     func resetToAutoDiscover() {
@@ -215,6 +276,12 @@ class AppState: ObservableObject {
     }
 
     private func stopDualMode() {
+        startupActive = false
+        startupGeneration = UUID()
+        startupDeadline?.invalidate()
+        startupDeadline = nil
+        cloudTask?.cancel()
+        cloudTask = nil
         healthCheckTimer?.invalidate()
         healthCheckTimer = nil
         localRediscoveryTimer?.invalidate()
@@ -226,6 +293,7 @@ class AppState: ObservableObject {
         CloudChannel.shared.stop()
         bonjourBrowser?.stopBrowsing()
         cancellables.removeAll()
+        neitherReachableAttempts = 0
     }
 
     private func startCloudChannel() {
