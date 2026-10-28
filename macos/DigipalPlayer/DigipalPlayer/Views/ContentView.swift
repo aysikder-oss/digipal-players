@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SearchingView: View {
+    @EnvironmentObject var appState: AppState
     @State private var dot1Opacity: Double = 0.3
     @State private var dot2Opacity: Double = 0.3
     @State private var dot3Opacity: Double = 0.3
@@ -26,7 +27,7 @@ struct SearchingView: View {
                 }
                 .tracking(-1)
 
-                Text("Starting up\u{2026}")
+                Text(appState.connectionError == nil ? "Connecting to Digipal\u{2026}" : "Unable to connect")
                     .font(.system(size: 16))
                     .foregroundColor(Color(red: 0.282, green: 0.337, blue: 0.412))
                     .padding(.top, 20)
@@ -49,6 +50,21 @@ struct SearchingView: View {
                         .opacity(dot3Opacity)
                         .scaleEffect(dot3Scale)
                 }
+                Text(appState.connectionError ?? "Checking for a local Hub, then connecting to the cloud.")
+                    .font(.system(size: 14))
+                    .foregroundColor(Color(red: 0.65, green: 0.70, blue: 0.78))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 440)
+                    .padding(.top, 24)
+
+                HStack(spacing: 16) {
+                    if appState.connectionError != nil {
+                        Button("Retry") { appState.startAutoDiscovery() }
+                    }
+                    Button("Connect to cloud") { appState.connectToCloud() }
+                    Button("Server settings") { appState.openServerSettings() }
+                }
+                .padding(.top, 24)
             }
         }
         .onAppear { animateDots() }
@@ -90,7 +106,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            if appState.isSearching {
+            if appState.isSearching || appState.connectionError != nil {
                 SearchingView()
             } else if appState.hasServerUrl && !appState.showSetup {
                 PlayerWebView()
