@@ -231,7 +231,7 @@
     cloudBtn.addEventListener('click', function() {
       cancelDiscovery();
       const { ipcRenderer } = require('electron');
-      ipcRenderer.send('server-cloud-selected', 'https://digipalsignage.com');
+      ipcRenderer.send('server-cloud-selected', require('./package.json').developmentCloudUrl || 'https://digipalsignage.com');
     });
 
     scanBtn.addEventListener('click', runDiscovery);

@@ -17,7 +17,7 @@ jobs:
         with:
           node-version: '20'
       - run: npm install --no-audit --no-fund
-      - run: node --test discovery.test.cjs
+      - run: node --test discovery.test.cjs ipc.test.cjs
       - run: npx electron-builder --config electron-builder.dev.cjs --win --publish never
       - uses: actions/upload-artifact@v4
         with:

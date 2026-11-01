@@ -11,7 +11,7 @@ const { registerNetworkDiscovery } = require('./network-discovery-ipc');
 
 const PLAYER_PATH = '/tv';
 const CONFIG_FILE = 'config.json';
-const DEFAULT_CLOUD_URL = 'https://digipalsignage.com';
+const DEFAULT_CLOUD_URL = require('./package.json').developmentCloudUrl || 'https://digipalsignage.com';
 
 let mainWindow = null;
 let loadingWindow = null;
