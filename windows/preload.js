@@ -1,5 +1,14 @@
 const { contextBridge, ipcRenderer } = require('electron');
-const os = require('os');
+
+contextBridge.exposeInMainWorld('DigipalHubDiscovery', {
+  discover: id => ipcRenderer.invoke('network:discover', id),
+  cancel: id => ipcRenderer.invoke('network:cancelDiscovery', id),
+  onProgress: callback => {
+    const listener = (_event, data) => callback(data);
+    ipcRenderer.on('network:discovery-progress', listener);
+    return () => ipcRenderer.removeListener('network:discovery-progress', listener);
+  },
+});
 
 contextBridge.exposeInMainWorld('Android', {
   downloadMedia: (objectPath, signedUrl) => {
@@ -18,15 +27,7 @@ contextBridge.exposeInMainWorld('Android', {
     return ipcRenderer.sendSync('media:getStorageInfo');
   },
   getDeviceInfo: () => {
-    return JSON.stringify({
-      platform: 'windows',
-      version: '2.0.0',
-      osVersion: os.release(),
-      arch: os.arch(),
-      hostname: os.hostname(),
-      totalMemory: os.totalmem(),
-      cpus: os.cpus().length,
-    });
+    return ipcRenderer.sendSync('app:getDeviceInfo');
   },
   setAutoRelaunch: (enabled) => {
     ipcRenderer.send('app:setAutoRelaunch', enabled);

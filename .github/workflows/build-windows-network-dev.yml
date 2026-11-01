@@ -1,0 +1,27 @@
+name: Build Windows Network Discovery DEV
+on:
+  push:
+    branches: ['dev/windows-hub-network-*']
+permissions:
+  contents: read
+jobs:
+  windows-network-dev:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - run: node --test discovery.test.cjs
+      - run: npx electron-builder --config electron-builder.dev.cjs --win --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Digipal-Player-Network-DEV-Windows
+          path: windows/release-network-dev/*.exe
+          if-no-files-found: error
+          retention-days: 14

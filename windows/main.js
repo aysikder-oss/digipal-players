@@ -7,6 +7,7 @@ const MediaManager = require('./media-manager');
 const BonjourBrowser = require('./bonjour-browser');
 const ConnectionManager = require('./connection-manager');
 const NetworkScanner = require('./network-scanner');
+const { registerNetworkDiscovery } = require('./network-discovery-ipc');
 
 const PLAYER_PATH = '/tv';
 const CONFIG_FILE = 'config.json';
@@ -371,6 +372,14 @@ function updateTray() {
 }
 
 function setupMediaIPC() {
+  ipcMain.on('app:getDeviceInfo', event => {
+    event.returnValue = JSON.stringify(getDeviceInfo());
+  });
+  registerNetworkDiscovery(ipcMain, event => {
+    if (event.senderFrame !== event.sender.mainFrame) return false;
+    return event.sender === mainWindow?.webContents
+      || event.sender.getURL() === require('url').pathToFileURL(path.join(__dirname, 'prompt.html')).href;
+  }, () => bonjourBrowser ? bonjourBrowser.getServers() : []);
   ipcMain.on('media:download', (event, objectPath, signedUrl) => {
     if (mediaManager) mediaManager.downloadMedia(objectPath, signedUrl);
   });
@@ -538,6 +547,7 @@ async function startAutoConnect() {
   async function onLocalFound(server) {
     if (resolved) return;
     resolved = true;
+    networkScanner.stop();
     clearTimeout(discoveryTimer);
     clearInterval(localPoll);
     closeLoadingScreen();
@@ -549,6 +559,7 @@ async function startAutoConnect() {
   const discoveryTimer = setTimeout(async () => {
     if (resolved) return;
     resolved = true;
+    networkScanner.stop();
     clearInterval(localPoll);
     closeLoadingScreen();
     console.log('[main] No local hub found after 5s, showing setup prompt');
@@ -564,7 +575,7 @@ async function startAutoConnect() {
   }, 500);
 
   // Run network scan in parallel — resolves if network scan finds a hub first
-  networkScanner.scan().then((found) => {
+  networkScanner.scan(onLocalFound).then((found) => {
     if (!resolved && found && found.length > 0) onLocalFound(found[0]);
   }).catch(() => {});
 }

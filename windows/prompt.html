@@ -190,30 +190,51 @@
       }
     }
 
-    function runDiscovery() {
+    const { ipcRenderer } = require('electron');
+    let scanId = null;
+    function cancelDiscovery() {
+      if (scanId) ipcRenderer.invoke('network:cancelDiscovery', scanId).catch(() => {});
+      scanId = null;
+    }
+    ipcRenderer.on('network:discovery-progress', (_event, data) => {
+      if (data.id !== scanId) return;
+      noServersEl.style.display = 'block';
+      noServersEl.textContent = data.message;
+      if (data.servers.length) populateServers(data.servers.map(url => ({ name: 'Digipal Local Hub', url })));
+    });
+    async function runDiscovery() {
+      if (scanId) {
+        cancelDiscovery();
+        scanBtn.textContent = 'Scan for Local Servers ›';
+        noServersEl.textContent = 'Search cancelled. You can also enter a Hub address manually.';
+        return;
+      }
+      const id = `setup-${Date.now()}`;
+      scanId = id;
+      scanBtn.textContent = 'Cancel search';
+      discoveredEl.style.display = 'none';
+      noServersEl.style.display = 'block';
+      noServersEl.textContent = 'Searching Wi-Fi and Ethernet (up to 25 seconds)…';
       try {
-        const { ipcRenderer } = require('electron');
-        const servers = JSON.parse(ipcRenderer.sendSync('bonjour:getServers'));
-        populateServers(servers);
-      } catch (e) {
-        console.error('Discovery failed:', e);
+        const result = await ipcRenderer.invoke('network:discover', id);
+        if (scanId !== id) return;
+        populateServers(result.servers.map(url => ({ name: 'Digipal Local Hub', url })));
+        if (!result.servers.length) noServersEl.textContent = 'No Hub found. Check the Hub is running on the same LAN and Windows Firewall allows it, or enter its address manually.';
+      } catch {
+        if (scanId === id) noServersEl.textContent = 'Search failed. Try again or enter the Hub address manually.';
+      } finally {
+        if (scanId === id) { scanId = null; scanBtn.textContent = 'Scan for Local Servers ›'; }
       }
     }
+    window.addEventListener('beforeunload', cancelDiscovery);
 
     cloudBtn.addEventListener('click', function() {
+      cancelDiscovery();
       const { ipcRenderer } = require('electron');
       ipcRenderer.send('server-cloud-selected', 'https://digipalsignage.com');
     });
 
-    scanBtn.addEventListener('click', function() {
-      scanBtn.textContent = 'Scanning...';
-      scanBtn.disabled = true;
-      setTimeout(function() {
-        runDiscovery();
-        scanBtn.textContent = 'Scan for Local Servers ›';
-        scanBtn.disabled = false;
-      }, 1000);
-    });
+    scanBtn.addEventListener('click', runDiscovery);
 
     connectBtn.addEventListener('click', function() {
       const url = urlInput.value.trim().replace(/\/+$/, '');
@@ -231,7 +252,6 @@
       else errorEl.style.display = 'none';
     });
 
-    runDiscovery();
   </script>
 </body>
 </html>
