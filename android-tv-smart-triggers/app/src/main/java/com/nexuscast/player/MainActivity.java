@@ -981,6 +981,14 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void setSmartTriggerConfig(String token, String json) {
             if (isValidBridgeToken(token)) runOnUiThread(() -> smartTriggerController.setConfig(json));
         }
+        @JavascriptInterface public void reportSmartTriggerStartup(String token, String stage, String state, String reason) {
+            if (!isValidBridgeToken(token)) return;
+            runOnUiThread(() -> {
+                if (isValidBridgeToken(token) && smartTriggerController != null) {
+                    smartTriggerController.recordStartupStage(stage, state, reason);
+                }
+            });
+        }
         @JavascriptInterface public String getConnectedDevices(String token) {
             return isValidBridgeToken(token) ? smartTriggerController.connectedDevices() : "[]";
         }

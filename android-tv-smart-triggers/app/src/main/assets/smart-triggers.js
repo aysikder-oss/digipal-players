@@ -61,6 +61,11 @@
     } catch (_) { /* localStorage may be unavailable before the first document */ }
   };
   syncConfig();
+  window.addEventListener('st:configChanged', syncConfig);
   const timer = setInterval(syncConfig, 2000);
-  window.addEventListener('pagehide', () => { clearInterval(timer); stopLearnMode(); }, { once: true });
+  window.addEventListener('pagehide', () => {
+    clearInterval(timer);
+    window.removeEventListener('st:configChanged', syncConfig);
+    stopLearnMode();
+  }, { once: true });
 })();

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application>
+        <!-- Manual testing only: never compete with the customer's boot app. -->
+        <receiver android:name=".BootReceiver" android:enabled="false"
+            tools:replace="android:enabled" />
+        <receiver android:name=".PackageUpdateReceiver" android:enabled="false"
+            tools:replace="android:enabled" />
+        <service android:name=".BootLaunchService" android:enabled="false" />
+    </application>
+</manifest>

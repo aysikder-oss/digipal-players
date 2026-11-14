@@ -12,6 +12,7 @@ signatures = {
     "setSmartTriggerConfig": 2, "getConnectedDevices": 1, "startLearnMode": 2,
     "stopLearnMode": 1, "startBleScan": 1, "enableSmartTriggers": 1,
     "disableSmartTriggers": 1, "getSmartTriggerPairingCode": 1,
+    "reportSmartTriggerStartup": 4,
 }
 for name, arity in signatures.items():
     match = re.search(rf"@(?:android\.webkit\.)?JavascriptInterface\s+public\s+\w+\s+{name}\(([^)]*)\)\s*\{{([^}}]*)", source)
