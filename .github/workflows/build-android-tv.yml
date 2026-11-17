@@ -18,12 +18,12 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
-      - name: Build, lint and unit-test the DEV app only
+      - name: Compile and package the DEV app only
         working-directory: android-tv
         run: |
           set -euo pipefail
           chmod +x gradlew
-          ./gradlew --no-daemon :app:assembleDebug :app:lintDebug :app:testDebugUnitTest
+          ./gradlew --no-daemon :app:assembleDebug
       - name: Verify the isolated installer
         run: |
           set -euo pipefail
@@ -41,13 +41,41 @@ jobs:
           cp "$APK" smartboard-dev-output/Digipal-Smartboard-DEV-v4.0.1-build143.apk
           sha256sum smartboard-dev-output/*.apk >> smartboard-dev-output/verification.txt
           git rev-parse HEAD >> smartboard-dev-output/verification.txt
+      - name: Native lint
+        id: lint
+        continue-on-error: true
+        working-directory: android-tv
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon :app:lintDebug 2>&1 | tee ../smartboard-dev-output/native-lint.log
+      - name: Native unit tests
+        id: units
+        continue-on-error: true
+        working-directory: android-tv
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon :app:testDebugUnitTest 2>&1 | tee ../smartboard-dev-output/native-unit-tests.log
+      - name: Record actual native QA outcomes
+        if: always()
+        env:
+          UNIT_OUTCOME: ${{ steps.units.outcome }}
+          LINT_OUTCOME: ${{ steps.lint.outcome }}
+        run: |
           python3 - <<'PY'
-          import pathlib, xml.etree.ElementTree as E
+          import os, pathlib, xml.etree.ElementTree as E
+          root=pathlib.Path("smartboard-dev-output")
+          root.mkdir(exist_ok=True)
           reports=list(pathlib.Path("android-tv/app/build/test-results/testDebugUnitTest").glob("TEST-*.xml"))
-          tests=sum(int(E.parse(p).getroot().get("tests","0")) for p in reports)
-          failures=sum(int(E.parse(p).getroot().get("failures","0"))+int(E.parse(p).getroot().get("errors","0")) for p in reports)
-          assert tests > 0 and failures == 0, f"Unit test evidence invalid: {tests} tests, {failures} failures"
-          with open("smartboard-dev-output/verification.txt","a") as f: f.write(f"\nExecuted unit tests: {tests}; failures/errors: {failures}\n")
+          total=skipped=failures=0
+          for p in reports:
+              r=E.parse(p).getroot()
+              total+=int(r.get("tests","0"))
+              skipped+=int(r.get("skipped","0"))
+              failures+=int(r.get("failures","0"))+int(r.get("errors","0"))
+          with (root/"verification.txt").open("a") as f:
+              f.write(f"\nNative unit-test step: {os.environ['UNIT_OUTCOME']}; lint step: {os.environ['LINT_OUTCOME']}\n")
+              f.write(f"Executed tests: {total-skipped}; skipped: {skipped}; failures/errors: {failures}; report files: {len(reports)}\n")
+              if not reports: f.write("No executed unit-test reports; inspect the native-unit-tests.log compilation result.\n")
           PY
       - uses: actions/upload-artifact@v4
         if: always()
@@ -58,3 +86,10 @@ jobs:
             android-tv/app/build/reports/lint-results-debug.*
             android-tv/app/build/test-results/testDebugUnitTest/
           if-no-files-found: warn
+      - name: Preserve failed QA status instead of hiding inherited failures
+        if: always()
+        env:
+          UNIT_OUTCOME: ${{ steps.units.outcome }}
+          LINT_OUTCOME: ${{ steps.lint.outcome }}
+        run: |
+          test "$UNIT_OUTCOME" = success && test "$LINT_OUTCOME" = success
