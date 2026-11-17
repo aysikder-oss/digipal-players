@@ -73,9 +73,13 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         debug {
-            applicationIdSuffix ".debug"
-            versionNameSuffix "-debug"
-            resValue "string", "app_name", "Digipal TV (Debug)"
+            // Isolated, sideload-only Smartboard test package. Production and
+            // previously installed DEV apps retain their data and identities.
+            applicationIdSuffix ".smartboarddev"
+            versionCode 149
+            versionNameSuffix "-smartboard-dev"
+            resValue "string", "app_name", "Digipal Smartboard DEV"
+            buildConfigField "String", "SENTRY_DSN", "\"\""
             debuggable true
             minifyEnabled false
             // Point debug builds at the Replit dev server — web changes
