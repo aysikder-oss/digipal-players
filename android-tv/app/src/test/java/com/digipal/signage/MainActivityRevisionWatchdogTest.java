@@ -7,7 +7,7 @@ import org.junit.Test;
 
 /**
  * Unit tests for the revision watchdog decision logic extracted into
- * MainActivity's private WebAppInterface.revisionWatchdogShouldReload helper.
+ * {@link MainActivity.PlayerWebViewClient#revisionWatchdogShouldReload}.
  *
  * These tests guard the fix for the black-screen bug where the 10-second
  * watchdog in applyContentRevisionFromNativeHeartbeat() was incorrectly
@@ -21,17 +21,8 @@ public class MainActivityRevisionWatchdogTest {
     // ── Helper alias for readability ──────────────────────────────────────────
 
     private static boolean shouldReload(boolean nativeOwns, boolean hasNative, boolean dormant) {
-        try {
-            // The production helper now lives on the private native bridge.
-            // Test it without changing bridge visibility or player behavior.
-            Class<?> bridge = Class.forName(MainActivity.class.getName() + "$WebAppInterface");
-            java.lang.reflect.Method decision = bridge.getDeclaredMethod(
-                    "revisionWatchdogShouldReload", boolean.class, boolean.class, boolean.class);
-            decision.setAccessible(true);
-            return (Boolean) decision.invoke(null, nativeOwns, hasNative, dormant);
-        } catch (ReflectiveOperationException e) {
-            throw new AssertionError("Actual revision watchdog helper was not available", e);
-        }
+        return MainActivity.PlayerWebViewClient.revisionWatchdogShouldReload(
+                nativeOwns, hasNative, dormant);
     }
 
     // ── Native-active cases: must never reload ────────────────────────────────
