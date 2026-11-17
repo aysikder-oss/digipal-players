@@ -1,135 +1,60 @@
-name: Build Android TV Player
+name: Build isolated Smartboard DEV test
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'android-tv-v*'
-    paths:
-      - 'android-tv/**'
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-      # Moved to job-level env (from per-step env) so that each step's `if:
-      # env.KEYSTORE_BASE64 != ''` condition can reliably see it. A step's own
-      # `env:` block is only guaranteed to be visible to *its own* run steps,
-      # not necessarily evaluated the same way for that step's `if:` gate on
-      # every runner/actions version — job-level env removes the ambiguity.
-      KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           java-version: '17'
-          distribution: 'temurin'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Make gradlew executable
-        run: chmod +x android-tv/gradlew
-
-      - name: Decode keystore
-        if: env.KEYSTORE_BASE64 != ''
-        run: |
-          echo "$KEYSTORE_BASE64" | base64 -d > android-tv/app/release.keystore
-
-      - name: Build Release APK (signed)
-        if: env.KEYSTORE_BASE64 != ''
-        working-directory: android-tv
-        run: |
-          ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=$PWD/app/release.keystore \
-            -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
-            -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
-            -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
-
-      - name: Build Release AAB (signed)
-        if: env.KEYSTORE_BASE64 != ''
-        working-directory: android-tv
-        run: |
-          ./gradlew bundleRelease \
-            -Pandroid.injected.signing.store.file=$PWD/app/release.keystore \
-            -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
-            -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
-            -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }}
-
-      - name: Build Debug APK
-        working-directory: android-tv
-        run: ./gradlew assembleDebug
-
-      - name: Build Debug AAB
-        working-directory: android-tv
-        run: ./gradlew bundleDebug
-
-      - name: Rename artifacts for clarity
-        run: |
-          TAG="${GITHUB_REF_NAME:-dev}"
-          # Rename debug APK with -debug suffix so it is distinguishable from release
-          for f in android-tv/app/build/outputs/apk/debug/*.apk; do
-            if [ -f "$f" ]; then
-              mv "$f" "android-tv/app/build/outputs/apk/debug/DigipalPlayer-${TAG}-debug.apk"
-            fi
-          done
-          # Rename debug AAB
-          for f in android-tv/app/build/outputs/bundle/debug/*.aab; do
-            if [ -f "$f" ]; then
-              mv "$f" "android-tv/app/build/outputs/bundle/debug/DigipalPlayer-${TAG}-debug.aab"
-            fi
-          done
-          # Rename release APK if exists
-          for f in android-tv/app/build/outputs/apk/release/*.apk; do
-            if [ -f "$f" ]; then
-              mv "$f" "android-tv/app/build/outputs/apk/release/DigipalPlayer-${TAG}.apk"
-            fi
-          done
-          # Rename release AAB if exists
-          for f in android-tv/app/build/outputs/bundle/release/*.aab; do
-            if [ -f "$f" ]; then
-              mv "$f" "android-tv/app/build/outputs/bundle/release/DigipalPlayer-${TAG}.aab"
-            fi
-          done
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+          distribution: temurin
+      - uses: android-actions/setup-android@v3
         with:
-          name: android-tv-player-apk
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+      - name: Build, lint and unit-test the DEV app only
+        working-directory: android-tv
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:assembleDebug :app:lintDebug :app:testDebugUnitTest
+      - name: Verify the isolated installer
+        run: |
+          set -euo pipefail
+          mkdir -p smartboard-dev-output
+          APK=android-tv/app/build/outputs/apk/debug/app-debug.apk
+          TOOLS="$ANDROID_HOME/build-tools/36.0.0"
+          "$TOOLS/apksigner" verify --verbose --print-certs "$APK" > smartboard-dev-output/verification.txt
+          "$TOOLS/aapt" dump badging "$APK" >> smartboard-dev-output/verification.txt
+          grep -q "package: name='com.digipal.signage.smartboarddev'" smartboard-dev-output/verification.txt
+          grep -q "versionCode='149'" smartboard-dev-output/verification.txt
+          grep -q "application-debuggable" smartboard-dev-output/verification.txt
+          CONFIG=android-tv/app/build/generated/source/buildConfig/debug/com/digipal/signage/BuildConfig.java
+          grep -F 'https://3922e89f-d02d-4a8b-add9-9f42fce9e5ea-00-sisthqoc0pvv.worf.replit.dev:5000' "$CONFIG" >> smartboard-dev-output/verification.txt
+          grep -F 'BUILD_FLAVOR' "$CONFIG" >> smartboard-dev-output/verification.txt
+          cp "$APK" smartboard-dev-output/Digipal-Smartboard-DEV-build149.apk
+          sha256sum smartboard-dev-output/*.apk >> smartboard-dev-output/verification.txt
+          git rev-parse HEAD >> smartboard-dev-output/verification.txt
+          python3 - <<'PY'
+          import pathlib, xml.etree.ElementTree as E
+          reports=list(pathlib.Path("android-tv/app/build/test-results/testDebugUnitTest").glob("TEST-*.xml"))
+          tests=sum(int(E.parse(p).getroot().get("tests","0")) for p in reports)
+          failures=sum(int(E.parse(p).getroot().get("failures","0"))+int(E.parse(p).getroot().get("errors","0")) for p in reports)
+          assert tests > 0 and failures == 0, f"Unit test evidence invalid: {tests} tests, {failures} failures"
+          with open("smartboard-dev-output/verification.txt","a") as f: f.write(f"\nExecuted unit tests: {tests}; failures/errors: {failures}\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smartboard-dev-test
           path: |
-            android-tv/app/build/outputs/apk/release/*.apk
-            android-tv/app/build/outputs/apk/debug/*.apk
+            smartboard-dev-output/
+            android-tv/app/build/reports/lint-results-debug.*
+            android-tv/app/build/test-results/testDebugUnitTest/
           if-no-files-found: warn
-
-      - name: Upload AAB
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-tv-player-aab
-          path: |
-            android-tv/app/build/outputs/bundle/release/*.aab
-            android-tv/app/build/outputs/bundle/debug/*.aab
-          if-no-files-found: warn
-
-  release:
-    if: startsWith(github.ref, 'refs/tags/android-tv-v')
-    needs: [build]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            artifacts/**/*.apk
-            artifacts/**/*.aab
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
