@@ -33,12 +33,12 @@ jobs:
           "$TOOLS/apksigner" verify --verbose --print-certs "$APK" > smartboard-dev-output/verification.txt
           "$TOOLS/aapt" dump badging "$APK" >> smartboard-dev-output/verification.txt
           grep -q "package: name='com.digipal.signage.smartboarddev'" smartboard-dev-output/verification.txt
-          grep -q "versionCode='149'" smartboard-dev-output/verification.txt
+          grep -q "versionCode='143'" smartboard-dev-output/verification.txt
           grep -q "application-debuggable" smartboard-dev-output/verification.txt
           CONFIG=android-tv/app/build/generated/source/buildConfig/debug/com/digipal/signage/BuildConfig.java
           grep -F 'https://3922e89f-d02d-4a8b-add9-9f42fce9e5ea-00-sisthqoc0pvv.worf.replit.dev:5000' "$CONFIG" >> smartboard-dev-output/verification.txt
           grep -F 'BUILD_FLAVOR' "$CONFIG" >> smartboard-dev-output/verification.txt
-          cp "$APK" smartboard-dev-output/Digipal-Smartboard-DEV-build149.apk
+          cp "$APK" smartboard-dev-output/Digipal-Smartboard-DEV-v4.0.1-build143.apk
           sha256sum smartboard-dev-output/*.apk >> smartboard-dev-output/verification.txt
           git rev-parse HEAD >> smartboard-dev-output/verification.txt
           python3 - <<'PY'
